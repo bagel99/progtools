@@ -1,0 +1,130 @@
+import elfwrite64;
+
+package elfout
+{
+
+    proc (psym: symbol.Symbol) MapScope(): elf.SymInfo
+    {   var info: elf.SymInfo;
+	const bindtab: [symbol.SymbScope]elf.SymBind =
+	{   [LOCAL]  = LOCAL,
+	    [EXPORT] = GLOBAL,
+	    [IMPORT] = GLOBAL,
+	    [WEAK]   = WEAK
+	};
+	info.type = elf.SymType(psym.flags.type);	// 1-1
+	info.bind = bindtab[psym.flags.scope];
+	return info;
+    }
+
+    proc (pf: elfwrite.pFile) OutputSymbols()
+    {
+	var ps: elfwrite.pSection;
+	var esym: elf.symbol64;
+	var n, j, k: _uint;
+	var psym: symbol.Symbol;
+
+	symbol.Sort();
+	ps = pf.StartSection(".symtab", SYMTAB, {});
+	k = 0;	// last local
+	n = 1;	// string offset
+	j = 0;	// symbol index
+	psym = symbol.symtable;
+	while psym != 0 do
+	{   if !psym.VeryLocal() then
+	    {	esym.name = n;
+		esym.value = psym.FinalValue();
+		esym.size  = psym.size;
+		esym.shndx = psym.segm.secnum;
+		esym.info = psym.MapScope();
+		esym.other = _uint8(psym.flags.vis);	// 1-1
+		if psym.flags.scope == LOCAL then
+		    k = j+1;
+		ps.Write(esym, esym?size);
+		n += psym.len+1;
+		j += 1;
+	    }
+	    psym = psym.next;
+	}
+	ps.SetLink(ps.num+1);	// link to strtab, which comes next
+	ps.SetInfo(k);
+	ps.FinishSection();
+
+	ps = pf.StartSection(".strtab", STRTAB, {});
+	ps.Write("", 1);		// null string
+	psym = symbol.symtable;
+	while psym != 0 do
+	{   if !psym.VeryLocal() then
+		ps.Write(psym.name, psym.len+1);
+	    psym = psym.next;
+	}
+	ps.FinishSection();
+    }
+
+
+    proc Output(fd: sys.fildes, genprog: boolean)
+    {
+	var pf: elfwrite.pFile;
+	var ps: elfwrite.pSection;
+	var pp: elfwrite.pProgram;
+	var pseg: segment.Segment;
+	var pblk: segment.Block;
+	var stype: elf.SectTypes;
+	var sflag: elf.SectFlags64;
+	var pflag: elf.ProgFlags;
+	var form: elf.FileTypes;
+	var offset: _uint64;
+	var addr, size, align: _uint64;
+
+	if genprog then form = EXEC; else form = REL;
+	pf = elfwrite.Init(fd, MY66000, CLASS64, LSB2, form);
+
+	//
+	// Output segments
+	//
+	pseg = segment.list.head.next;	// skip .undef segment
+	while pseg != 0 do
+	{   if pseg.flags.ALLOC then stype = PROGBITS; else stype = NOBITS;
+	    sflag = elf.SectFlags64(_uint8(pseg.flags));
+	    ps = pf.StartSection(pseg.name, stype, sflag);
+	    pblk = pseg.bhead;
+	    while pblk != 0 do
+	    {	ps.Write(pblk.code, pblk.size);
+		pblk = pblk.next;
+	    }
+	    addr = pseg.addr;
+	    size = pseg.size;
+	    align = 1 << pseg.align;
+	    ps.SetAddr(addr);
+	    ps.SetSize(size);
+	    ps.SetAlign(align);
+	    offset = ps.GetOffset();
+	    ps.FinishSection();
+	    if genprog then
+	    {	if pseg.flags.EXEC then
+		    pflag = {.X=true};
+		else
+		    pflag = {.R=true};
+		if pseg.flags.WRITE then
+		    pflag.W = true;
+		pp = pf.StartProgram(LOAD, pflag);
+		pp.SetVAddr(addr);
+		pp.SetPAddr(addr);
+		pp.SetMSize(size);
+		pp.SetAlign(align);
+		if !pseg.flags.ALLOC then
+		    size = 0;
+		pp.FinishProgram(offset, size);
+	    }
+	    pseg = pseg.next;
+	}
+
+	//
+	// Output symbols
+	//
+	pf.OutputSymbols();
+
+	pf.Finish();
+
+    }
+
+}

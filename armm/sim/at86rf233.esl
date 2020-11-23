@@ -1,0 +1,129 @@
+/*
+ * Simulate an ATMEL AT86RF233 radio attached via SPI
+ */
+
+
+package at86rf233
+{   type States: (IDLE, RREAD, RWRITE, BREAD, BWRITE, SREAD, SWRITE);
+    var state: States = IDLE;
+    const next: [8]States =
+    {	SREAD, BREAD, SWRITE, BWRITE, RREAD, RREAD, RWRITE, RWRITE };
+    var trxstate: _byte;
+    var r: _byte;
+    var regs: [0x40]_byte =
+    {	0x00,	// 0x00 - not used?
+	0x00,	// 0x01 - TRX_STATUS
+	0x00,	// 0x02 - TRX_STATE
+	0x09,	// 0x03 - TRX_CTRL_0
+	0x22,	// 0x04 - TRX_CTRL_1
+	0x00,	// 0x05 - PHY_TX_PWR
+	0x60,	// 0x06 - PHY_RSSI
+	0xFF,	// 0x07 - PHY_ED_LEVEL
+	0x2B,	// 0x08 - PHY_CC_CCA
+	0xC7,	// 0x09 - CCA_THRES
+	0x37,	// 0x0A - RX_CTRL
+	0xA7,	// 0x0B - SPD_VALUE
+	0x20,	// 0x0C - TRX_CTRL_2
+	0x00,	// 0x0D - ANT_DIV
+	0x00,	// 0x0E - IRQ_MASK
+	0x00,	// 0x0F - IRQ_STATUS
+	0x00,	// 0X10 - VREG_CTRL
+	0x02,	// 0X11 - BATMON
+	0xF0,	// 0X12 - XOSC_CTRL
+	0x00,	// 0X13 - CC_CTRL_0
+	0x00,	// 0X14 - CC_CTRL_1
+	0x00,	// 0X15 - RX_SYN
+	0xC1,	// 0X16 - TRX_RPC
+	0x00,	// 0X17 - XAH_CTRL_1
+	0x58,	// 0X18 - FTN_CTRL
+	0x00,	// 0X19 - XAH_CTRL_2
+	0x57,	// 0X1A - PLL_CF
+	0x20,	// 0X1B - PLL_DCU
+	0x0B,	// 0X1C - PART_NUM
+	0x01,	// 0X1D - VERSION_NUM
+	0x1F,	// 0X1E - MAN_ID_0
+	0x00,	// 0X1F - MAN_ID_1
+	0xFF,	// 0X20 - SHORT_ADDR_0
+	0xFF,	// 0X21 - SHORT_ADDR_1
+	0xFF,	// 0X22 - PAN_ID_0
+	0xFF,	// 0X23 - PAN_ID_1
+	0x00,	// 0X24 - IEEE_ADDR_0
+	0x00,	// 0X25 - IEEE_ADDR_1
+	0x00,	// 0X26 - IEEE_ADDR_2
+	0x00,	// 0X27 - IEEE_ADDR_3
+	0x00,	// 0X28 - IEEE_ADDR_4
+	0x00,	// 0X29 - IEEE_ADDR_5
+	0x00,	// 0X2A - IEEE_ADDR_6
+	0x00,	// 0X2B - IEEE_ADDR_7
+	0x38,	// 0X2C - XAH_CTRL_0
+	0xEA,	// 0X2D - CSMA_SEED_0
+	0x42,	// 0X2E - CSMA_SEED_1
+	0x53,	// 0X2F - CSMA_BE
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+
+    proc RegRead(reg: _byte): _byte
+    {
+if log > 2 then {
+fderr.str("SPISLAVE read reg=");  fderr.hex8(reg);
+fderr.str(" val=");  fderr.hex8(regs[reg]);
+fderr.nl();
+}
+	return regs[reg];
+    }
+
+    proc RegWrite(reg: _byte, dat: _byte)
+    {
+if log > 2 then {
+fderr.str("SPISLAVE write reg=");  fderr.hex8(reg);
+fderr.str(" val=");  fderr.hex8(dat);
+fderr.nl();
+}
+	if reg
+	is 0x02 then	// TRX_STATE
+	{   var cmd: _byte;
+	    cmd = dat & 0x1F;
+	    // Just write the TRX_CMD part
+	    regs[0x02] = (regs[0x02] & ~0x1F) | cmd;
+	    // Update TRX_STATUS
+	    regs[0x01] = (regs[0x01] & ~0x1F) | cmd;
+	}
+	is 0x03,		// TRX_CTRL_0
+	   0x04,		// TRX_CTRL_1
+	   0x08,		// PHY_CC_CCA
+	   0x0C,		// TRX_CTRL_2
+	   0x0E,		// IRQ_MASK
+	   0x16,		// TRX_RPC
+	   0x1E .. 0x2B,	// addresses
+	   0x2C then
+	    regs[reg] = dat;
+    }
+
+    proc Data(b: _byte): _byte
+    {    var rv: _byte;
+
+//fderr.str("SPISLAVE b="); fderr.hex8(_uint8(b));
+//fderr.str(" s="); fderr.uint8(_uint8(state));
+	rv = 0xFF;	// default FIXME - 0x00
+	if state
+	is IDLE then
+	{   r = b & 0x3F;
+//fderr.str(" idle");
+	    state = next[(b >> 5) & 0b111];
+	    // FIXME - rv is PHY status?
+	}
+	is RREAD then
+	{   if r < 0x40 then rv = RegRead(r);
+	    state = IDLE;
+	}
+	is RWRITE then
+	{   if r < 0x40 then RegWrite(r, b);
+	    state = IDLE;
+	}
+//fderr.str(" s="); fderr.uint8(_uint8(state));
+//fderr.nl();
+	return rv;
+    }
+}
+

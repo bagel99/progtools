@@ -1,0 +1,79 @@
+
+
+package stm32f107
+{
+    const name = "stm32f107";
+
+    proc NoRead(addr: _uint32, w: cpu.Width): _uint32
+    {
+	fderr.str("\tRead addr=");  fderr.hex32(addr);
+	fderr.str(" size=");  fderr.uint8(_uint8(w));
+	fderr.nl();
+	return 0;
+    }
+
+    proc NoWrite(addr: _uint32, w: cpu.Width, data: _uint32)
+    {
+	fderr.str("\tWrite addr=");  fderr.hex32(addr);
+	fderr.str(" size=");  fderr.uint8(_uint8(w));
+	fderr.str(" data=");  fderr.hex32(data);  fderr.nl();
+    }
+
+    const ResetAddress = 0x08000000;
+    const NSegs = 9;
+    // some useful MemFlags
+    const N: armm.MemFlags = { .w=true };	// all the rest are false
+    const X: armm.MemFlags = { .x=true };
+    const F: armm.MemFlags = { .w=false };
+    const T: armm.MemFlags = { .x=true, .a=true, .l=true };
+    const D: armm.MemFlags = { .w=true, .a=true, .l=true };
+    const R: armm.MemFlags = { .w=false, .a=true, .l=true };
+    var MemTab: [NSegs]armm.Mem =
+    {	{ 0, 0x0000_0000, 0x0003_FFFF, X, 0, 0, 0 },	// remapped flash
+	{ 0, 0x0800_0000, 0x0803_FFFF, T, 0, 0, 0 },	// 256KB flash
+	{ 0, 0x2000_0000, 0x2000_FFFF, D, 0, 0, 0 },	// 64KB RAM
+	{ 0, 0x4001_0000, 0x4001_23FF, N, NoRead, NoWrite, 0 },	// GPIO
+	{ 0, 0x4002_1000, 0x4002_13FF, N, NoRead, NoWrite, 0 },	// Clocks
+	{ 0, 0x4002_2000, 0x4002_23FF, N, NoRead, NoWrite, 0 },	// Flash
+    	{ 0, 0xE000_E010, 0xE000_E01F, N, syscm3.Tick.Read, syscm3.Tick.Write, 0 },
+    	{ 0, 0xE000_E100, 0xE000_E7FF, N, syscm3.NVIC.Read, syscm3.NVIC.Write, 0 },
+    	{ 0, 0xE000_ED00, 0xE000_EFFF, N, syscm3.CB.Read, NoWrite, 0 }
+    };
+
+    const NELFSegs = 3;
+	
+    proc Init(argc: _uint, argv: @[]@[]_byte)
+    {   var i, j: _uint;
+
+	memory = pMemory(sys.malloc(Memory?size + NELFSegs*Segment?size));
+	j = 0;
+	for i from 0 to MemTab?len-1 do
+	{
+	    if MemTab[i].flg.a then	// allocate memory
+	    {   MemTab[i].adr = sys.malloc(MemTab[i].end - MemTab[i].beg + 1);
+	    }
+	    if MemTab[i].flg.l then	// ELF needs to load this
+	    {   if j < NELFSegs then
+	    	{   memory.seg[j].mem = MemTab[i].adr;
+	    	    memory.seg[j].beg = MemTab[i].beg;
+	    	    memory.seg[j].end = MemTab[i].end;
+	    	    memory.seg[j].typ = 0;
+	    	    j += 1;
+	    	}
+	    }
+	}
+	memory.nsegs = j;
+	armm.memtab = MemTab;
+	armm.nmem = MemTab?len;
+    }
+
+    /*
+     * Chip specific commands
+     */
+    proc DumpGPIO(narg: _uint, args: @[]@[]_byte)
+    {
+	fderr.str("Not yet implemented\n");
+    }
+}
+
+

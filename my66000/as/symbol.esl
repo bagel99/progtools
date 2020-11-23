@@ -1,0 +1,264 @@
+package symbol
+{
+    alias segment.Segment as Segment;
+    alias segment.Block as Block;
+    alias segment.curseg as curseg;
+
+    type SymbVis: (DEFAULT, INTERNAL, HIDDEN, PROTECTED);
+    type SymbType: (NOTYPE, OBJECT, FUNC, SECTION, FILE);
+    type SymbScope: (LOCAL, IMPORT, EXPORT, WEAK);
+    type Flags:
+    {	scope:  SymbScope;
+	type:   SymbType;
+	vis:    SymbVis;
+	def:    boolean;
+    }: packed;
+
+
+    type SymbolT:
+    {   next:   @SymbolT;
+	hash:   @SymbolT;
+	segm:   Segment;
+	blok:   Block;
+	size:	_uint64;
+	offs:   _uint32;
+	align:  _uint8;		// log2 of alignment
+	flags:  Flags;
+	len:   _uint8;		// length of name
+	name:   []_byte;
+    };
+    type Symbol: @SymbolT;
+
+    var symtable: Symbol;
+
+    proc (ps: Symbol) VeryLocal(): boolean
+    {
+	return ps.name[0] == '0' ||	// local numerical symbol
+	       ps.name[0:2] == '.L';	// .L local symbol
+    }
+
+    proc (ps: Symbol) Value(): _uint64
+    {
+	if ps.segm != 0 && ps.blok != 0 then
+	    return ps.blok.addr + ps.offs;
+	else
+	    return ps.offs;
+    }
+
+    proc (ps: Symbol) FinalValue(): _uint64
+    {
+       return ps.Value() + ps.segm.addr;
+    }
+
+    proc Sort()
+    {   var this, prev, next: Symbol;
+	var done: boolean;
+
+	do
+	{   done = true;
+	    prev = 0;
+	    this = symtable;
+	    while this != 0 do
+	    {   next = this.next;
+		if next != 0 &&
+		   (next.segm.secnum < this.segm.secnum ||
+		   (next.segm.secnum == this.segm.secnum &&
+		    next.Value() < this.Value())) then
+		{
+		    this.next = next.next;
+		    next.next = this;
+		    if prev == 0 then
+			symtable  = next;
+		    else
+			prev.next = next;
+		    done = false;
+		}
+		prev = this;
+		this = this.next;
+	    }
+	} while !done;
+    }
+
+    proc Dump(fmt: OutFmt)
+    {   var ps: Symbol;
+
+	Sort();
+	fdo.str("Symbol Table:\n");
+	ps = symtable;
+	while ps != 0 do
+	{   if !ps.VeryLocal() then
+	    {	if ps.flags.def then
+		    fdo.hex64(ps.FinalValue());
+		else
+		    fdo.str("               U");
+		fdo.chr(' ');
+		fdo.str(ps.segm.name);
+		fdo.chr(' ');
+		fdo.str(ps.name);
+		fdo.nl();
+	    }
+	    ps = ps.next;
+	}
+    }
+
+    proc Enter(name: @[]_byte, n: _uint, define: boolean): Symbol; // forward
+
+    /*
+     * Local labels
+     */
+    var locsym: [10]
+    {   back:  Symbol;
+	forw:  Symbol;
+    };
+    // WARNING - follow creates a limit on the number of local symbols
+    var locname: [6]_byte = {'0','0','0','0','0','0'};
+
+    proc LocalNew(n: _uint): Symbol
+    {   var i: _uint;
+	var k: _byte;
+
+	i = locname?len -1;
+	locname[i] = n + '0';
+	loop
+	{   i -= 1;
+	    k = locname[i] + 1;
+	    locname[i] = k;
+	  exit k <= '9';
+	    locname[i] = '0';
+	}
+	return Enter(locname, locname?len, false);
+    }
+
+    proc LocalSet(n: _uint)
+    {   var ps: Symbol;
+
+	ps = locsym[n].forw;
+	if ps == 0 then
+	   ps = LocalNew(n);
+	locsym[n].back = ps;
+	locsym[n].forw = 0;
+	ps.flags = {.type=NOTYPE, .scope=LOCAL, .def=true};
+	ps.segm  = curseg;
+	ps.blok  = curseg.btail;
+	ps.offs  = curseg.btail.size;
+    }
+
+    proc LocalUse(n: _uint, isforw: boolean): Symbol
+    {   var ps: Symbol;
+
+	if isforw then
+	{   ps = locsym[n].forw;
+	    if ps == 0 then
+	    {   ps = LocalNew(n);
+	    	locsym[n].forw = ps;
+	    }
+	}
+	else
+	    ps = locsym[n].back;
+	return ps;
+    }
+
+    proc Look(name: @[]_byte, n: _uint): Symbol
+    {	var ps: Symbol;
+
+	ps = symtable;
+	while ps != 0 && (ps.len != n || name[0:n] != ps.name[0:n]) do
+	{
+	    ps = ps.next;
+	}
+	return ps;
+    }
+
+    proc SetType(name: @[]_byte, n: _uint, type: SymbType)
+    {   var ps: Symbol;
+
+	ps = Enter(name, n, false);
+	ps.flags.type = type;
+    }
+
+    proc SetScope(name: @[]_byte, n: _uint, scope: SymbScope)
+    {   var ps: Symbol;
+
+	ps = Enter(name, n, false);
+	ps.flags.scope = scope;
+    }
+
+    proc SetVisibility(name: @[]_byte, n: _uint, vis: SymbVis)
+    {   var ps: Symbol;
+
+	ps = Enter(name, n, false);
+	ps.flags.vis = vis;
+    }
+
+    proc SetSize(name: @[]_byte, n: _uint, size: _uint64)
+    {   var ps: Symbol;
+
+	ps = Enter(name, n, false);
+	ps.size = size;
+    }
+
+    proc Enter(name: @[]_byte, n: _uint, define: boolean): Symbol
+    {	var ps: Symbol;
+
+
+//fde.str("Enter symbol name="); fde.strn(name,n);
+//fde.str(" flags="); fde.hex8(_uint8(flags)); fde.nl();
+	ps = Look(name, n);
+	if ps == 0 then			// currently unknown
+	{   ps = _new(SymbolT(n+1));
+	    ps.next = symtable;
+	    symtable = ps;
+	    ps.segm = segment.usegm;
+	    ps.name[0:n] = name[0:n];
+	    ps.len = n;
+	}
+	if define then
+	{   if ps.flags.def then
+	    {   Syntax("duplicate definition");
+	  	return ps;
+	    }
+	    ps.flags.def = true;
+	    ps.segm = curseg;
+	    ps.blok = curseg.btail;
+	    ps.offs = curseg.btail.size;
+//fde.str("\tsegm="); fde.str(ps.segm.name);
+//fde.str(" blokaddr="); fde.hex64(ps.blok.addr);
+//fde.str(" offs="); fde.hex16(ps.offs); fde.nl();
+	}
+	return ps;
+    }
+
+    proc Anon(): Symbol
+    {   var ps: Symbol;
+
+	ps = _new(SymbolT(2));
+	ps.name[0] = '.';
+	ps.next = 0;
+	ps.len  = 0;
+	ps.flags = {.type=NOTYPE, .def=true};
+	ps.segm = curseg;
+	ps.blok = curseg.btail;
+	ps.offs = curseg.btail.size;
+	return ps;
+    }
+
+    proc Label(name: @[]_byte, n: _uint)
+    {
+    	if name[0] >= '0' && name[0] <= '9' then
+    	{   if n == 1 then
+    		LocalSet(name[0]-'0');
+    	    else
+    	    	Syntax("illegal symbol");
+    	}
+    	else
+	    _ = Enter(name, n, true);
+    }
+
+    proc Init()
+    {
+	symtable = 0;
+	_zero(locsym);
+    }
+
+}
+

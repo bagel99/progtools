@@ -1,0 +1,1289 @@
+
+package arm32
+{
+    type  Inst: _uint32;	// shortest instruction
+    type  Addr: _uint32;
+    type  Word: _uint32;
+    type  SWord: _int32;
+    type  Half: _uint16;
+    type  Width: (BYTE, HALF, WORD);
+
+    type MemFlags:
+    {   x:	boolean;	// executable
+        w:	boolean;	// writeable
+        a:	boolean;	// allocate memory
+        l:	boolean;	// load from object file
+    }: packed, bits(32);
+    
+    type Mem:
+    {	adr:   _address;
+	beg:   Addr;
+	end:   Addr;
+	flg:   MemFlags;
+	read:  @_(adr: _uint32, w: Width): Word;
+	write: @_(adr: _uint32, w: Width, data: Word);
+	init:  @_();
+    };
+
+    var memtab: @[]Mem;
+    var nmem: _uint;
+
+    type  CondCode:
+    (   EQ, NE,		// Z==1; Z==0
+	CS, CC,		// C==1; C==0 (aka HS, LO)
+	MI, PL,		// N==1; N==0
+	VS, VC,		// V==1; V==0
+	HI, LS,		// C==1 && Z==0; C==0 || Z==1
+	GE, LT,		// N==V; N!=V
+	GT, LE,		// Z==0 && N==V; Z==1 || N!=V
+	AL, NV		// AL=always; NV=never (not used)
+    );
+    type  flags:
+    {	N: boolean;
+	Z: boolean;
+	V: boolean;
+	C: boolean;
+    }: packed;
+    const PC = 15;			// PC is register 15
+    const LR = 14;
+    const SP = 13;
+    type Faults: (NONE, BKPT, SVC, HLT, OTHER);
+    type ShiftT: ( LSL, LSR, ASR, ROR, RRX );
+
+    /*
+     *  CPU STATE
+     */
+    var   reg:       [16]Word;
+    var   psN, psZ, psC, psV, psQ: boolean;	// processor status flags
+    var   instpc:    Word;		// saved PC for faults
+    var   fault: Faults = NONE;
+    var   ilast: _uint = 0;
+    var   rlast: _uint = 0;
+    var   wlast: _uint = 0;
+    var   cycles: _uint = 0;
+
+    const regname: [16]@[]_byte =
+    {	"r0",	"r1",	"r2",	"r3",	"r4",	"r5",	"r6",	"r7",
+	"r8",	"r9",	"r10",	"r11",	"r12",	"sp",	"lr",	"pc"
+    };
+
+    proc Fault(s:@[]_byte, info: _uint32)
+    {   
+	fderr.str("\nFault cycle ");
+	fderr.uint(cycles);
+	fderr.str(" at ");
+	fderr.hex32(instpc);
+	fderr.str(" : ");
+	fderr.str(s);
+	fderr.str(" : ");
+	fderr.hex32(info);
+	fderr.nl();
+	fault = OTHER;
+    }
+
+    proc Map(addr: Addr): boolean, _address
+    {   var i: _uint;
+
+	for i from 0 to nmem-1 do
+	{   if addr >= memtab[i].beg && addr <= memtab[i].end then
+	    {	addr -= memtab[i].beg;
+		return true, memtab[i].adr@[addr-];
+	    }
+	}
+	return false, 0;
+    }
+
+    proc LoadBytes(addr: Word, data: @[]_byte, len: _uint): boolean
+    {   var i: _uint;
+
+        i = 0;
+        while !(addr >= memtab[i].beg && addr+len <= memtab[i].end) do
+	{  i += 1;
+	   exit i >= nmem with return false;
+	}
+	addr -= memtab[i].beg;
+	memtab[i].adr@[addr:len] = data[0:len];
+	return true;
+    }
+
+    proc SysCall()
+    {   var n: _uint;
+	var ok: boolean;
+	var addr: _address;
+	var rv: _int;
+
+	n = _uint(reg[7]);
+if db > 0 then {
+fderr.str("SysCall #"); fderr.uint(n);
+fderr.str(" r0="); fderr.hex32(reg[0]);
+fderr.str(" r1="); fderr.hex32(reg[1]);
+fderr.str(" r2="); fderr.hex32(reg[2]);
+}
+	if n
+	is 0 then	// exit
+	{   sys.exit(0);
+	}
+	is 1 then	// open
+	{   ok, addr = Map(reg[0]);
+	    if ok then
+	    {
+		rv = sys.open(addr, _uint(reg[1]), _uint(reg[2]));
+		reg[0] = Word(rv);
+	    }
+	}
+	is 2 then	// close
+	{   sys.close(_int(reg[0]));
+	    rv = 0;	// FIXME sys.close
+	}
+	is 3 then	// read
+	{   ok, addr = Map(reg[1]);
+	    if ok then
+	    {
+		rv = sys.read(_int(reg[0]), addr, _uint(reg[2]));
+		if rv < 0 then
+		{
+fderr.str("read error "); fderr.int(rv); fderr.nl();
+		}
+		reg[0] = Word(rv);
+	    }
+	}
+	is 4 then	// write
+	{   ok, addr = Map(reg[1]);
+	    if ok then
+	    {
+//fderr.str("write("); fderr.uint(_uint(reg[0]));
+//fderr.chr(','); fderr.hex(_uint(addr)); 
+//fderr.chr(','); fderr.uint(_uint(reg[2])); fderr.str(")\n");
+		rv = sys.write(_uint(reg[0]), addr, _uint(reg[2]));
+		if rv < 0 then
+		{
+fderr.str("write error "); fderr.int(rv); fderr.nl();
+		}
+		reg[0] = Word(rv);
+	    }
+	}
+	else
+	{
+fderr.str("** Unimplemented system call #"); fderr.uint(n); fderr.nl();
+	}
+if db > 0 then {
+fderr.str(" rv="); fderr.int(rv);
+fderr.str(" cycle="); fderr.uint(cycles);
+fderr.nl(); }
+    }
+
+    proc Read(addr: Addr, w: Width): Word
+    {   var i: _uint;
+	var rv: Word;
+
+        i = rlast;
+        while !(addr >= memtab[i].beg && addr <= memtab[i].end) do
+	{   i += 1;
+	    if i >= nmem then i = 0;
+	   exit i == rlast with
+	    {
+		Fault("Read violation", addr);
+		return 0;
+	    }
+	}
+	rlast = i;
+	if memtab[i].read == 0 then	// ordinary memory
+	{   addr -= memtab[i].beg;
+	    if w
+            is BYTE then
+		rv = memtab[i].adr@[addr];
+	    is HALF then
+		rv = (Word(memtab[i].adr@[addr+1]) << 8) | memtab[i].adr@[addr];
+	    else
+		rv = (Word(memtab[i].adr@[addr+3]) << 24) |
+		     (Word(memtab[i].adr@[addr+2]) << 16) |
+		     (Word(memtab[i].adr@[addr+1]) << 8)  |
+		     memtab[i].adr@[addr];
+	}
+	else
+	    rv = memtab[i].read@(addr, w);
+	return rv;
+    }
+
+    proc Write(addr: Addr, w: Width, v: Word)
+    {   var i: _uint;
+
+        i = wlast;
+        while !(addr >= memtab[i].beg && addr <= memtab[i].end) do
+	{   i += 1;
+	    if i >= nmem then i = 0;
+	   exit i == wlast with
+	    {
+		Fault("Write violation", addr);
+		return;
+	    }
+	}
+	wlast = i;
+	if memtab[i].write == 0 then	// ordinary memory
+	{   addr -= memtab[i].beg;
+	    memtab[i].adr@[addr] = v;
+	    if w >= HALF then
+	    {   memtab[i].adr@[addr+1] = v >> 8;
+		if w == WORD then
+		{   memtab[i].adr@[addr+2] = v >> 16;
+		    memtab[i].adr@[addr+3] = v >> 24;
+		}
+	    }
+	}
+	else
+	    memtab[i].write@(addr, w, v);
+    }
+
+    proc SetBreakpoint(addr: Addr, n: _uint): Inst: inline
+    {   var old: Inst;
+	var new: Inst;
+
+	new = 0xE120_0070 | ((n << 4) & 0x000F_F000) | (n & 0xF);
+	old = Read(addr, WORD);
+	Write(addr, WORD, new);
+	return old;
+    }
+
+    proc ClrBreakpoint(addr: Addr, inst: Inst):: inline
+    {
+	Write(addr, WORD, inst);
+    }
+
+    // Fake an interrupt
+    proc Interrupt(vec: _uint)
+    {
+
+    }
+
+
+    type Op:	// First 16 are direct mapped, do not change
+    (	AND,	EOR,	SUB,	RSB,	ADD,	ADC,	SBC,	RSC,
+	TST,	TEQ,	CMP,	CMN,	ORR,	MOV,	BIC,	MVN,
+	LSL,	LSR,	ASR,	ROR,	RRX,
+    );
+
+    // Sign extend from a bit, leave as unsigned
+    proc Sext(bit: _uint, x: Word): Word: inline
+    {   var tmp: SWord;
+
+	tmp = SWord(x);
+	tmp = tmp << (Word?bits-1 - bit);
+	tmp = tmp >> (Word?bits-1 - bit);
+	return Word(tmp);
+    }
+
+    proc ArmImm(inst: Inst, ci: boolean): Word, boolean
+    {   var val: Word;
+	var rot: _uint;
+	var co: boolean;
+
+	val = inst & 0x0FF;
+	rot = (inst >> 8) & 0xF;
+if db > 3 then {
+fderr.str("ArmImm val="); fderr.hex32(val);
+fderr.str(" rot="); fderr.uint(rot); }
+	co = ci;
+	if rot != 0 then
+	{   val = _ror(val, rot*2);
+	    co = val&0x8000_0000 != 0;
+	}
+if db > 3 then { fderr.str(" -> "); fderr.hex32(val); fderr.nl(); }
+	return val, co;
+    }
+
+    proc CondPassed(cc: CondCode): boolean
+    {
+
+	if cc
+	is EQ then return  psZ;
+	is NE then return !psZ;
+	is CS then return  psC;
+	is CC then return !psC;
+	is MI then return  psN;
+	is PL then return !psN;
+	is VS then return  psV;
+	is VC then return !psV;
+	is HI then return  psC && !psZ;
+	is LS then return !psC ||  psZ;
+	is GE then return psN == psV;
+ 	is LT then return psN != psV;
+	is GT then return !psZ && psN == psV;
+	is LE then return  psZ || psN != psV;
+	is AL then return true;
+	return false;
+    }
+
+    proc SetPC(val: Word)
+    {
+	// FIXME - check for change of mode
+	reg[PC] = val;
+    }
+
+    proc SetFlagsNZ(result: Word)
+    {
+	psZ = result == 0;
+	psN = result&0x8000_0000 != 0;
+    }
+
+    proc SetFlagsNZC(result: Word, carry: boolean)
+    {
+	psC = carry;
+	SetFlagsNZ(result);
+    }
+
+    proc SetFlags(result: Word, cc: flags)
+    {
+	psC = cc.C;
+	psV = cc.V;
+	SetFlagsNZ(result);
+    }
+
+    proc DecodeImmShift(t: _uint /*0..3*/, n: _uint /*0..31*/): ShiftT, _uint
+    {
+	if t
+	is 0b00 then	// lsl
+	    return LSL, n;
+	is 0b01 then	// lsr
+	{   if n == 0 then n = 32;
+	    return LSR, n;
+	}
+	is 0b10 then	// asr
+	{   if n == 0 then n = 32;
+	    return ASR, n;
+	}
+	is 0b11 then	// ror
+	{   if n == 0 then return RRX, 1;
+	    return ROR, n;
+	}
+    }
+
+    proc ShiftWithCarry(t: ShiftT, n: _uint /*0..31*/, v: Word, ci: boolean): Word, boolean
+    {   var co: boolean;
+        var sv: SWord;
+
+if db > 3 then {
+const shfname: [ShiftT][4]_byte = {"LSL", "LSR", "ASR", "ROR", "RRX"}; 
+fderr.str(shfname[t]);
+fderr.chr(' '); fderr.uint32(n);
+fderr.chr(':'); fderr.uint32(v);
+fderr.chr(','); fderr.uint8(_uint8(ci)); fderr.nl(); }
+	if n == 0 then
+	    return v, ci;
+	if t
+	is LSL then
+	{   co = ((v >> (31-n)) & 0b1) != 0;
+	    v = v << n;
+	}
+	is LSR then
+	{   co = ((v >> (n+1)) & 0b1) != 0;
+	    v = v >> n;
+	}
+	is ASR then
+	{   co = ((v >> (n+1)) & 0b1) != 0;
+	    sv = SWord(v);
+	    sv = sv >> n;
+	    v = Word(sv);
+	}
+	is ROR then
+	{
+	    Fault("NotImplemented ROR", 0);
+	}
+	is RRX then
+	{
+	    Fault("NotImplemented RRX", 0);
+	}
+	return v, co;
+    }
+
+    // WARNING: registers pushed in opposite order from DDI0405B pA6-187.
+    proc StoreMDB(br: _uint, list: _uint16): Addr
+    {   var r: 0..15;
+	var addr: Addr;
+	var m: _uint16;
+
+	addr = reg[br];
+	r = 14;		// pc not allowed
+	m = 0x4000;
+	while m != 0 do
+	{   if (list & m) != 0 then
+	    {   addr -= 4;
+	        Write(addr, WORD, reg[r]);
+	    }
+	    r -= 1;
+	    m = m >> 1;
+	}
+	return addr;
+    }
+
+    proc LoadMDB(br: _uint, list: _uint16): Addr
+    {   var r: 0..15;
+	var addr: Addr;
+	var m: _uint16;
+	var tmp: Word;
+
+	addr = reg[br];
+	r = 15;
+	m = 0x8000;
+	while m != 0 do
+	{   if (list & m) != 0 then
+	    {   addr -= 4;
+		tmp = Read(addr, WORD);
+//	    	if r == PC then
+//	    	{   if (tmp & 1) == 0 then
+//	    		Fault("Load PC mode", tmp);
+//	    	    tmp = tmp & ~1;
+//	    	}
+	    	reg[r] = tmp; 
+	    }
+	    r -= 1;
+	    m = m >> 1;
+	}
+	return addr;
+    }
+
+    proc StoreMIA(br: _uint, list: _uint16): Addr
+    {   var r: 0..15;
+	var addr: Addr;
+
+	addr = reg[br];
+	r = 0;
+	while list != 0 do
+	{   if (list & 1) != 0 then
+	    {   Write(addr, WORD, reg[r]);
+	        addr += 4;
+	    }
+	    r += 1;
+	    list = list >> 1;
+	}
+	return addr;
+    }
+
+    proc LoadMIA(br: _uint, list: _uint16): Addr
+    {   var r: 0..15;
+	var addr: Addr;
+	var tmp: Word;
+
+	addr = reg[br];
+	r = 0;
+	while list != 0 do
+	{   if (list & 1) != 0 then
+	    {   tmp = Read(addr, WORD);
+//	    	if r == PC then
+//	    	{   if (tmp & 1) == 0 then
+//	    		Fault("Load PC mode", tmp);
+//	    	    tmp = tmp & ~1;
+//	    	}
+	    	reg[r] = tmp; 
+		addr += 4;
+	    }
+	    r += 1;
+	    list = list >> 1;
+	}
+	return addr;
+    }
+
+    proc LoadMDA(br: _uint, list: _uint16): Addr
+    {
+	var addr: Addr;
+
+	addr = reg[br];
+	Fault("Unimplemented LDMDA", 0);
+
+	return addr;
+    }
+
+    proc StoreMDA(br: _uint, list: _uint16): Addr
+    {
+	var addr: Addr;
+
+	addr = reg[br];
+	Fault("Unimplemented DTMDA", 0);
+
+	return addr;
+    }
+
+    proc LoadMIB(br: _uint, list: _uint16): Addr
+    {
+	var addr: Addr;
+
+	addr = reg[br];
+	Fault("Unimplemented LDMIB", 0);
+
+	return addr;
+    }
+
+    proc StoreMIB(br: _uint, list: _uint16): Addr
+    {   var r: 0..15;
+	var addr: Addr;
+
+	addr = reg[br];
+	r = 0;
+	while list != 0 do
+	{   if (list & 1) != 0 then
+	    {   addr += 4;
+		Write(addr, WORD, reg[r]);
+	    }
+	    r += 1;
+	    list = list >> 1;
+	}
+	return addr;
+    }
+
+    proc LDSTmul(inst: Inst)
+    {
+	var ld, wb: boolean;
+	var rn: _uint;
+	var rl: _uint16;
+	var addr: Addr;
+
+	rl = inst & 0xFFFF;
+	rn = (inst >> 16) & 0b1111;
+	ld = inst & 0x0010_0000 != 0;
+	wb = inst & 0x0020_0000 != 0;
+	if inst & 0x0040_0000 != 0 then
+	{
+	    Fault("Undecoded instruction", inst);
+	}
+	else
+	{   if (inst >> 20) & 0b11001
+	    is 0b00000 then addr = StoreMDA(rn, rl);
+	    is 0b00001 then addr = LoadMDA(rn, rl);
+	    is 0b01000 then addr = StoreMIA(rn, rl);
+	    is 0b01001 then addr = LoadMIA(rn, rl);
+	    is 0b10000 then addr = StoreMDB(rn, rl);
+	    is 0b10001 then addr = LoadMDB(rn, rl);
+	    is 0b11000 then addr = StoreMIB(rn, rl);
+	    is 0b11001 then addr = LoadMIB(rn, rl);
+	    if wb then
+		reg[rn] = addr;
+	
+	}
+    }
+
+    proc LDSTdbl(inst: Inst)
+    {
+	var rn, rt: _uint;
+	var addr1, addr2: Addr;
+	const Wbit: Inst =  0x0020_0000;
+	const Ubit: Inst =  0x0080_0000;
+	const Pbit: Inst =  0x0100_0000;
+	const BIT22: Inst = 0x0040_0000;
+	const BIT20: Inst = 0x0010_0000;
+	const BIT5: Inst =  0x0000_0020;
+
+	if inst & BIT22 == 0 then	// register
+	{
+	    Fault("Undecoded LDRD/STRD instruction", inst);
+	}
+	else				// immediate
+	{   addr1 = ((inst >> 4) & 0xF0) | (inst & 0x0F);
+	}
+	rn = (inst >> 16) & 0b1111;
+	rt = (inst >> 12) & 0b1111;
+	if inst&Ubit != 0 then
+	    addr1 = reg[rn] + addr1;
+	else
+	    addr1 = reg[rn] - addr1;
+	if inst&Pbit != 0 then
+	    addr2 = addr1;
+	else
+	    addr2 = reg[rn];
+	if inst&Wbit != 0 then
+	    reg[rn] = addr1;
+	if inst&BIT20 == 0 then		// LDRD/STRD
+	{   if inst&BIT5 == 0 then		// load
+	    {   reg[rt] = Read(addr2, WORD);
+		reg[rt+1] = Read(addr2+4, WORD);
+	    }
+	    else				// store
+	    {   Write(addr2, WORD, reg[rt]);
+		Write(addr2+4, WORD, reg[rt+1]);
+	    }
+	}
+	else
+	{   var tmp: Word;
+
+	    if inst&(Pbit|Wbit) == Wbit then
+	    {	Fault("Undecoded LDRSx instruction", inst);
+		return;
+	    }
+	    if inst&BIT5 == 0 then	// LDRSB
+	    {	tmp = Read(addr2, BYTE);
+		reg[rt] = Sext(7, tmp);
+	    }
+	    else			// LDRSH
+	    {	tmp = Read(addr2, HALF);
+		reg[rt] = Sext(15, tmp);
+	    }
+	}	
+    }
+
+    proc LDSTimm(inst: Inst)
+    {
+	var rn, rt: _uint;
+	var addr1, addr2: Addr;
+	const LDbit: Inst =   0x0010_0000;
+	const SZbit: Inst =   0x0040_0000;
+	const Wbit: Inst =    0x0020_0000;
+	const Ubit: Inst =    0x0080_0000;
+	const Pbit: Inst =    0x0100_0000;
+
+	addr1 = inst & 0xFFF;
+	rn = (inst >> 16) & 0b1111;
+	rt = (inst >> 12) & 0b1111;
+	if inst&(Pbit|Wbit) == Wbit then
+	{   Fault("Undecoded LDxxT/STxxT imm instruction", inst);
+	    return;
+	}
+	if inst&Ubit != 0 then
+	    addr1 = reg[rn] + addr1;
+	else
+	    addr1 = reg[rn] - addr1;
+	if inst&Pbit != 0 then
+	    addr2 = addr1;
+	else
+	    addr2 = reg[rn];
+	if inst&Wbit != 0 || inst&Pbit == 0 then
+	    reg[rn] = addr1;
+	if inst&LDbit != 0 then		// load
+	{   if rn == PC then	// literal
+		addr2 += 4;	// PC adjustment
+	    if inst&SZbit != 0 then	// LDB
+		reg[rt] = Read(addr2, BYTE);
+	    else			// LDR
+		reg[rt] = Read(addr2, WORD);
+	}
+	else				// store
+	{   if inst&SZbit != 0 then	// STB
+		Write(addr2, BYTE, reg[rt]);
+	    else			// STR
+		Write(addr2, WORD, reg[rt]);
+	}
+    }
+
+    proc LDSTreg(inst: Inst)
+    {
+	var rn, rt, rm: _uint;
+	var addr1, addr2: Addr;
+	var shfa: _uint;
+	var shft: ShiftT;
+	const LDbit: Inst =   0x0010_0000;
+	const Wbit: Inst =    0x0020_0000;
+	const SZbit: Inst =   0x0040_0000;
+	const Ubit: Inst =    0x0080_0000;
+	const Pbit: Inst =    0x0100_0000;
+
+	rm = inst & 0b1111;
+	shft, shfa = DecodeImmShift((inst>>5)&0b11, (inst>>7)&0b11111);
+	addr1, _ = ShiftWithCarry(shft, shfa, reg[rm], false);
+	rn = (inst >> 16) & 0b1111;
+	rt = (inst >> 12) & 0b1111;
+	if inst&Ubit != 0 then
+	    addr1 = reg[rn] + addr1;
+	else
+	    addr1 = reg[rn] - addr1;
+	if inst&Pbit != 0 then
+	    addr2 = addr1;
+	else
+	    addr2 = reg[rn];
+	if inst&Wbit != 0 || inst&Pbit == 0 then
+	    reg[rn] = addr1;
+	if inst&(Pbit|Ubit) == Ubit then
+	{
+	    Fault("Undecoded LDxxT/STxxT reg instruction", inst);
+	    return;
+	}
+	if inst&LDbit != 0 then		// load
+	{   if inst&SZbit != 0 then	// LDB
+		reg[rt] = Read(addr2, BYTE);
+	    else			// LDR
+		reg[rt] = Read(addr2, WORD);
+	}
+	else				// store
+	{   if inst&SZbit != 0 then	// STB
+		Write(addr2, BYTE, reg[rt]);
+	    else			// STR
+		Write(addr2, WORD, reg[rt]);
+	}
+    }
+
+    proc LDSThw(inst: Inst)
+    {
+	var rn, rt: _uint;
+	var addr1, addr2: Addr;
+	const Wbit: Inst =    0x0020_0000;
+	const Ubit: Inst =    0x0080_0000;
+	const Pbit: Inst =    0x0100_0000;
+	const FMbit: Inst =   0x0040_0000;
+	const LDbit: Inst =   0x0010_0000;
+
+	if inst & FMbit == 0 then	// register
+	{
+	    Fault("Undecoded LDRH/STRH instruction", inst);
+	}
+	else				// immediate
+	{   addr1 = ((inst >> 4) & 0xF0) | (inst & 0x0F);
+	}
+	rn = (inst >> 16) & 0b1111;
+	rt = (inst >> 12) & 0b1111;
+	if inst&Ubit != 0 then
+	    addr1 = reg[rn] + addr1;
+	else
+	    addr1 = reg[rn] - addr1;
+	if inst&Pbit != 0 then
+	    addr2 = addr1;
+	else
+	    addr2 = reg[rn];
+	if inst&Wbit != 0 then
+	    reg[rn] = addr1;
+	if inst&LDbit != 0 then		// load
+	    reg[rt] = Read(addr2, HALF);
+	else				// store
+	    Write(addr2, HALF, reg[rt]);
+    }
+
+     proc AddWithCarry(v1: Word, v2: Word, ci:boolean): Word, flags
+    {   var result: Word;
+	var cc: flags;
+
+	result = v1 + v2 + Word(ci);
+	if !ci then
+	    cc.C = result < v1;
+	else
+	    cc.C = result <= v1;
+	cc.V = false;	// FIXME
+	return result, cc;
+    }
+
+    // In the flags returned only C and (eventually) V are valid
+    proc DPinst(op: Op, lhr: _uint, rhv: Word, ci: boolean): Word, flags
+    {   var lhv, val: Word;
+	var cc: flags;
+
+	lhv = reg[lhr];
+	if lhr == PC then
+	    lhv += 4;		// WARNING - adjust for weird ARM PC value
+if db > 2 then {
+fderr.str("DPinst op="); fderr.uint8(_uint8(op));
+fderr.str(" lhv="); fderr.hex32(lhv);
+fderr.str(" rhv="); fderr.hex32(rhv); }
+	if op
+	is AND then val = lhv & rhv;
+	is ORR then val = lhv | rhv;
+	is EOR then val = lhv ^ rhv;
+	is BIC then val = lhv & ~rhv;
+	is ADD then val, cc = AddWithCarry(lhv, rhv, false);
+	is SUB then val, cc = AddWithCarry(lhv, ~rhv, true);
+	is RSB then val, cc = AddWithCarry(rhv, ~lhv, true);
+	is ADC then val, cc = AddWithCarry(lhv, rhv, ci);
+	is SBC then val, cc = AddWithCarry(lhv, ~rhv, ci);
+	is RSC then val, cc = AddWithCarry(rhv, ~lhv, ci);
+	is MOV then val = rhv;		// lhr should be 0
+	is MVN then val = ~rhv;		// lhr should be 0
+	is TEQ then val = lhv ^ rhv;				// val not stored
+	is TST then val = lhv & rhv;				// val not stored
+	is CMP then val, cc = AddWithCarry(lhv, ~rhv, true);	// val not stored
+	is CMN then val, cc = AddWithCarry(lhv, rhv, false);	// val not stored
+	else
+	    Fault("Unimplemented DP opcode", _uint(op));
+if db > 2 then { fderr.str(" -> "); fderr.hex32(val); fderr.nl(); }
+	return val, cc;
+    }
+
+    proc DPimm(inst: Inst)
+    {   var rn, rd: _uint;
+	var op: Op;
+	var imm, val: Word;
+	var ci, sf: boolean;
+	var cc: flags;
+
+	op = Op((inst >> 21) & 0b1111);
+	sf = inst & 0x0010_0000 != 0;
+	rn = (inst >> 16) & 0b1111;
+	rd = (inst >> 12) & 0b1111;
+	if op >= TST && op <= CMN && !sf then	// alternate encodings
+	{   imm = ((inst >> 4)&0xF000) | (inst&0x0FFF);
+	    if op
+	    is TST then		// MOVW
+		reg[rd] = imm;
+	    is CMP then		// MOVT
+		reg[rd] = (reg[rd]&0xFFFF) | (imm << 16);
+	    else
+		Fault("Unimplemented DPimm opcode", _uint(op));
+	}
+	else
+	{   imm, ci = ArmImm(inst, psC);
+	    val, cc = DPinst(op, rn, imm, ci);
+	    if op < TST || op > CMN then
+		reg[rd] = val;
+	    if sf then
+		SetFlags(val, cc);
+	}
+    }
+
+    proc DPreg(inst: Inst)
+    {   var rn, rd, rm: _uint;
+	var op: Op;
+	var rhs, val: Word;
+	var shfa: _uint;
+	var shft: ShiftT;
+	var ci, sf: boolean;
+	var cc: flags;
+
+	op = Op((inst >> 21) & 0b1111);
+	sf = inst & 0x0010_0000 != 0;
+	rn = (inst >> 16) & 0b1111;
+	rd = (inst >> 12) & 0b1111;
+	rm = inst & 0b1111;
+	if op >= TST && op <= CMN && !sf then	// alternate encodings
+	{
+	    Fault("Unimplimented DPreg opcode", inst);
+	}
+	else
+	{   shft, shfa = DecodeImmShift((inst>>5)&0b11, (inst>>7)&0b11111);
+	    rhs, ci= ShiftWithCarry(shft, shfa, reg[rm], psC);
+	    val, cc = DPinst(op, rn, rhs, ci);
+	    if op < TST || op > CMN then
+	    	reg[rd] = val;
+	    if sf then
+		SetFlags(val, cc);
+	}
+    }
+
+    proc DPshf(inst: Inst)
+    {   var rn, rd, rm, rs: _uint;
+	var op: Op;
+	var rhs, val: Word;
+	var sf: boolean;
+	var shft: ShiftT;
+	var cc: flags;
+
+	op = Op((inst >> 21) & 0b1111);
+	sf = inst & 0x0010_0000 != 0;
+	rn = (inst >> 16) & 0b1111;
+	rd = (inst >> 12) & 0b1111;
+	rm = inst & 0b1111;
+	if op >= TST && op <= CMN && !sf then	// alternate encodings
+	{   if op
+	    is TEQ then
+	    {   if (inst >> 4) & 0b1111
+	    	is 0b0001 then	// BX
+	    	{    if rn == PC then
+	    		SetPC(reg[rm]);
+	    	     else
+	    		Fault("Illegal BX", inst);
+		}
+	    	is 0b0011 then	// BLX
+	    	{    if rn == PC then
+		     {	reg[LR] = reg[PC];
+		     	SetPC(reg[rm]);
+		     }
+	    	     else
+	    		Fault("Illegal BLX", inst);
+		}
+		is 0b0111 then	// BKPT
+		    fault = BKPT;
+		else
+		{
+		    Fault("Unimplimented DPshf alternate", inst);
+		}
+	    }
+	    is CMN then		// CLZ
+	    {	// assert n==0b1111 && s==0b1111 && shft=0b00
+		reg[rd] = _clz(reg[rm]); 
+	    }
+	    else
+	    {
+		Fault("Unimplimented DPshf alternate", inst);
+	    }
+	}
+	else
+	{   rs = (inst >> 8) & 0b1111;
+	    shft = ShiftT((inst >> 5) & 0b11);
+	    rhs, _ = ShiftWithCarry(shft, reg[rs], reg[rm], false);
+	    val, cc = DPinst(op, rn, rhs, psC);
+	    if op < TST || op > CMN then
+	    	reg[rd] = val;
+	    if sf then
+		SetFlags(val, cc);
+	}
+    }
+
+    proc XTinst(inst: Inst)
+    {   var rn, rd, rm: _uint;
+	var ror: _uint;
+	var val: Word;
+ 
+	// assert inst & 0x0180_0000 == 0x0080_0000;
+	rn = (inst >> 16) & 0b1111;
+	rd = (inst >> 12) & 0b1111;
+	rm = inst & 0b1111;
+	ror = (inst >> 7) & 0b11000;	// 0, 8, 16, 24
+	val = reg[rm];
+	val = _ror(val, ror);
+	if (inst >> 20) & 0b111
+//	is 0b000 then	// SXTAB16/SXTB16
+	is 0b010 then Sext(7, val);		// SXTAB/SXTB
+	is 0b011 then Sext(15, val);		// SXTAH/SXTH
+//	is 0b100 then	// UXTAB16
+	is 0b110 then val = val & 0xFF;		// UXTAB/UXTB
+	is 0b111 then val = val & 0xFFFF;	// UXTAH/UXTH
+	else
+	{   Fault("Unimplimented XTinst", inst);
+	    return;
+
+	}
+	if rn != PC then
+	    val += reg[rn];
+	reg[rd] = val;
+    }
+
+    proc MUL(inst: Inst)
+    {   var rn, rd, rm, ra: _uint;
+	var val: Word;
+	var sf: boolean;
+
+	// assert inst & 0x0100_0000 == 0x0000_0000;
+	// assert inst & 0x0180_0000 == 0x0080_0000;
+	rd = (inst >> 16) & 0b1111;
+	ra = (inst >> 12) & 0b1111;
+	rm = (inst >> 8) & 0b1111;
+	rn = inst & 0b1111;
+	sf = inst & 0x0010_0000 != 0;
+	if (inst >> 21) & 0b111
+	is 0b000 then			// MUL
+	{   val = reg[rm] * reg[rn];
+	    reg[rd] = val;
+	}
+	is 0b001 then			// MLA
+	{   val = reg[ra] + (reg[rm] * reg[rn]);
+	    reg[rd] = val;
+	}
+	is 0b011 then			// MLS
+	{   val = reg[ra] - (reg[rm] * reg[rn]);
+	    reg[rd] = val;
+	}
+	is 0b100 then			// UMULL
+	{   var tmp: _uint64;
+	    tmp = reg[rm] * reg[rn];	// 64-bit result
+	    reg[ra] = tmp & 0xFFFF_FFFF;
+	    reg[rd] = tmp >> 32;
+	}
+	else
+	    Fault("Undecoded MUL", inst);
+	if sf then
+	    Fault("Unimplimented MUL set flags", inst);
+	
+    }
+
+
+    proc MISC(inst: Inst)
+    {   var rn, rd, rm: _uint;
+	var b, w: _uint;	// bitfields
+	var mask, tmp: Word;
+
+	// FIXME - find a better way to decode these
+	if (inst >> 23) & 0b11
+	is 0b10 then
+	{   rd = (inst >> 16) & 0b1111;
+	    rm = (inst >>  8) & 0b1111;
+	    rn = inst & 0b1111;
+	    if (inst >> 20) & 0b111
+	    is 0b001 then	// SDIV
+	    {
+		Fault("Unimplemented SDIV", inst);
+	    }
+	    is 0b011 then	// UDIV
+	    {   if reg[rm] == 0 then
+		    Fault("Divide by zero", 0);
+		else
+		{
+if db > 2 then {
+fderr.str("UDIV rd="); fderr.uint(rd);
+fderr.str(" rn="); fderr.uint(rn);
+fderr.str(" rm="); fderr.uint(rm);
+fderr.str(" : "); fderr.uint32(reg[rn]);
+fderr.chr('/'); fderr.uint32(reg[rm]); }
+		    reg[rd] = reg[rn] / reg[rm];
+if db > 2 then {
+fderr.str("->"); fderr.uint32(reg[rd]); fderr.nl(); }
+		}
+	    }
+	    else
+		Fault("Undecoded DIV class", inst);
+	}
+	is 0b11 then
+	{   rd = (inst >> 12) & 0b1111;
+	    rn = inst & 0b1111;
+	    b = (inst >> 7)  & 0b11111;
+	    w = ((inst >> 16) & 0b11111) + 1;
+	    if (inst >> 21) & 0b11
+	    is 0b01 then	// SBFX
+		Fault("Unimplemented SBFX", inst);
+	    is 0b11 then	// UBFX
+		Fault("Unimplemented UBFX", inst);
+	    is 0b10 then	// BFI/BFC
+	    {
+		mask = ((1 << (w-b)) - 1);
+		mask = mask << b;
+if db > 2 then {
+fderr.str("BFI?BFC rd="); fderr.uint(rd);
+fderr.str(" rn="); fderr.uint(rn);
+fderr.str(" b="); fderr.uint(b);
+fderr.str(" w="); fderr.uint(w);
+fderr.str(" mask="); fderr.uint32(mask);
+fderr.nl(); }
+		reg[rd] = (reg[rd] & ~mask);
+		if rn != PC then
+		    reg[rd] = reg[rd] | ((reg[rn] << b) & mask);
+	    }
+	    else
+		Fault("Undecoded bitfield instruction", inst);
+	}
+	is 0b01 then
+	{
+		Fault("Undecoded REV* instruction", inst);
+	}
+	else
+		Fault("Undecoded MISC instruction", inst);
+    }
+
+    proc CPinst(inst: Inst)
+    {
+	var rt, crn, crm: _uint;
+	var cpn, op1, op2: _uint;
+
+	cpn = (inst >> 8) & 0b1111;
+        if inst & 0x0100_0000 == 0 then		// MCR
+        {   if cpn == 15 then
+	    {	// FIXME - for now just zero the destination register
+		rt = (inst >> 12) & 0b1111;
+		reg[rt] = 0;
+	    }
+            else
+		Fault("Unimplemented MCR with CP!=15", inst);
+	}
+        else					// MRC
+	    Fault("Unimplemented MRC instruction", inst);
+    }
+
+
+
+
+    /*
+    ** run a single instruction
+    */
+    proc Run(): boolean
+    {
+	var inst: Inst;
+	var cond: CondCode;
+	var inr: Word;
+	var offs: SWord;
+
+	cycles += 1;
+	fault = NONE;
+	instpc = reg[PC];
+	inst = Read(instpc, WORD);
+if db > 0 then {
+fderr.str("\nPC="); fderr.hex32(instpc);
+fderr.str(" inst="); fderr.hex32(inst); fderr.nl(); }
+	reg[PC] += 4;
+	cond = CondCode((inst >> 28) & 0b1111);
+	if cond != NV then	// not extended opcode
+	{   if !CondPassed(cond) then
+		return true;	// ignored conditional
+	    if (inst >> 25) & 0b111
+	    is 0b000 then
+	    {   if inst & 0x0000_0010 == 0 then DPreg(inst);
+	    	elif inst & 0x0000_0080 == 0 then DPshf(inst);
+	    	else
+	    	{   if (inst >> 5) & 0b11
+	    	    is 0b00 then MUL(inst);
+		    is 0b01 then LDSThw(inst);
+	    	    else LDSTdbl(inst);
+	    	}
+	    }	    
+	    is 0b001 then DPimm(inst);
+	    is 0b010 then LDSTimm(inst);
+	    is 0b011 then 
+	    {   if inst & 0x0000_0010 == 0 then
+		    LDSTreg(inst);
+		else
+		{   if (inst >> 5) &0b11
+		    is 0b11 then XTinst(inst);
+		    else MISC(inst);
+		}
+	    }
+	    is 0b100 then LDSTmul(inst);
+	    is 0b101 then	// BR, BL
+	    {   inr = Sext(23, inst&0xFFFFFF) << 2;
+	    	if inst & 0x0100_0000 != 0 then
+	    	    reg[LR] = reg[PC];
+	        reg[PC] += inr + 4;		// word wrap assumed
+	    }
+	    is 0b110 then
+	    	Fault("Undecoded instruction 110", inst);
+	    is 0b111 then
+	    {   if inst & 0x0100_0000 == 0 then
+		    CPinst(inst);
+	    	else	// SVC
+	    	{   if inst & 0xFFF == 0 then
+	    		SysCall();
+	    	    else
+	    		fault = SVC;
+		}
+	    }
+	}
+	else	// extended opcode
+	{
+	    if (inst >> 25) & 0b111
+	    is 0b101 then	// BLX
+	    {   inr = Sext(23, inst&0xFFFFFF) << 2;
+		inr = inr | ((inst >> 24) & 0b1);
+		reg[LR] = reg[PC];
+		reg[PC] += inr + 4;
+	    }
+	    else
+		Fault("Undecoded unconditional instruction", inst);
+	}
+	return fault == NONE;
+    }
+    
+
+    // ****
+    // initialize state using ELF segments
+    // ****
+    proc Load()
+    {
+    }
+
+    // ****
+    // chip reset
+    // ****
+    proc Reset(addr: Addr)
+    {
+fderr.str("Reset addr="); fderr.hex32(addr); fderr.nl();
+	reg[PC] = addr;
+	reg[SP] = memtab[0].end+1;
+	// FIXME - fake argument list
+	reg[0]  = Read(memtab[1].beg, WORD);
+//	reg]1]  = memtab[1].beg+4;	// FIXME - compiler error?
+	reg[1]  = 0x00F0_0004;
+    }
+
+
+    // ****
+    // display current register state
+    // ****
+    proc Dump()
+    {   var n: 0..16;
+
+	n = 0;
+	fderr.str("r0-r3    ");
+	while n < 4 do
+	{   fderr.str("  ");
+	    fderr.hex32(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\nr4-r7    ");
+	while n < 8 do
+	{   fderr.str("  ");
+	    fderr.hex32(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\nr8-r11   ");
+	while n < 12 do
+	{   fderr.str("  ");
+	    fderr.hex32(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\nr12,sp,lr");
+	while n < 15 do
+	{   fderr.str("  ");
+	    fderr.hex32(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\npc         ");
+	fderr.hex32(reg[PC]);
+	fderr.str("      NZCV  ");
+	fderr.uint8(_uint8(psN));
+	fderr.uint8(_uint8(psZ));
+	fderr.uint8(_uint8(psC));
+	fderr.uint8(_uint8(psV));
+	fderr.nl();
+	fderr.str("cycles ");
+	fderr.uint(cycles);
+	fderr.nl();
+    }
+}
+
+
+package chip
+{
+    const name = "generic";
+    const ResetAddress = 0x8000;	// FIXME
+
+    const D: arm32.MemFlags = { .x=true, .w=true, .a=true, .l=true };
+    var MemTab: []arm32.Mem =
+    {
+	{ 0, 0x0000_0000, 0x007F_FFFF, D, 0, 0, 0 },		// RAM
+	{ 0, 0x0080_0000, 0x0080_0FFF, D, 0, 0, 0 },		// ARGS
+    };
+    const NSegs = MemTab?len;
+    const NELFSegs = 3;
+
+    proc Init(argc: _uint, argv: @[]@[]_byte)
+    {   var i, j, k, n: _uint;
+
+	memory = pMemory(sys.malloc(Memory?size + NELFSegs*Segment?size));
+	j = 0;
+	for i from 0 to MemTab?len-1 do
+	{
+	    if MemTab[i].flg.a then	// allocate memory
+	    {
+var size: _uint;
+var addr: _address;
+size = MemTab[i].end - MemTab[i].beg + 1;
+addr = sys.malloc(size);
+fderr.str("vaddr="); fderr.hex32(MemTab[i].beg);
+fderr.str(" size="); fderr.uint(size);
+fderr.str(" paddr="); fderr.hex(_uint(addr));  fderr.nl();
+MemTab[i].adr = addr;
+//	        MemTab[i].adr = sys.malloc(MemTab[i].end - MemTab[i].beg + 1);
+	    }
+	    if MemTab[i].flg.l then	// ELF needs to load this
+	    {   if j < NELFSegs then
+	    	{   memory.seg[j].mem = MemTab[i].adr;
+	    	    memory.seg[j].beg = MemTab[i].beg;
+	    	    memory.seg[j].end = MemTab[i].end;
+	    	    memory.seg[j].typ = 0;
+	    	    j += 1;
+	    	}
+	    }
+	}
+	memory.nsegs = j;
+	arm32.memtab = MemTab;
+	arm32.nmem = MemTab?len;
+
+	// generate argument list
+	const ptrsize = 4;	// size of pointer on target
+	arm32.Write(arm32.memtab[1].beg,   WORD, argc);
+	j = ptrsize;		// really size of argc
+	k = j + ptrsize * argc;
+	for n from 0 to argc-1 do
+	{
+fderr.str("argv["); fderr.uint(n);
+fderr.str("]="); fderr.str(argv[n]@); fderr.nl();
+	    arm32.Write(arm32.memtab[1].beg+j,   WORD, arm32.memtab[1].beg+k);
+	    i = 0;
+	    loop
+	    {   arm32.Write(arm32.memtab[1].beg+k+i,BYTE, argv[n]@[i]);
+	      exit argv[n]@[i] == 0;
+		i += 1;
+	    }
+	    k += i+1;
+	    j += ptrsize;
+	}
+    }
+}
+

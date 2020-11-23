@@ -1,0 +1,243 @@
+import elf;
+import elfload32;
+alias elfload.Memory32 as Memory;
+alias elfload.Segment32 as Segment;
+type pMemory: @Memory;
+var memory: pMemory;
+
+const NMemTypes = 32;
+
+package syscm3		// need some forward declarations
+{   package NVIC
+    {
+	proc TryIntr();	// forward
+    }
+}
+
+import armm;
+alias armm as cpu;
+import srec;
+
+proc Log(msg: @[]_byte, addr: _uint32, data: _uint32)
+{
+    if log > 0 then
+    {
+	fderr.chr('\t');
+	fderr.str(msg);
+	fderr.str("\t@");
+	fderr.hex32(addr);
+	fderr.str(" =");
+	fderr.hex32(data);
+	fderr.str("\tcycle ");
+	fderr.uint(cpu.cycles);
+	fderr.nl();
+    }
+}
+
+proc LogR(msg: @[]_byte, addr: _uint32, data: _uint32, size: cpu.Width)
+{
+    if log > 0 then
+    {
+	fderr.str("\tRead  ");
+	fderr.str(msg);
+	fderr.str("\t[");
+	fderr.hex32(addr);
+	fderr.str("]->");
+	if size
+	is BYTE then { fderr.hex8(_uint8(data)); fderr.chr('\t'); }
+	is HALF then fderr.hex16(_uint16(data));
+	is WORD then fderr.hex32(data);
+	if log > 1 then
+	{   fderr.str("\t@");
+	    fderr.hex32(armm.instpc);
+	    if log > 2 then
+	    {   fderr.str("\tcycle ");
+		fderr.uint(cpu.cycles);
+	    }
+	}	    
+	fderr.nl();
+    }
+}
+
+proc LogW(msg: @[]_byte, addr: _uint32, data: _uint32, size: cpu.Width)
+{
+    if log > 0 then
+    {
+	fderr.str("\tWrite ");
+	fderr.str(msg);
+	fderr.str("\t[");
+	fderr.hex32(addr);
+	fderr.str("]<-");
+	fderr.hex32(data);
+	if log > 1 then
+	{   fderr.str("\t@");
+	    fderr.hex32(armm.instpc);
+	    if log > 2 then
+	    {   fderr.str("\tcycle ");
+		fderr.uint(cpu.cycles);
+	    }
+	}	    
+	fderr.nl();
+    }
+}
+
+
+import syscm3;
+
+import (CPU);
+
+proc strtou32(s: @[]_byte): _uint32
+{   var n: _uint32;
+    var i: _uint;
+
+    n = 0;
+    i = 0;
+    while s[i] != 0 do
+    {   if s[i] >= '0' && s[i] <= '9' then
+	    n = n * 10 + (s[i] - '0');
+	i += 1;
+    }
+    return n;
+}
+
+import comd;
+
+// Segment table make sure its in order
+proc SegmentCheck(): boolean
+{   var i: _uint;
+    var last: _uint32;
+    var temp: cpu.Mem;
+    var sorted: boolean;
+
+    do	// bubble sort
+    {   sorted = true;
+	for i from 0 to chip.NSegs-1 do
+	{
+	    if i != 0 then
+	    {   if chip.MemTab[i].beg <= last then
+		{   // swap with previous
+	            temp = chip.MemTab[i-1];
+	            chip.MemTab[i-1] = chip.MemTab[i];
+		    chip.MemTab[i] = temp;
+		    sorted = false;
+		}
+	    }
+	    last = chip.MemTab[i].end;
+	}
+    } while !sorted;
+    // check for allocated ordinary memory
+    for i from 0 to chip.NSegs-1 do
+    {	if chip.MemTab[i].read == 0 then
+	{   if chip.MemTab[i].adr == 0 then
+	    {	fderr.str("Unallocated memory at ");
+	    	fderr.hex32(chip.MemTab[i].beg);
+	    	fderr.nl();
+	    	return false;
+	    }
+	}
+    }        
+    if db > 0 then
+    {   fderr.str("NSegs="); fderr.uint(chip.NSegs); fderr.nl();
+	for i from 0 to chip.NSegs-1 do
+	{   fderr.str("\t["); fderr.uint(i); fderr.str("] ");
+	    fderr.hex32(chip.MemTab[i].beg); fderr.str(":");
+	    fderr.hex32(chip.MemTab[i].end);
+	    if chip.MemTab[i].adr != 0 then
+	    {	fderr.str(" @ ");
+	    	fderr.hex(_uint(chip.MemTab[i].adr));
+	    }
+	    fderr.nl();
+	}
+    }
+    return true;
+}
+
+proc HexLoad(fd: sys.fildes, memory: @Memory)
+{
+    var buf: [4096]_byte;
+}
+
+
+proc main(argc:_uint, argv:@[]@[]_byte):_int //[[global]]
+{
+    var fd: sys.fildes;
+    var n: elf.Word;
+    var i: _uint;
+    var k: _int;
+    var dumpregs: boolean;
+    var loadmode: (ELF, HEX, BIN, SREC);
+
+    loadmode = ELF;	// unless otherwise told
+    dumpregs = false;	// don't dump regs on every cycle
+    n = 0;
+    i = 1;
+    while i < argc && argv[i]@[0] == '-' do
+    {   if argv[i]@[1]
+	is 'b' then loadmode = BIN;
+	is 'x' then loadmode = HEX;
+	is 's' then loadmode = SREC;
+	is 'n' then
+	{   if argv[i]@[2] != 0 then
+		n = strtou32(argv[i]@[2:]);
+	    else
+	    {   i += 1;
+		// FIXME: check for missing arg
+		n = strtou32(argv[i]@);
+	    }
+	}
+	is 'd' then	db = 1;
+	i += 1;
+    }
+    if i >= argc then
+	return 1;
+    fd = sys.open(argv[i]@, {RDONLY}, 0);
+    if fd < 0 then
+    {   fderr.str("Unable to open ");
+	fderr.str(argv[i]@);
+	fderr.nl();
+	return 1;
+    }
+
+    fderr.str("Using chip "); fderr.str(chip.name); fderr.nl();
+    chip.Init(argc-i, argv[i:]);
+
+    if !SegmentCheck() then
+	return 3;
+
+    if loadmode
+    is BIN then
+    {	// FIXME - how do we specify this
+	k = sys.read(fd, memory.seg[0].mem@, 0x100000);
+    }
+    is HEX then
+        HexLoad(fd, memory);
+    is SREC then
+	srec.Load(fd, memory);
+    else
+    {
+	if elfload.load(fd, ARM, memory, false) then
+	    cpu.Load();
+	else
+	{   fderr.str("Unable to load - perhaps use -b\n");
+	    return 2;
+	}
+    }
+    cpu.Reset(chip.ResetAddress);
+    syscm3.Init(chip.ResetAddress);
+    if n == 0 then
+        comd.command();
+    else
+    {
+	i = 0;
+	while i < n do
+	{
+	    i += 1;
+if db > 0 then {fderr.uint(i); fderr.chr('\t'); }
+    	  exit !cpu.Run();
+	}
+	cpu.Dump();
+	fderr.str("cycles: "); fderr.uint(i); fderr.nl();
+    }
+    return 0;
+}
+

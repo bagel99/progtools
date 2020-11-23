@@ -1,0 +1,99 @@
+import sys;
+
+package bufin
+{
+
+    var buf: [4096]_byte;
+
+    var fdi: sys.fildes;
+    var beg, len: _uint;	// current beginning and length of valid data
+
+    proc FindEOL(line: @[]_byte, len: _uint): _uint
+    {   var i: _uint;
+
+	i = 0;
+	while i < len && line[i] != '\n' do
+	    i += 1;
+	return i;
+    }
+
+    proc Fill(): boolean
+    {   var k: _int;
+	var m: _uint;
+
+	// assert beg == 0
+//errout.str("Fill beg="); errout.uint(beg);
+//errout.str(" len="); errout.uint(len); errout.nl();
+	m = buf?len - len;
+	k = sys.read(fdi, buf[len:m], m);
+	if k <= 0 then return false;			// error or EOF
+	len += _uint(k);
+	return true;
+    }
+
+    proc GetLine(): @[]_byte, _uint
+    {   var i, j: _uint;
+
+	if len == 0 then
+	{   beg = 0;
+	    if !Fill() then return 0, 0;
+	}
+	loop
+	{
+	    j = FindEOL(buf[beg:len], len) + 1;
+//errout.str("Find beg="); errout.uint(beg);
+//errout.str(" len="); errout.uint(len);
+//errout.str(" j="); errout.uint(j); errout.nl();
+	    if j <= len then		// found a terminated line
+	    {   i = beg;
+		beg += j;		// new beginning
+		len -= j;		// new length
+		return buf[i:j], j;	// normal return
+	    }
+//errout.str("Moveup len="); errout.uint(len); errout.nl();
+	    buf[0:len] = buf[beg:len];	// move remnant up
+	    beg = 0;
+	    if !Fill() then return 0, 0;	// error return
+	}
+    }
+
+    proc Init(fd: sys.fildes)
+    {
+	fdi = fd;
+	beg = 0;
+	len = 0;
+    }
+
+    proc Open(filename: @[]_byte): boolean
+    {   var fd: sys.fildes;
+
+	fd = sys.open(filename, {.ACCESS=RDONLY}, 0);
+	if fd >= 0 then
+	{   Init(fd);
+	    return true;
+	}
+	return false;
+    }
+}
+
+if _defined(TEST) then {
+proc main(argc: _uint, argv: @[]@[]_byte): _int
+{
+    var line: @[]_byte;
+    var n: _uint;
+
+    if argc < 2 then
+	return 1;
+    if bufin.Open(argv[1]) then
+    {   loop
+    	{   line, n = bufin.GetLine();
+    	  exit n == 0;
+    	    sys.write(1, line, n);
+    	}
+    }
+
+    return 0;
+}
+}
+
+

@@ -1,0 +1,658 @@
+/*
+ * A program file consists of a list of segments.
+ * A segment roughly corresponds to an ELF segment.
+ * Each segment has a linked list of blocks
+ */
+
+package segment
+{
+    const DEFBLOKSIZE = 512;
+    const MINREMAIN = 16;	// room for relaxation to expand
+
+    type BlockKind:
+    (   SEQ,			// flows int next sequential blok
+	CALL,			// sequential, but ends in subroutine call
+	BRC,			// ends in a conditional branch
+	UNC,			// ends in unconditional branch
+    );
+
+    type BlockT:
+    {	next:   @BlockT;	// next blok in this segm
+	prev:   @BlockT;	// prev blok in this segm
+	addr:   _uint64;	// address of first byte
+	size:   _uint64;	// number of bytes in block
+	kind:   BlockKind;	// Kind of block
+	code:   []_byte;	// contents, code or data
+    };
+    type Block: @BlockT;
+
+    type SegmentFlags:		// same order as ELF section flags
+    {   WRITE:   boolean;
+	ALLOC:   boolean;
+	EXEC:    boolean;
+    }: packed;
+
+    type SegmentT:
+    {	next:    @SegmentT;
+	name:    @[]_byte;	// segment name, e.g. ".text"
+	bhead:   Block;		// first block in segment
+	btail:   Block;		// last block in segment
+	fhead:   @FixT;
+	ftail:   @FixT;
+	addr:    _uint64;
+	nbloks:  _uint;		// number of blocks
+	size:    _uint;		// number of bytes in segment
+	left:    _uint16;	// amount left in current allocation
+	symnum:  _uint16;	// elf symbol number for relocation
+	secnum:  _uint8;	// elf section number
+	align:   _uint8;	// maximum alignment used
+	flags:   SegmentFlags;
+    };
+    type Segment: @SegmentT;
+
+    // The list of segments
+    var list:
+    {   head:  Segment;
+        tail:  Segment;
+        prev:  Segment;		// previous active segment
+    };
+    var curseg, tsegm, dsegm, bsegm, rsegm, usegm: Segment;
+
+    const tsegmname = ".text";
+    const dsegmname = ".data";
+    const bsegmname = ".bss";
+    const rsegmname = ".rodata";
+    const usegmname = ".undef";
+
+    /*
+     * Relocation fixups
+     */
+    type RKind:
+    (	NONE,
+	ABS64, ABS32, ABS16, ABS8,
+	REL64, REL32,
+	REL26, REL16,
+	JT8, JT16, JT32, JT64
+    );
+    const KindName: [RKind]@[]_byte =
+    { "NONE",
+      "ABS64", "ABS32", "ABS16", "ABS8",
+      "REL64", "REL32",
+      "REL26", "REL16",
+      "JT8", "JT16", "JT32", "JT64"
+    };
+
+    const MIN26: _int64 = -33554432;	// FIXME - is this right?
+    const MAX26: _int64 =  33554432;	// FIXME - is this right?
+
+    type VKind: (EXPR, SEGM, SYMB);
+    const ValtName: [VKind]@[]_byte = { "EXPR", "SEGM", "SYMB" };
+
+    type FixT:
+    {	next:   @FixT;
+	segm:   Segment;
+	blok:   Block;
+	symb:   @SymbolT;
+	expr:   expr.ExprT;
+	radd:   _uint32;	// relocation addend FIXME 64-bit?
+	boff:   _uint16;	// offset into block
+	kind:   RKind;
+	valt:   VKind;
+    };
+    type Fix: @FixT;
+
+
+    proc FixDump(ps: Segment)
+    {   var pf: Fix;
+
+	pf = ps.fhead;
+	while pf != 0 do
+	{   fdo.str(ps.name); fdo.str(': ');
+	    fdo.str(KindName[pf.kind]);
+	    fdo.str(" valt="); fdo.str(ValtName[pf.valt]);
+	    fdo.str(" boff="); fdo.uint16(pf.boff);
+	    if pf.valt
+	    is EXPR then
+	    {   fdo.chr('(');
+		expr.Dump(fdo, pf.expr);
+		fdo.chr(')');
+	    }
+	    is SEGM then
+	    {
+	    }
+	    is SYMB then
+	    {
+	    }
+	    fdo.nl();
+	    pf = pf.next;
+	}
+    }
+
+    proc FixNew(e: @expr.ExprT, r: RKind, v: VKind)
+    {   var pf: Fix;
+
+	pf = _new(FixT);
+	pf.kind = r;
+	pf.valt = v;
+	pf.blok = curseg.btail;
+	pf.boff = curseg.btail.size;
+	pf.expr = e@;		// record copy
+	if curseg.fhead == 0 then
+	    curseg.fhead = pf;
+	else
+	    curseg.ftail.next = pf;
+	curseg.ftail = pf;
+    }
+
+    proc Dump()
+    {   var ps: Segment;
+	var pb: Block;
+	var i: _uint;
+	const KindName: [BlockKind]@[]_byte =
+	{ "SEQ", "CALL", "BRC", "UNC" };
+
+	ps = list.head;
+	while ps != 0 do
+	{   fdo.str("Segment: "); fdo.str(ps.name);
+	    fdo.str(" size="); fdo.uint(ps.size); fdo.nl();
+	    pb = ps.bhead;
+	    while pb != 0 do
+	    {   if pb.size > 0 then
+		{   fdo.str("Block: addr="); fdo.hex64(pb.addr);
+		    fdo.str(" size="); fdo.uint(pb.size);
+		    fdo.str(" term="); fdo.str(KindName[pb.kind]);
+		    fdo.nl();
+		    i = 0;
+		    while i < pb.size do
+		    {   fdo.hex8(pb.code[i]);
+			i += 1;
+			if i % 16 == 0 then
+			    fdo.nl();
+			else
+			    fdo.chr(' ');
+		    }
+		    if i % 16 != 0 then
+			fdo.nl();
+		}
+	        pb = pb.next;
+	    }
+	    if ps.fhead != 0 then
+	    {   fdo.str("Fixups:\n");
+	        FixDump(ps);
+	    }
+	    ps = ps.next;
+	}
+    }
+
+    // Start (or continue) a block
+    proc Start(addr: _uint64)
+    {   var pb: Block;
+	var size, left: _uint64;
+
+	if !curseg.flags.ALLOC then
+	{   size = 0;		// no code stored
+	    left = _uint64?max;	// but must increment size
+	}
+	else
+	{   size = DEFBLOKSIZE;
+	    left = DEFBLOKSIZE;
+	}
+//fde.str("New block addr="); fde.hex64(addr); fde.nl();
+	pb = _new(BlockT(size));
+	pb.kind = SEQ;
+	pb.addr = addr;
+	pb.size  = 0;
+	pb.next  = 0;
+	if curseg.bhead == 0 then
+	{   curseg.bhead = pb;
+	    pb.prev = 0;
+	}
+	else
+	{   curseg.btail.next = pb;
+	    pb.prev = curseg.btail;
+	}
+	curseg.btail = pb;
+	curseg.left = left;
+    }
+
+    // Finish current block
+    // Space at end of old block wasted
+    proc Finish(kind: BlockKind)
+    {   var m, n: _uint;
+
+	curseg.btail.kind = kind;
+	Start(curseg.btail.addr+curseg.btail.size);
+    }
+
+    // Create a new segment
+    proc New(name: @[]_byte, flags: SegmentFlags, secno: _uint): Segment
+    {   var ps: Segment;
+
+	ps = _new(SegmentT);
+	ps.name = name;
+	ps.left = 0;
+	ps.bhead = 0;
+	ps.btail = 0;
+	ps.nbloks = 0;
+	ps.flags = flags;
+	ps.align =  0;
+	ps.secnum = secno;
+	if list.head == 0 then
+	    list.head = ps;
+	else
+	    list.tail.next = ps;
+	list.tail = ps;
+	return ps;
+    }
+
+    // Change to a segment
+    proc Change(ps: Segment)
+    {
+	if curseg != ps then
+	{   curseg = ps;
+	    if ps.btail == 0 then
+	       Start(0);
+	}
+    }
+
+    proc ChangeOp(n: _uint)
+    {
+	if n
+	is 0 then Change(list.prev);	// .previous
+	is 1 then Change(tsegm);	// .text
+	is 2 then Change(dsegm);	// .data
+	is 3 then Change(bsegm);	// .bss
+	is 4 then Change(rsegm);	// .rodata
+
+    }
+
+    proc Init()
+    {
+	usegm = New(usegmname, {}, 0);
+	tsegm = New(tsegmname, {.ALLOC=true, .EXEC=true}, 1);
+	rsegm = New(rsegmname, {.ALLOC=true}, 2);
+	dsegm = New(dsegmname, {.ALLOC=true, .WRITE=true}, 3);
+	bsegm = New(bsegmname, {             .WRITE=true}, 4);
+	Change(tsegm);
+	list.prev = tsegm;
+    }
+
+    // This is called at the end to clean things up.
+    proc End()
+    {
+    }
+
+    proc Pad(ps: Segment, n: _uint)
+    {   var pb: Block;
+
+	pb = ps.btail;
+	if pb.size + n >= DEFBLOKSIZE then	// need new block
+	{
+fde.str("Pad need new block"); fde.uint(n); fde.nl();
+	}
+	else
+	{   var i: _uint;
+	    for i from 0 to n-1 do
+		pb.code[pb.size+i] = 0;
+	    pb.size += n;
+	}
+    }
+
+    proc AssignAddresses()
+    {   var ps: Segment;
+	var pb: Block;
+	var saddr, addr, rnd: _uint64;
+
+	saddr = 0;
+	ps = list.head;
+	while ps != 0 do
+	{   // assign addresses within each segment
+	    ps.addr = saddr;
+	    addr = 0;
+	    pb = ps.bhead;
+	    if pb != 0 then
+	    {   do
+		{   pb.addr = addr;
+		    addr += pb.size;
+	    	    pb = pb.next;
+	    	} while pb != 0;
+		// pad segment to 64-bit alignment
+		if (addr & 7) != 0 then
+		{   rnd = 8 - (addr & 7);
+		    Pad(ps, rnd);
+		    addr += rnd;
+		}
+		ps.size = addr;
+	    }
+	    saddr += addr;
+	    ps = ps.next;
+	}
+    }
+
+    proc TryFix(ps: Segment): boolean
+    {   var pf: Fix;
+ 	var seg: Segment;
+ 	var val: _uint64;
+ 	var addr: _uint64;
+ 	var diff: _int64;
+	var inst: _uint32;
+ 	var pc: @[]_byte;
+	var change, bound: boolean;
+
+	change = false;
+	pf = ps.fhead;
+	while pf != 0 do
+	{   if pf.kind != NONE then
+	    {   addr = pf.blok.addr + pf.boff;
+		bound, val, seg = expr.Fix(pf.expr);
+		if seg != 0 then val += seg.addr;
+if debug.rel then {
+fde.str("Fix "); fde.str(KindName[pf.kind]);
+fde.str(" at "); fde.str(ps.name); fde.chr(':'); fde.hex32(_uint32(addr));
+fde.str(" bound="); fde.uint8(_uint8(bound));
+fde.str(" val="); fde.hex32(val);
+fde.str(" tseg="); if seg != 0 then fde.str(seg.name); else fde.str("*UNKN*");
+fde.chr('('); expr.Dump(fde, pf.expr); fde.chr(')');
+fde.nl();}
+		if pf.kind
+		is REL26 then
+		{   bound, val, seg = expr.Fix(pf.expr);
+		    if bound && seg == ps then
+		    {   diff = val - (pf.blok.addr+pf.boff);
+			diff = diff >> 2;	// convert from bytes to words
+			if diff >= MIN26 && diff <= MAX26 then
+			{   inst = _unpkle(pf.blok.code[pf.boff:4]);
+			    inst |= _uint32(diff) & 0x03FF_FFFF;
+if debug.rel  then {
+fde.str("REL26 OK inst="); fde.hex32(inst); fde.nl();}
+			    _packle(pf.blok.code[pf.boff:4], inst);
+			    pf.kind = NONE;
+			    change = true;
+			}
+			else
+			    fde.str("REL26 not in range\n");
+		    }
+		    else
+		    {
+if debug.rel  then {
+fde.str("Fix REL26 at "); fde.hex64(addr);
+fde.str(" <no segment>\n"); }
+		    }
+		}
+		is REL16 then
+		{
+		    if bound && seg == ps then
+		    {   diff = val - (pf.blok.addr+pf.boff);
+			diff = diff >> 2;	// convert from bytes to words
+			if diff >= _int16?min && diff <= _int16?max then
+			{   inst = _unpkle(pf.blok.code[pf.boff:4]);
+			    inst |= _uint32(diff) & 0x0000_FFFF;
+if debug.rel  then {
+fde.str("REL16 OK inst="); fde.hex32(inst); fde.nl();}
+			    _packle(pf.blok.code[pf.boff:4], inst);
+			    pf.kind = NONE;
+			    change = true;
+			}
+			else
+			    fde.str("REL16 not in range\n");
+		    }
+		}
+		is REL32 then
+		{   // FIXME - this assumes instruction just before
+		    // FIXME - need offset into instruction in FixF
+		    // FIXME - for some instructions can use 16-bit offset
+		    // FIXME - and shrink the instruction
+		    if bound then
+		    {   val -= addr-4;	// ip relative
+if debug.rel  then {
+fde.str("REL32 OK word="); fde.hex32(val); fde.nl();}
+			_packle(pf.blok.code[pf.boff:4], val);
+			pf.kind = NONE;
+			change = true;
+		    }
+		}
+		is ABS8 then
+		{
+		    if bound then
+		    {
+if debug.rel  then {
+fde.str("ABS8 OK byte="); fde.int8(_int8(val)); fde.nl();}
+			pf.blok.code[pf.boff] = _uint8(val);
+			pf.kind = NONE;
+			change = true;
+		    }
+		}
+		is ABS64 then
+		{
+		    if bound then
+		    {
+if debug.rel  then {
+fde.str("ABS64 OK dword="); fde.hex32(val); fde.nl();}
+			_packle(pf.blok.code[pf.boff:8], val);
+			pf.kind = NONE;
+			change = true;
+		    }
+		}
+		is JT8 then
+		{
+		    if bound then
+		    {	diff = _int64(val + 3 - addr) >> 2;
+			// FIXME - check with range
+			if diff != _int64(_int8(diff)) then
+			{   fde.str(".jt8 out of range: ");
+			    fde.int64(diff);
+			    fde.nl();
+			}
+if debug.rel  then {
+fde.str("JT8 OK diff="); fde.int(diff); fde.nl();}
+
+			pf.blok.code[pf.boff] = _uint8(diff);
+			pf.kind = NONE;
+			change = true;
+		    }
+		}
+		is JT16 then
+		{
+		    if bound then
+		    {	diff = _int64(val + 3 - addr) >> 2;
+			// FIXME - check with range
+			if diff != _int64(_int16(diff)) then
+			{   fde.str(".jt16 out of range: ");
+			    fde.int64(diff);
+			    fde.nl();
+			}
+if debug.rel  then {
+fde.str("JT16 OK diff="); fde.int(diff); fde.nl();}
+			_packle(pf.blok.code[pf.boff:2], _uint16(diff));
+			pf.kind = NONE;
+			change = true;
+		    }
+		}
+		is JT32 then
+		{
+		    if bound then
+		    {	diff = _int64(val + 3 - addr) >> 2;
+			// FIXME - check with range
+if debug.rel  then {
+fde.str("JT32 OK diff="); fde.int(diff); fde.nl();}
+			_packle(pf.blok.code[pf.boff:4], _uint16(diff));
+			pf.kind = NONE;
+			change = true;
+		    }
+		}
+		else
+		{   fde.str("Relocation type ");
+		    fde.str(KindName[pf.kind]);
+		    fde.str("not yet handled\n");
+		}
+	    }
+	    pf = pf.next;
+	}
+	return change;
+    }
+
+    proc FixUp2(pc: @[]_byte, val: _uint16)
+    {   var tmp: _uint16;
+
+	tmp = _unpkle(pc[0:2]);
+	tmp = tmp | val;
+	_packle(pc[0:2], tmp);
+    }
+
+    proc FinalFix(ps: Segment)
+    {   var pf: Fix;
+ 	var seg: Segment;
+ 	var val, tmp: _uint32;
+ 	var addr: _uint32;
+ 	var pc: @[]_byte;
+	var bound: boolean;
+
+	pf = ps.fhead;
+	while pf != 0 do
+	{   addr = pf.blok.addr + pf.boff;
+	    pc = pf.blok.code[pf.boff:];
+	    if pf.valt == EXPR then
+	    	bound, val, seg = expr.Fix(pf.expr);
+	    else
+	    	fde.str("Unexpected pf.valt\n");
+	    if pf.kind
+	    is REL16 then
+	    {
+	    }
+	    is ABS32 then
+	    {
+	    }
+	    pf = pf.next;
+	}
+    }
+
+    // Expand branches as necessary
+    proc Relax()
+    {   var ps: Segment;
+	var change: boolean;
+
+	// Order();
+	do
+	{   AssignAddresses();
+	    change = false;
+	    ps = list.head;
+	    while ps != 0 do
+	    {   if TryFix(ps) then change = true;
+	        ps = ps.next;
+	    }
+	} while change;
+	// Now do final fixups
+	ps = list.head;
+	while ps != 0 do
+	{   FinalFix(ps);
+	    ps = ps.next;
+	}
+    }
+
+    proc Put1(n: _uint8)
+    {   var pb: Block;
+
+	pb = curseg.btail;
+	if curseg.flags.ALLOC then
+	{   pb.code[pb.size] = _uint8(n);
+	}
+	pb.size += 1;
+	curseg.left -= 1;
+	if curseg.left < MINREMAIN then
+	    Finish(SEQ);
+    }
+
+    proc Put2(n: _uint16)
+    {   var pb: Block;
+
+	pb = curseg.btail;
+	if curseg.flags.ALLOC then
+	{   _packle(pb.code[pb.size:2], _uint16(n));
+	}
+
+	pb.size += 2;
+	curseg.left -= 2;
+	if curseg.left < MINREMAIN then
+	    Finish(SEQ);
+    }
+
+    proc Put4(n: _uint32)
+    {   var pb: Block;
+
+	pb = curseg.btail;
+	if curseg.flags.ALLOC then
+	{   _packle(pb.code[pb.size:4], _uint32(n));
+	}
+	pb.size += 4;
+	curseg.left -= 4;
+	if curseg.left < MINREMAIN then
+	    Finish(SEQ);
+    }
+
+    proc Put8(n: _uint64)
+    {   var pb: Block;
+
+	pb = curseg.btail;
+	if curseg.flags.ALLOC then
+	{   _packle(pb.code[pb.size:8], _uint64(n));
+	}
+	pb.size += 8;
+	curseg.left -= 8;
+	if curseg.left < MINREMAIN then
+	    Finish(SEQ);
+    }
+
+    proc Align(n: _uint)
+    {   var m: _uint;
+	var pb: Block;
+
+	pb = curseg.btail;
+	if !curseg.flags.ALLOC then
+	{   var a: _uint;
+	    a = 1 << n;
+	    m = a - 1;
+	    if (pb.size & m) != 0 then
+		pb.size += a - (pb.size & m);
+	}
+	else
+	{   // pad block to align it
+	    m = (1 << n) - 1;
+	    while (pb.size & m) != 0 do
+		Put1(0);
+	    curseg.align = _max(curseg.align, n);
+	}
+    }
+
+    proc Space(n: _uint)
+    {
+	if !curseg.flags.ALLOC then
+	{   curseg.btail.size += n;
+	}
+	else
+	{   while n > 0 do
+	    {	Put1(0);
+		n -= 1;
+	    }
+	}
+    }
+
+    // Write out a simple binary
+    proc Output(fd: sys.fildes)
+    {   var ps: Segment;
+	var pb: Block;
+
+	ps = list.head;
+	while ps != 0 do
+	{   pb = ps.bhead;
+fde.str("output segment "); fde.str(ps.name);
+fde.str(" addr "); fde.hex64(ps.addr);
+fde.nl();
+	    ps = ps.next;
+	    // FIXME - do we write out .bss?
+	    while pb != 0 do
+	    {   sys.write(fd, pb.code, pb.size);
+	        pb = pb.next;
+	    }
+	}
+    }
+}

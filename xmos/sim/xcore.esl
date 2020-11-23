@@ -1,0 +1,1382 @@
+package xcore
+{
+    type word: _uint32;
+    type width: (BYTE, HALF, WORD);
+
+    type Resource:		// Base resource info
+    {   num:	_uint8;		// resource number
+	cnum:	0..NCPU-1;	// cpu number
+	state:	(FREE, ALLOCED, SYNCED);	// only Thread uses SYNCED
+    };
+    
+    type Thread(Resource):
+    {   run:	(RUN, INIT, IDLE);	// run state
+	sync:	_uint8;		// synchronizer number
+	segn:   _uint8;		// cache of last segment accessed
+	cpu:	@Cpu;		// cpu containing this thread
+	next:	@Thread;	// run queue
+	regs:	[Register]_uint32;
+    };
+    type pThread: @Thread;
+
+    type ThreadMap: _uint8;
+    proc (m: ThreadMap) ClrAll():ThreadMap : inline
+    { return 0; }
+    proc (m: ThreadMap) Clr(n: 0..7):ThreadMap : inline
+    { m = m & ~(1<<n); return m; }
+    proc (m: ThreadMap) Set(n: 0..7):ThreadMap : inline
+    { m = m | (1<<n); return m; }
+    proc (m: ThreadMap) IsSet(n: 0..7): boolean: inline
+    { return (m & (1<<n)) != 0; }
+    type Sync(Resource):
+    {   tnum:	_uint8;		// thread number of owner
+	slaves:	ThreadMap;	// slave threads
+	paused:	ThreadMap;	// paused threads
+	master: _uint8;		// master thread?
+	msync:	boolean;	// master has sync'ed
+	mjoin:	boolean;	// master has joined
+    };
+
+    type Timer(Resource):
+    {   tnum:	_uint8;		// thread number of owner
+    };
+
+    type Clock(Resource):
+    {   tnum:	_uint8;		// thread number of owner
+    };
+
+    const NTOK = 8;
+    type ResChan(Resource):
+    {   tnum:	_uint8;		// thread number of owner
+	dest:	@ResChan;	// the other end of the channel
+	waitw:	_uint8;		// thread map waiting to write FIXME: packed array
+	waitr:	_uint8;		// thread map waiting to read FIXME: packed array
+	ntoks:	_uint8;		// number of tokens in buffer
+	head:	_uint8;		// buffer queue head
+	tail:	_uint8;		// buffer queue tail
+	    buf:	[NTOK]_uint16;	// 9-bit tokens
+	};
+
+    type Lock(Resource):
+    {   tnum:	_uint8;		// thread number of owner
+	locked:	_uint8;
+    };
+
+    type Cpu:
+    {   num:	_uint8;
+	spaused:_uint8;		// FIXME: boolean?
+	mpaused:_uint8;		// FIXME: boolean?
+	chip:	_uint8;		// chip containing this cpu
+	memory: @Memory;	// description of memory seqments
+	vectorb:_uint32;	// vector base
+	thread:	[NTHREAD]Thread;
+	chan:	[NCHAN]ResChan;
+	sync:	[NSYNC]Sync;
+	timer:	[NTIMER]Timer;
+	clock:	[NCLOCK]Clock;
+	lock:	[NLOCK]Lock;
+    };
+
+    type Chip:
+    {   num:	_uint8;
+	    cpu:	[NCPU]Cpu;
+    };
+
+    /*
+     * WARNING:
+     * The order of these is important to the algorithm that cracks the opcode.
+     */
+    type Opcode:
+    (	BAD,
+	STWI,   LDWI,   ADD,    SUB,    SHL,    SHR,    EQ,     AND,
+	OR,     LDW,
+	LD16S,  LD8U,   ADDI,   SUBI,   SHLI,   SHRI,   EQI,    TSETR,
+	LSS,    LSU,
+	TINITPC,GETST,  TINITDP,OUTT,   TINITSP,SETD,   TINITCP,TSETMR,
+	ILL1,   EET,
+	ANDNOT, EEF,    SEXT,   SEXTI,  GETTS,  SETPT,  ZEXT,   ZEXTI,
+	OUTCT,  OUTCTI,
+	GETR,   INCT,   NOT,    INT,    NEG,    ENDIN,  ILL2,   ILL3,
+	MKMSK,  MKMSKI,
+	OUT,    OUTSHR, IN,     INSHR,  PEEK,   TESTCT, SETPSC, TESTWCT,
+	CHKCT,  CHKCTI,
+	EDU,    EEU,    WAITET, WAITEF, FREER,  MJOIN,  TSTART, MSYNC,
+	BLA,    BAU,    BRU,    SETSP,  SETDP,  SETCP,  DGETREG,SETEV,
+	KCALL,  SETV,   ECALLF, ECALLT, CLRPT,  SYNCR,  ILL4,   ILL5,
+	ILL6,   ILL7,   ILL8,   ILL9,   ILL10,  ILL11,  ILL12,  ILL13,
+	ILL14,  ILL15,  ILL16,  ILL17,  ILL18,  ILL19,  ILL20,  ILL21,
+	WAITEU, CLRE,   SSYNC,  FREET,  DCALL,  KRET,   DRET,   SETKEP,
+	LDSPC,  STSPC,  LDSSR,  STSSR,  STSED,  STET,   GETED,  GETET,
+	DENTSP, DRESTSP,GETID,  GETKEP, GETKSP, LDSED,  LDET,   ILL22,
+	STWDP,  STWSP,  LDWDP,  LDWSP,  LDAWDP, LDAWSP, LDC,    LDWCP,
+	BRFT,   BRBT,   BRFF,   BRBF,   BRFU,   BLAT,   EXTDP,  KCALLI,
+	BRBU,   ENTSP,  EXTSP,  RETSP,  CLRSR,  SETSR,  KENTSP, KRESTSP,
+	GETSR,  LDAWCP,
+	BLRF,   BLRB,   LDAPF,  LDAPB,
+	BLACP,  LDWCPL, SETCI,  ILL23,
+	LMUL,   LDIVU,  LSUB,   LADD,
+	CRC8,   MACCU,  MACCS,
+	STW,    XOR,    ASHR,   LDAWF,  LDAWB,  LDA16F, LDA16B, MUL,
+	DIVS,   DIVU,
+	ST16,   ST8,    ASHRI,  LDAWFI, LDAWBI, CRC32,  ILL24,  ILL25,
+	REMS,   REMU,
+	OUTPW,  INPW,
+	BITREV, BYTEREV,CLZ,    SETCLK,
+	TINITLR,GETPS,  SETPS,  GETD,
+	TESTLCL,SETTW,  SETRDY, SETC,
+	SETN,   GETN
+    );
+
+    const insttab: [Opcode]@[]_byte =
+    {
+	[BAD] =     "illegal",	/*  0 */
+	[STWI] =    "stw",	/*  1: STWI + 0 */
+	[LDWI] =    "ldw",	/*  2: STWI + 1 */
+	[ADD] =	    "add",	/*  3: STWI + 2 */
+	[SUB] =	    "sub",	/*  4: STWI + 3 */
+	[SHL] =	    "shl",	/*  5: STWI + 4 */
+	[SHR] =	    "shr",	/*  6: STWI + 5 */
+	[EQ] =	    "eq",	/*  7: STWI + 6 */
+	[AND] =	    "and",	/*  8: STWI + 7 */
+	[OR] =	    "or",	/*  9: STWI + 8 */
+	[LDW] =	    "ldw",	/* 10: STWI + 9 */
+	[LD16S] =   "ld16s",	/* 11: STWI + 10 */
+	[LD8U] =    "ld8u",	/* 12: STWI + 11 */
+	[ADDI] =    "add",	/* 13: STWI + 12 */
+	[SUBI] =    "sub",	/* 14: STWI + 13 */
+	[SHLI] =    "shl",	/* 15: STWI + 14 */
+	[SHRI] =    "shr",	/* 16: STWI + 15 */
+	[EQI] =	    "eq",	/* 17: STWI + 16 */
+	[TSETR] =   "set",	/* 18: STWI + 17 */
+	[LSS] =	    "lss",	/* 19: STWI + 18 */
+	[LSU] =	    "lsu",	/* 20: STWI + 19 */
+	[TINITPC] = "init",	/* 21: TINITPC + 0 */
+	[GETST] =   "getst",	/* 22: TINITPC + 1 */
+	[TINITDP] = "init",	/* 23: TINITPC + 2 */
+	[OUTT] =    "outt",	/* 24: TINITPC + 3 */
+	[TINITSP] = "init",	/* 25: TINITPC + 4 */
+	[SETD] =    "setd",	/* 26: TINITPC + 5 */
+	[TINITCP] = "init",	/* 27: TINITPC + 6 */
+	[TSETMR] =  "tsetmr",	/* 28: TINITPC + 7 */
+	[ILL1] =    "illegal",	/* 29: TINITPC + 8 */
+	[EET] =	    "eet",	/* 30: TINITPC + 9 */
+	[ANDNOT] =  "andnot",	/* 31: TINITPC + 10 */
+	[EEF] =	    "eef",	/* 32: TINITPC + 11 */ 
+	[SEXT] =    "sext",	/* 33: TINITPC + 12 */
+	[SEXTI] =   "sext",	/* 34: TINITPC + 13 */
+	[GETTS] =   "getts",	/* 35: TINITPC + 14 */
+	[SETPT] =   "setpt",	/* 36: TINITPC + 15 */
+	[ZEXT] =    "zext",	/* 37: TINITPC + 16 */
+	[ZEXTI] =   "zext",	/* 38: TINITPC + 17 */
+	[OUTCT] =   "outct",	/* 39: TINITPC + 18 */
+	[OUTCTI] =  "outct",	/* 40: TINITPC + 19 */
+	[GETR] =    "getr",	/* 41: TINITPC + 20 */
+	[INCT] =    "inct",	/* 42: TINITPC + 21 */
+	[NOT] =	    "not",	/* 43: TINITPC + 22 */
+	[INT] =	    "int",	/* 44: TINITPC + 23 */
+	[NEG] =	    "neg",	/* 45: TINITPC + 24 */
+	[ENDIN] =   "endin",	/* 46: TINITPC + 25 */
+	[ILL2] =    "illegal",	/* 47: TINITPC + 26 */
+	[ILL3] =    "illegal",	/* 48: TINITPC + 27 */
+	[MKMSK] =   "mkmsk",	/* 49: TINITPC + 28 */
+	[MKMSKI] =  "mkmsk",	/* 50: TINITPC + 29 */
+	[OUT] =	    "out",	/* 51: TINITPC + 30 */
+	[OUTSHR] =  "outshr",	/* 52: TINITPC + 31 */
+	[IN] =	    "in",	/* 53: TINITPC + 32 */
+	[INSHR] =   "inshr",	/* 54: TINITPC + 33 */
+	[PEEK] =    "peek",	/* 55: TINITPC + 34 */
+	[TESTCT] =  "testct",	/* 56: TINITPC + 35 */
+	[SETPSC] =  "setpsc",	/* 57: TINITPC + 36 */
+	[TESTWCT] = "testwct",	/* 58: TINITPC + 37 */
+	[CHKCT] =   "chkct",	/* 59: TINITPC + 38 */
+	[CHKCTI] =  "chkct",	/* 60: TINITPC + 39 */
+	[EDU] =	    "edu",	/* 61: EDU + 0 */
+	[EEU] =	    "eeu",	/* 62: EDU + 1 */
+	[WAITET] =  "waitet",	/* 63: EDU + 2 */
+	[WAITEF] =  "waitef",	/* 64: EDU + 3 */
+	[FREER] =   "freer",	/* 65: EDU + 4 */ 
+	[MJOIN] =   "mjoin",	/* 66: EDU + 5 */
+	[TSTART] =  "start",	/* 67: EDU + 6 */
+	[MSYNC] =   "msync",	/* 68: EDU + 7 */
+	[BLA] =	    "bla",	/* 69: EDU + 8 */
+	[BAU] =	    "bau",	/* 70: EDU + 9 */
+	[BRU] =	    "bru",	/* 71: EDU + 10*/
+	[SETSP] =   "set",	/* 72: EDU + 11*/
+	[SETDP] =   "set",	/* 73: EDU + 12*/
+	[SETCP] =   "set",	/* 74: EDU + 13*/
+	[DGETREG] = "dgetreg",	/* 75: EDU + 14*/
+	[SETEV] =   "setev",	/* 76: EDU + 15*/
+	[KCALL] =   "kcall",	/* 77: EDU + 16*/
+	[SETV] =    "setv",	/* 78: EDU + 17*/
+	[ECALLF] =  "ecallf",	/* 79: EDU + 18*/
+	[ECALLT] =  "ecallt",	/* 80: EDU + 19*/
+	[CLRPT] =   "clrpt",	/* 81: EDU + 20*/
+	[SYNCR] =   "syncr",	/* 82: EDU + 21*/
+	[ILL4] =    "illegal",	/* 83: EDU + 22*/
+	[ILL5] =    "illegal",	/* 84: EDU + 23*/
+	[ILL6] =    "illegal",	/* 85: EDU + 24*/
+	[ILL7] =    "illegal",	/* 86: EDU + 25*/
+	[ILL8] =    "illegal",	/* 87: EDU + 26*/
+	[ILL9] =    "illegal",	/* 88: EDU + 27*/
+	[ILL10] =   "illegal",	/* 89: EDU + 28*/
+	[ILL11] =   "illegal",	/* 90: EDU + 29*/
+	[ILL12] =   "illegal",	/* 91: EDU + 30*/
+	[ILL13] =   "illegal",	/* 92: EDU + 31*/
+	[ILL14] =   "illegal",	/* 93: EDU + 32*/
+	[ILL15] =   "illegal",	/* 94: EDU + 33*/
+	[ILL16] =   "illegal",	/* 95: EDU + 34*/
+	[ILL17] =   "illegal",	/* 96: EDU + 35*/
+	[ILL18] =   "illegal",	/* 97: EDU + 36*/
+	[ILL19] =   "illegal",	/* 99: EDU + 37*/
+	[ILL20] =   "illegal",	/* 99: EDU + 38*/
+	[ILL21] =   "illegal",	/*100: EDU + 39*/
+	[WAITEU] =  "waiteu",	/*101: WAITEU + 0 */
+	[CLRE] =    "clre",	/*102: WAITEU + 1 */
+	[SSYNC] =   "ssync",	/*103: WAITEU + 2 */
+	[FREET] =   "freet",	/*104: WAITEU + 3 */
+	[DCALL] =   "dcall",	/*113: WAITEU + 12 */
+	[KRET] =    "kret",	/*114: WAITEU + 13 */
+	[DRET] =    "dret",	/*115: WAITEU + 14 */
+	[SETKEP] =  "set",	/*116: WAITEU + 15 */
+	[LDSPC] =   "ldw",	/*105: WAITEU + 4 */
+	[STSPC] =   "stw",	/*106: WAITEU + 5 */
+	[LDSSR] =   "ldw",	/*107: WAITEU + 6 */
+	[STSSR] =   "stw",	/*108: WAITEU + 7 */
+	[STSED] =   "stw",	/*117: WAITEU + 16 */
+	[STET] =    "stw",	/*118: WAITEU + 17 */
+	[GETED] =   "geted",	/*119: WAITEU + 18 */
+	[GETET] =   "getet",	/*120: WAITEU + 19 */
+	[DENTSP] =  "dentsp",	/*109: WAITEU + 8 */
+	[DRESTSP] = "drestsp",	/*110: WAITEU + 9 */
+	[GETID] =   "getid",	/*111: WAITEU + 10 */
+	[GETKEP] =  "getkep",	/*112: WAITEU + 11 */
+	[GETKSP] =  "getksp",	/*121: WAITEU + 20 */
+	[LDSED] =   "ldw",	/*122: WAITEU + 21 */
+	[LDET] =    "ldw",	/*123: WAITEU + 22 */
+	[ILL22] =   "illegal",	/*124: WAITEU + 23 */
+	[STWDP] =   "stw",	/*124: STWDP + 0 */
+	[STWSP] =   "stw",	/*125: STWDP + 1 */
+	[LDWDP] =   "ldw",	/*127: STWDP + 2 */
+	[LDWSP] =   "ldw",	/*128: STWDP + 3 */
+	[LDAWDP] =  "ldaw",	/*129: STWDP + 4 */
+	[LDAWSP] =  "ldaw",	/*130: STWDP + 5 */
+	[LDC] =	    "ldc",	/*131: STWDP + 6 */
+	[LDWCP] =   "ldw",	/*132: STWDP + 7 */
+	[BRFT] =    "bt",	/*133: BRFT + 0 */
+	[BRBT] =    "bt",	/*134: BRFT + 1 */
+	[BRFF] =    "bf",	/*135: BRFT + 2 */
+	[BRBF] =    "bf",	/*136: BRFT + 3 */
+	[BRFU] =    "bu",	/*137: BRFU + 0 */
+	[BLAT] =    "blat",	/*138: BRFU + 1 */
+	[EXTDP] =   "extdp",	/*139: BRFU + 2 */
+	[KCALLI] =  "kcall",	/*140: BRFU + 3 */
+	[BRBU] =    "bu",	/*141: BRFU + 4 */
+	[ENTSP] =   "entsp",	/*142: BRFU + 5 */
+	[EXTSP] =   "extsp",	/*143: BRFU + 6 */
+	[RETSP] =   "retsp",	/*144: BRFU + 7 */
+	[CLRSR] =   "clrsr",	/*145: BRFU + 8 */
+	[SETSR] =   "setsr",	/*146: BRFU + 9 */
+	[KENTSP] =  "kentsp",	/*147: BRFU + 10 */
+	[KRESTSP] = "krestsp",	/*148: BRFU + 11 */
+	[GETSR] =   "getsr",	/*149: BRFU + 12 */
+	[LDAWCP] =  "ldaw",	/*150: BRFU + 13 */
+	[BLRF] =    "bl" ,	/*151: BLRF + 0 */
+	[BLRB] =    "bl" ,	/*152: BLRF + 1 */
+	[LDAPF] =   "ldap",	/*153: BLRF + 2 */
+	[LDAPB] =   "ldap",	/*154: BLRF + 3 */
+	[BLACP] =   "blacp",	/*155: BLRF + 4 */
+	[LDWCPL] =  "ldwcpl",	/*156: BLRF + 5 */
+	[SETCI] =   "setci",	/*157: BLRF + 6 */
+	[ILL23] =   "illegal",	/*158: BLRF + 7 */
+	[LMUL] =    "lmul",	/*159: LMUL + 0 */
+	[LDIVU] =   "ldivu",	/*160: LDIVU + 0 */
+	[LSUB] =    "lsub",	/*161: LDIVU + 1 */
+	[LADD] =    "ladd",	/*162: LDIVU + 2 */
+	[CRC8] =    "crc8",	/*163: CRC8 + 0 */
+	[MACCU] =   "maccu",	/*164: CRC8 + 1 */
+	[MACCS] =   "maccs",	/*165: CRC8 + 2 */
+	[STW] =	    "stw",	/*166: STW + 0 */
+	[XOR] =	    "xor",	/*167: STW + 0 */
+	[ASHR] =    "ashr",	/*168: STW + 0 */
+	[LDAWF] =   "ldaw",	/*169: STW + 0 */
+	[LDAWB] =   "ldaw",	/*170: STW + 0 */
+	[LDA16F] =  "lda16",	/*171: STW + 0 */
+	[LDA16B] =  "lda16",	/*172: STW + 0 */
+	[MUL] =	    "mul",	/*173: STW + 0 */
+	[DIVS] =    "divs",	/*174: STW + 0 */
+	[DIVU] =    "divu",	/*176: STW + 0 */
+	[ST16] =    "st16",	/*177: STW + 0 */
+	[ST8] =	    "st8",	/*178: STW + 0 */
+	[ASHRI] =   "ashr",	/*179: STW + 0 */
+	[LDAWFI] =  "ldaw",	/*180: STW + 0 */
+	[LDAWBI] =  "ldaw",	/*181: STW + 0 */
+	[CRC32] =   "crc32",	/*182: STW + 0 */
+	[ILL24] =   "illegal",	/*183: STW + 0 */
+	[ILL25] =   "illegal",	/*184: STW + 0 */
+	[REMS] =    "rems",	/*185: STW + 0 */
+	[REMU] =    "remu",	/*186: STW + 0 */
+	[OUTPW] =   "outpw",
+	[INPW] =    "inpw",
+	[BITREV] =  "bitrev",	/*189: BITREV + 0 */
+	[BYTEREV] = "byterev",
+	[CLZ] =	    "clz",
+	[SETCLK] =  "setclk",
+	[TINITLR] = "init",
+	[GETPS] =   "getps",
+	[SETPS] =   "setps",
+	[GETD] =    "getd",
+	[TESTLCL] = "testlcl",
+	[SETTW] =   "settw",
+	[SETRDY] =  "setrdy",
+	[SETC] =    "setc",
+	[SETN] =    "setn",
+	[GETN] =    "getn"
+    };
+    type ResType:
+    (	PORT=0, TIMER, CHANEND, SYNC, THREAD, LOCK,  CLKBLK,
+	PS=11,  CONFIG
+    );
+
+    var chip:	[1]Chip;		// just one chip for now
+    var runq:	@Thread;		// list of runnable threads
+
+    /*
+     * This doesn't work the same as the hardware,
+     * but its only a functional simulator
+     */
+    proc ThreadRun(tp: @Thread)
+    {   var ttp: @Thread;
+
+//fderr.str("RUN:  p= "); fderr.uint8(tp.cpu.num);
+//fderr.str(" t="); fderr.uint8(tp.num); fderr.nl();
+	if runq == 0 then
+	{   tp.next = tp;
+	    runq = tp;
+	}
+	else
+	{   ttp = runq;
+	    while ttp.next != runq do
+	        ttp = ttp.next;
+	    ttp.next = tp;
+	    tp.next = runq;
+	    runq = tp;
+	}
+    }
+
+    proc ThreadWait(tp: @Thread)
+    {   var tpp: @Thread;
+
+	if runq != 0 then
+	{   tpp = runq;
+	    while tpp.next != tp do
+		tpp = tpp.next;
+	    tpp.next = tp.next;
+	    if runq == tp then
+	    {   if runq == tp.next then
+		    runq = 0;
+		else
+		    runq = tp.next;
+	    }
+	}
+    }
+    
+    /*
+     * THREADS
+     */
+    proc ThreadInit(pp: @Cpu, threadnum: _uint)
+    {  var i: _uint;
+
+	pp.thread[threadnum].num = threadnum;
+	pp.thread[threadnum].cpu = pp;
+	i = 0;
+	while i < 25 do
+	{   pp.thread[threadnum].regs[i] = 0;
+	    i += 1;
+	}
+    }
+
+    proc ThreadGet(tp: @Thread): _uint32
+    {   var tn: _uint;
+	var pp: @Cpu;
+
+	pp = tp.cpu;
+	tn = 0;
+	while tn < NTHREAD do
+	{   if pp.thread[tn].state == FREE then
+	    {   pp.thread[tn].state = ALLOCED;
+		    return (tn << 8) | _uint32(ResType.THREAD);
+	    }
+	    tn += 1;
+	}
+	return 0;
+    }
+
+    proc ThreadFree(tp: @Thread, tn: 0..NTHREAD)
+    {   var pp: @Cpu;
+
+	pp = tp.cpu;
+	if tn < NTHREAD then
+	   pp.thread[tn].state = FREE;
+    }
+
+    proc ThreadFreeAll(tp: @Thread, tmap: ThreadMap)
+    {   var tn: 0..NTHREAD;
+
+	tn = 0;
+	while tn < NTHREAD do
+	{   if tmap.IsSet(tn) then
+	    	ThreadFree(tp, tn);
+	    tn += 1;
+	}
+    }
+
+    proc ThreadRunAll(pp: @Cpu, tmap: _uint)
+    {   var tn: 0..NTHREAD;
+
+	tn = 0;
+	while tmap != 0 && tn < NTHREAD do
+	{   if (tmap & 1) != 0 then
+		ThreadRun(pp.thread[tn]);
+	    tmap = tmap>>1;
+	    tn += 1;
+	}
+    }
+
+    proc ThreadSetReg(tp: @Thread, t: _uint32, r: Register, x: _uint32)
+    {   var tn: 0..NTHREAD;
+
+	tn = (t>>8)&0xFF;
+	if tn < NTHREAD then
+	    tp.cpu.thread[tn].regs[r] = x;
+    }
+
+    proc ThreadSetException(tp: @Thread, et: Exceptions, ed: _uint32)
+    {
+        tp.regs[ET] = _uint32(et);
+        tp.regs[ED] = ed;
+    }
+
+    proc ThreadTakeException(tp: @Thread)
+    {
+        tp.regs[SPC] = tp.regs[PC];
+        tp.regs[SSR] = tp.regs[SR];
+        // disable interrupts and events
+        // then what?
+fderr.str("Exception: "); fderr.uint32(tp.regs[ET]); fderr.nl();
+    }
+
+    /*
+     * SYNCHRONIZERS
+     */
+    proc SyncInit(pp: @Cpu, sn: _uint)
+    {
+        pp.sync[sn].num = sn;
+        pp.sync[sn].cnum = pp.num;
+        pp.sync[sn].state = FREE;
+    }
+
+    proc SyncGet(tp: @Thread, master: _uint): _uint32
+    {   var sn: 0..NSYNC;
+
+        sn = 0;
+        while sn < NSYNC do
+        {   if tp.cpu.sync[sn].state == FREE then
+            {   tp.cpu.sync[sn].state = ALLOCED;
+                tp.cpu.sync[sn].slaves.ClrAll();
+                tp.cpu.sync[sn].paused.ClrAll();
+                tp.cpu.sync[sn].master = master;
+                tp.cpu.sync[sn].mjoin = false;
+                tp.cpu.sync[sn].msync = false;
+                return (sn << 8) | _uint32(ResType.SYNC);;
+            }
+            sn += 1;
+        }
+	return 0;
+    }
+
+    proc SyncFree(tp: @Thread, sn: _uint8)
+    {
+        if sn < NSYNC then
+            tp.cpu.sync[sn].state = FREE;
+    }
+
+    // Get synchronized thread
+    proc GetST(tp: @Thread, s: _uint32): _uint32
+    {   var t: _uint32;
+        var tn, sn: _uint8;
+        var sp: @Sync;
+        var rn: Resources;
+
+        rn = Resources(s&0xFF);     // resource number		
+        sn = (s>>8)&0xFF;           // sync number
+        if rn != SYNC || sn >=  NSYNC || tp.cpu.sync[sn].state == FREE then
+        {   ThreadSetException(tp, ILLEGAL_RESOURCE, s);
+            return 0;
+        }
+        t = ThreadGet(tp);
+        if t != 0 then
+        {   tn = (t>>8)&0xFF;       // thread number
+            tp.cpu.thread[tn].state = SYNCED;
+            tp.cpu.thread[tn].sync = sn;
+            tp.cpu.sync[sn].slaves = tp.cpu.sync[sn].slaves.Set(tn);
+            tp.cpu.sync[sn].paused = tp.cpu.sync[sn].paused.Set(tn);
+//fderr.str("GETST: sn="); fderr.uint8(sn);
+//fderr.str(" slaves="); fderr.hex8(tp.cpu.sync[sn].slaves); fderr.nl();
+        }
+        return t;
+    }
+
+    proc MSync(tp: @Thread, s: _uint32)
+    {   var tn, sn: _uint8;
+        var ns: 0..NTHREAD;
+
+        sn = (s>>8)&0xFF;           // sync number
+        if sn < NSYNC then
+        {
+            tp.regs[SR] = tp.regs[SR] & ~SR_EEBLE;
+//fderr.str("MSYNC: sn="); fderr.uint8(sn);
+//fderr.str(" slaves="); fderr.hex8(tp.cpu.sync[sn].slaves); fderr.nl();
+            ns = 0;
+            tn = 0;
+            while tn < NTHREAD do
+            {   if tp.cpu.sync[sn].slaves.IsSet(tn) then
+                {   ThreadRun(tp.cpu.thread[tn]);
+                    ns += 1;
+                }
+                tn += 1;
+            }
+            tp.cpu.sync[sn].paused = tp.cpu.sync[sn].paused &
+                                     ~tp.cpu.sync[sn].slaves;
+        }
+    }
+
+    proc SSync(tp: @Thread)
+    {   var tn, sn: _uint8;
+
+        tp.regs[SR] = tp.regs[SR] & ~SR_EEBLE;
+        ThreadWait(tp);
+        tn = tp.num;                // thread number
+        sn = tp.sync;               // sync number
+        // If last running thread and master sync'ed
+        // FIXME: need some better syntax
+        if (tp.cpu.sync[sn].slaves & ~tp.cpu.sync[sn].paused) == (1<<tn) &&
+           tp.cpu.sync[sn].msync then
+        {
+            if tp.cpu.sync[sn].mjoin then
+            {   ThreadFreeAll(tp, tp.cpu.sync[sn].slaves);
+                tp.cpu.sync[sn].mjoin = false;
+            }
+            else    // pause all slaves
+                tp.cpu.sync[sn].paused = tp.cpu.sync[sn].slaves;
+            tp.cpu.sync[sn].msync = false;
+            ThreadRun(tp.cpu.thread[tp.cpu.sync[sn].master]);
+        }
+        else    // not the last thread or master not sync'ed
+            tp.cpu.sync[sn].paused = tp.cpu.sync[sn].paused.Set(tn);
+    }
+
+    proc MJoin(tp: @Thread, s: _uint32)
+    {   var sn: _uint;
+        var rn: Resources;
+
+        rn = Resources(s&0xFF);     // resource number		
+        sn = (s>>8)&0xFF;           // sync number
+        if rn != SYNC || sn >=  NSYNC || tp.cpu.sync[sn].state == FREE then
+        {   ThreadSetException(tp, ILLEGAL_RESOURCE, s);
+            return;
+        }
+        if tp.cpu.sync[sn].paused == tp.cpu.sync[sn].slaves then
+        {   // all slaves paused
+            ThreadFreeAll(tp, tp.cpu.sync[sn].slaves);
+            tp.cpu.sync[sn].mjoin = false;
+        }
+        else
+        {   tp.cpu.sync[sn].mjoin = true;
+            tp.cpu.sync[sn].msync = true;
+            ThreadWait(tp);
+        }
+    }
+
+    /*
+     * CHANNEL ENDS
+     */
+    proc ChanGet(tp: @Thread): _uint32
+    {   var cn: _uint8;
+
+        cn = 0;
+        while cn < NCHAN do
+        {   if tp.cpu.chan[cn].state == FREE then
+            {   tp.cpu.chan[cn].state = ALLOCED;
+                tp.cpu.chan[cn].tnum = tp.num;
+                tp.cpu.chan[cn].dest = 0;
+                tp.cpu.chan[cn].waitw = 0;
+                tp.cpu.chan[cn].waitr = 0;
+                tp.cpu.chan[cn].ntoks = 0;
+                tp.cpu.chan[cn].head = 0;
+                tp.cpu.chan[cn].tail = 0;
+                return (_uint32(cn)<<8) | _uint32(ResType.CHANEND);
+            }
+            cn += 1;
+        }
+	    return 0;
+    }
+
+    proc ChanFree(tp: @Thread, cn: _uint8)
+    {
+        // assert cn < NCHAN
+        tp.cpu.chan[cn].state = FREE;
+    }
+
+    /*
+     * TIMERS
+     */
+    proc TimerGet(tp: @Thread): _uint32
+    {
+	    return 0;
+    }
+
+    /*
+     * CLOCKS
+     */
+
+    /*
+     * LOCKS
+     */
+    proc LockGet(tp: @Thread): _uint32
+    {
+	    return 0;
+    }
+
+    proc LockFree(tp: @Thread, ln: _uint8)
+    {
+    }
+
+    /*
+     * PORTS
+     */
+    proc PortOut(tp: @Thread, pn: _uint, bits: _uint32, data: _uint32)
+    {
+        fderr.str(" Port OUT() not yet implemented\n");
+    }    
+ 
+
+
+    /*
+     * GENERAL RESOURCES
+     */
+    proc ResGet(tp: @Thread, arg: _uint32): _uint32
+    {   var pp: @Cpu;
+	var rt: Resources;
+
+//fderr.str("ResGet="); fderr.hex32(arg); fderr.nl();
+	pp = tp.cpu;
+	rt = Resources(arg);	// FIXME: check for illegal
+	if rt
+	is SYNC    then return SyncGet(tp, tp.num) | (pp.num << 16);
+	is THREAD  then return ThreadGet(tp) | (pp.num << 16);
+	is CHANEND then return ChanGet(tp) | (pp.num << 16);
+	is LOCK    then return LockGet(tp) | (pp.num << 16);
+	is PORT, CLKBLK, PS, CONFIG then // unallocatable
+	{
+	}
+	return 0;
+    }
+
+    proc ResFree(tp: @Thread, arg: _uint32)
+    {   var rt: Resources;
+        var rn: _uint8;
+
+        rt = Resources(arg&0xFF);
+        rn = (arg>>8)&0xFF;
+        if rt
+        is SYNC    then if rn < NSYNC   then { SyncFree(tp, rn); return; }
+        is THREAD  then if rn < NTHREAD then { ThreadFree(tp, rn); return; }
+        is CHANEND then if rn < NCHAN   then { ChanFree(tp, rn); return; }
+        is LOCK    then if rn < NLOCK   then { LockFree(tp, rn); return; }
+        ThreadSetException(tp, ILLEGAL_RESOURCE, arg);
+    }
+
+    proc SetC(tp: @Thread, arg: _uint32, x: _uint32)
+    {   var rt: Resources;
+        var rn: _uint8;
+
+        rt = Resources(arg&0xFF);
+        rn = (arg>>8)&0xFF;
+        if rt
+        is PORT    then {}
+        is TIMER   then if rn < NTIMER then {}
+        is CLKBLK  then if rn < NCLOCK then {}
+        else
+        ThreadSetException(tp, ILLEGAL_RESOURCE, arg);
+    }
+
+    /*
+     * PROCESSOR STATE
+     */
+    proc GetPS(s: _uint32): _uint32
+    {   var rt: _uint;
+        var rn: PSRegs;
+
+        rt = s & 0xFF;
+        rn = PSRegs(s >> 8);
+        if rn
+        is PS_RAM_BASE then return CORE_RAM_BASE;
+        else
+        {   fderr.str("GETPS(0x"); fderr.hex32(s);
+            fderr.str("not yet implemented\n");
+        }
+    }
+
+    proc SetPS(tp: @Thread, s: _uint32, v: _uint32)
+    {   var rt: _uint;
+        var rn: PSRegs;
+
+        rt = s & 0xFF;
+        rn = PSRegs(s >> 8);
+        if rn
+        is PS_VECTOR_BASE then tp.cpu.vectorb = v;
+        else
+        {   fderr.str("SETPS(0x"); fderr.hex32(s);
+            fderr.str("not yet implemented\n");
+        }
+    }
+
+    /*
+     * MEMORY ACCESS
+     */
+    proc Load(tp: @Thread, addr: _uint32, w: width): _uint32
+    {   var i: _uint;
+        var rv: _uint32;
+    
+//fderr.str("Load ("); fderr.hex32(addr);
+//fderr.chr(','); fderr.hex8(_uint8(w)); fderr.str(")\n");
+        i = tp.segn;
+        while !(addr >= tp.cpu.memory.seg[i].beg &&
+                addr <= tp.cpu.memory.seg[i].end) do
+	{   i += 1;
+	    if i >= tp.cpu.memory.nsegs then i = 0;
+	  exit i == tp.segn with
+	    {   ThreadSetException(tp, LOAD_STORE, addr);
+		    return 0;
+	    }
+	}
+	tp.segn = i;
+	if tp.cpu.memory.seg[i].typ == 0 then	// ordinary memory
+	{   addr -= tp.cpu.memory.seg[i].beg;
+	    if w
+		    is BYTE then
+		rv = tp.cpu.memory.seg[i].mem@[addr];
+	    is HALF then
+		rv = (word(tp.cpu.memory.seg[i].mem@[addr+1]) << 8) |
+		          tp.cpu.memory.seg[i].mem@[addr];
+	    else
+		rv = (word(tp.cpu.memory.seg[i].mem@[addr+3]) << 24) |
+		     (word(tp.cpu.memory.seg[i].mem@[addr+2]) << 16) |
+		     (word(tp.cpu.memory.seg[i].mem@[addr+1]) << 8)  |
+		      tp.cpu.memory.seg[i].mem@[addr];
+	}
+	else
+	{   fderr.str("PRead  type=");
+	    fderr.uint32(tp.cpu.memory.seg[i].typ);
+	    fderr.str(" addr=0x");
+	    fderr.hex32(addr);
+	    fderr.nl();
+	    rv = 0;
+	}
+	return rv;
+    }
+
+    proc Store(tp: @Thread, addr: _uint32, value: _uint32, w: width)
+    {   var i: _uint;
+
+        i = tp.segn;
+        while !(addr >= tp.cpu.memory.seg[i].beg &&
+                addr <= tp.cpu.memory.seg[i].end) do
+	{   i += 1;
+	    if i >= tp.cpu.memory.nsegs then i = 0;
+	  exit i == tp.segn with
+	    {   ThreadSetException(tp, LOAD_STORE, addr);
+	    }
+	}
+	tp.segn = i;
+	if tp.cpu.memory.seg[i].typ == 0 then	// ordinary memory
+	{   addr -= tp.cpu.memory.seg[i].beg;
+	    tp.cpu.memory.seg[i].mem@[addr] = _uint8(value);
+	    if w > BYTE then
+	    {   tp.cpu.memory.seg[i].mem@[addr+1] = _uint(value>>8);
+	        if w > HALF then
+	        {   tp.cpu.memory.seg[i].mem@[addr+2] = _uint(value>>16);
+	            tp.cpu.memory.seg[i].mem@[addr+3] = _uint(value>>24);
+	        }
+	    }
+	}
+	else
+	{   fderr.str("PWrite  type=");
+	    fderr.uint32(tp.cpu.memory.seg[i].typ);
+	    fderr.str(" addr=0x");
+	    fderr.hex32(addr);
+	    fderr.nl();
+	}
+    }
+
+    proc IFetch(tp: @Thread): _uint16
+    {
+
+	return _uint16(Load(tp, tp.regs[PC], HALF));
+    }
+
+    proc ShowRegs(tp: @Thread)
+    {   var i: _uint;
+
+        fdout.str("PC-SR   "); fdout.hex32(tp.regs[PC]);
+        fdout.chr(' '); fdout.hex32(tp.regs[SR]);
+        fdout.str(" THREAD "); fdout.uint(tp.num);
+        fdout.str("    CPU "); fdout.uint(tp.cpu.num);
+        fdout.str("\nR0-R7  ");
+        i = 0;
+        while i < 8 do
+        {   fdout.chr(' '); fdout.hex32(tp.regs[Register(i)]);
+            i += 1;
+        }
+        fdout.str("\nR8-LR  ");
+        while i < 16 do
+        {   fdout.chr(' '); fdout.hex32(tp.regs[Register(i)]);
+            i += 1;
+        }
+        fdout.nl(); fdout.nl();
+    }
+
+    proc CpuLoad(cn: _uint, pn: _uint, amemory: pMemory)
+    {
+        chip[cn].cpu[pn].memory = amemory;
+        chip[cn].cpu[pn].thread[0].regs[PC] = amemory.entry;
+    }
+
+    proc CpuReady(cn: _uint, pn: _uint)
+    {
+        // allocate thread 0 and make runnable
+        chip[cn].cpu[pn].thread[0].state = ALLOCED;
+        ThreadRun(chip[cn].cpu[pn].thread[0]);
+    }
+
+    proc CpuInit(pp: @Cpu)
+    {   var i: _uint;
+
+        i = 0; while i < NTHREAD do { ThreadInit(pp, i); i += 1; }
+    }
+
+    proc ChipInit(n: _uint)
+    {   var cpunum: _uint;
+
+        chip[n].num = n;
+        cpunum = 0;
+        while cpunum < NCPU do
+        {   chip[n].cpu[cpunum].chip = n;
+            CpuInit(chip[n].cpu[cpunum]);
+            cpunum += 1;
+        }
+    }
+
+    proc SimInit()
+    {
+        ChipInit(0);
+    }
+
+    const bitnum: [12]_uint8 = { 32, 1, 2, 3, 4, 5, 6, 7, 8, 16, 24, 32 };  
+    
+    const reg3_1: [27]_uint8 =
+    {   0, 4, 8,     0, 4, 8,     0, 4, 8,
+	    0, 4, 8,     0, 4, 8,     0, 4, 8,
+	    0, 4, 8,     0, 4, 8,     0, 4, 8
+    };
+    const reg3_2: [27]_uint8 =
+    {   0, 0, 0,     4, 4, 4,     8, 8, 8,
+	    0, 0, 0,     4, 4, 4,     8, 8, 8,
+	    0, 0, 0,     4, 4, 4,     8, 8, 8
+    };
+    const reg3_3: [27]_uint8 =
+    {   0, 0, 0,     0, 0, 0,     0, 0, 0,
+	    4, 4, 4,     4, 4, 4,     4, 4, 4,
+	    8, 8, 8,     8, 8, 8,     8, 8, 8
+    };
+    const reg2_1: [9]_uint8 =
+    {   0, 8, 4,     0, 8, 4,     0, 8, 4
+    };
+    const reg2_2: [9]_uint8 =
+    {   0, 4, 0,     8, 0, 8,     4, 8, 4
+    };
+
+    type IFmt: (NONE, R3, R2, R1, R0, RI6, RI6x, BI6, I10, XIM, XOP);
+    const FmtHi5: [32]IFmt =
+    {	R3,  R3,  R3,  R3,  R3,  R3,  R3,  R3,  R3,  R3,    // 0b00000..0b01001
+    	RI6, RI6, RI6, RI6,	BI6, BI6,				        // 0b01010..0b01111
+    	R3,  R3,  R3,  R3,  R3,  R3,  R3,  R3,  R3,  R3,	// 0b10000..0b11001
+    	I10,I10,I10,				                        // 0b11010..0b11100
+        RI6x,                                               // 0b11101
+    	XIM,						                        // 0b11110
+    	XOP						                            // 0b11111
+    };
+    const OpcR3a: [32]Opcode =
+    {   STWI,   LDWI,   ADD,    SUB,    SHL,    SHR,    EQ,     AND,
+	    OR,     LDW,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    LD16S,  LD8U,   ADDI,   SUBI,   SHLI,   SHRI,   EQI,    TSETR,
+	    LSS,    LSU,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD
+    };
+    const OpcR2_0: [32]Opcode =
+    {   TINITPC,TINITDP,TINITSP,TINITCP,BAD,	ANDNOT,	SEXT,	GETTS,
+	    ZEXT,	OUTCT,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    GETR,	NOT,	NEG,	BAD,	MKMSK,	OUT,	IN,     PEEK,
+	    SETPSC,	CHKCT,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD
+    };
+    const OpcR2_1: [32]Opcode =
+    {	GETST,	OUTT,	SETD,	TSETMR,	EET,	EEF,	SEXTI,	SETPT,
+	    ZEXTI,	OUTCTI,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    INCT,	INT,	ENDIN,	BAD,	MKMSKI,	OUTSHR,	INSHR,	TESTCT,
+	    TESTWCT,CHKCTI,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD
+    };
+    const OpcR1_0: [32]Opcode =
+    {	EDU,	WAITET,	FREER,	TSTART,	BLA,	BRU,	SETDP,	DGETREG,
+    	KCALL,	ECALLF,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+    	CLRPT,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+    	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD
+    };
+    const OpcR1_1: [32]Opcode =
+    {	EEU,	WAITEF,	MJOIN,	MSYNC,	BAU,	SETSP,	SETCP,	SETEV,
+	    SETV,	ECALLT,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    SYNCR,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+    	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD
+    };
+    const OpcR0CP_0: [32]Opcode =
+    {	WAITEU,	LDSPC,	DENTSP,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+    	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD
+    };
+    const OpcR0CP_1: [32]Opcode =
+    {	DCALL,	STSED,	GETKSP,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+    	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD
+    };
+    const OpcR0DP_0: [32]Opcode =
+    {	CLRE,	STSPC,	DRESTSP,BAD,	BAD,	BAD,	BAD,	BAD,
+	    BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+    	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD
+    };
+    const OpcR0DP_1: [32]Opcode =
+    {	KRET,	STET,	LDSED,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+    	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD
+    };
+    const OpcR0SP_0: [32]Opcode =
+    {	SSYNC,	LDSSR,	GETID,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+    	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD
+    };
+    const OpcR0SP_1: [32]Opcode =
+    {	DRET,	GETED,	LDET,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+    	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD
+    };
+    const OpcR0LR_0: [32]Opcode =
+    {	FREET,	STSSR,	GETKEP,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+    	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD
+    };
+    const OpcR0LR_1: [32]Opcode =
+    {	SETKEP,	GETET,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+	    BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,
+    	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD,	BAD
+    };
+    
+    const OpcRI6: [8]Opcode =
+    {   STWDP,  STWSP,  LDWDP,  LDWSP,  LDAWDP, LDAWSP, LDC,    LDWCP
+    };
+    const OpcBI6: [4]Opcode =
+    {   BRFT,   BRBT,   BRFF,   BRBF
+    };
+    const OpcBI6CP: [4]Opcode =
+    {   BRFU,   BRBU,   CLRSR,   GETSR
+    };
+    const OpcBI6DP: [4]Opcode =
+    {   BLAT,   ENTSP,  SETSR,   LDAWCP
+    };
+    const OpcBI6SP: [4]Opcode =
+    {   EXTDP,  EXTSP,  KENTSP,  BAD
+    };
+    const OpcBI6LR: [4]Opcode =
+    {   KCALLI, RETSP,  KRESTSP, BAD
+    };
+    const OpcI10: [6]Opcode =
+    {   BLRF,   BLRB,   LDAPF,  LDAPB,  BLACP,  LDWCPL
+    };
+    const OpcX2_0: [32]Opcode =
+    {   BITREV, CLZ,    TINITLR,SETPS,  TESTLCL,SETRDY, SETN,   BAD,
+        BAD,    BAD,    BAD,    BAD,    BAD,    BAD,    BAD,    BAD,
+        BAD,    BAD,    BAD,    BAD,    BAD,    BAD,    BAD,    BAD,
+        BAD,    BAD,    BAD,    BAD,    BAD,    BAD,    BAD,    BAD
+    };
+    const OpcX2_1: [32]Opcode =
+    {   BYTEREV,SETCLK, GETPS,  GETD,   SETTW,  SETC,   GETN,   BAD,
+        BAD,    BAD,    BAD,    BAD,    BAD,    BAD,    BAD,    BAD,
+        BAD,    BAD,    BAD,    BAD,    BAD,    BAD,    BAD,    BAD,
+        BAD,    BAD,    BAD,    BAD,    BAD,    BAD,    BAD,    BAD
+    };
+    const OpcX3: [32]Opcode =
+    {   STW,    XOR,    ASHR,   LDAWF,  LDAWB,  LDA16F, LDA16B, MUL,
+        DIVS,   DIVU,   BAD,    BAD,    BAD,    BAD,    BAD,    BAD,
+        ST16,   ST8,    ASHRI,  LDAWFI, LDAWBI, CRC32,  BAD,    BAD,
+        REMS,   REMU,   BAD,    BAD,    BAD,    BAD,    BAD,    BAD
+    };
+
+    proc DecodeReg(ins: _uint16): _uint, Register, Register, Register
+    {   var t: _uint16;
+        var dst, src1, src2: Register;
+
+	    t = (ins>>6)&0x1F;
+        if t < 27 then                          // three register operands
+        {   dst = Register(reg3_1[t] | ((ins>>4)&3));
+            src1 = Register(reg3_2[t] | ((ins>>2)&3));
+            src2 = Register(reg3_3[t] | (ins&3));
+            return 3, dst, src1, src2;
+        }
+        else
+        {   t = ((ins>>5)&0x3F) - (27*2);
+            if t < 9 then 		                // two register operands
+            {   dst = Register(reg2_1[t] | ((ins>>2)&3));
+                src1 = Register(reg2_2[t] | (ins&3));
+                return 2, dst, src1, R0;
+            }
+            else
+            {   dst = Register(ins&0xF);
+                if dst < CP then		        // one register operand
+                    return 1, dst, R0, R0;
+                else
+                    return 0, dst, R0, R0;       // no operands
+            }
+        }
+    }
+
+    proc Sim(n: _uint, trace: boolean): _uint
+    {
+	var ins, ext: _uint16;
+	var imm, savepc: _uint32;
+	var tp: @Thread;
+	var fmt: IFmt;
+	var t, nr: _uint;
+	var opc: Opcode;
+	var src1, src2, src3, src4, src5, dst: Register;
+
+	while n > 0 do
+	{   n -= 1;
+	    tp = runq;
+	    if tp == 0 then
+	        return 0;
+	    else
+	        runq = tp.next;
+	    savepc = tp.regs[PC];
+	    ins = IFetch(tp);
+	    tp.regs[PC] += 2;
+	    imm = 0;
+	    ext = 0;
+	    opc = BAD;  // FIXME: temporary?
+	    if trace then fderr.hex16(ins);
+	    fmt = FmtHi5[ins>>11];
+	    if fmt == XOP then
+	    {   ext = IFetch(tp);
+	        tp.regs[PC] += 2;
+	        if trace then fderr.hex16(ext);
+	        nr, dst, src1, src2 = DecodeReg(ins);
+	        if nr == 3 then
+	        {   nr, src3, src4, src5 = DecodeReg(ext);
+		    nr += 3;
+	        }
+//fderr.str(" nr="); fderr.uint32(nr);
+	        if nr
+	        is 2 then
+	        {   if (ext & 0b111_1111_1111) == 0b111_1110_1100 then
+	                if (ins & 0b1_0000) == 0 then
+	                    opc = OpcX2_0[ext>>11];
+	                else
+	                    opc = OpcX2_1[ext>>11];
+	            else opc = BAD;
+	        }
+	        is 3 then
+	        {   if (ext & 0b111_1111_1111) == 0b111_1110_1100 then
+	                opc = OpcX3[ext>>11];
+	            else
+	                if ext == 0x97ED then opc = OUTPW;
+	                else
+	                    if ext == 0x97EE then opc = INPW;
+	                    else opc = BAD;
+	        }
+	    }
+	    else
+	    {   if fmt == XIM then
+		{   imm = ins & 0x3FF;
+		    ins = IFetch(tp);
+		    tp.regs[PC] += 2;
+		    fmt = FmtHi5[ins>>11];
+		}
+		if fmt
+		is R3 then		// decode register operands
+		{   nr, dst, src1, src2 = DecodeReg(ins);
+//fderr.str(" nr="); fderr.uint32(nr);
+	            if nr
+	            is 3 then opc = OpcR3a[ins>>11];
+	            is 2 then
+		        {   if (ins & 0b10000) == 0 then
+		                opc = OpcR2_0[ins>>11];
+		            else
+		                opc = OpcR2_1[ins>>11];
+	    		    }
+	            is 1 then 
+	            {   if (ins & 0b1_0000) == 0 then
+		                opc = OpcR1_0[ins>>11];
+	                else
+		                opc = OpcR1_1[ins>>11];
+	            }
+	            is 0 then
+	            {   if dst
+	                is CP then
+		        {   if (ins & 0b1_0000) == 0 then
+			            opc = OpcR0CP_0[ins>>11];
+		            else
+			            opc = OpcR0CP_1[ins>>11];
+		        }
+	                is DP then
+		        {   if (ins & 0b1_0000) == 0 then
+			            opc = OpcR0DP_0[ins>>11];
+		            else
+			            opc = OpcR0DP_1[ins>>11];
+		        }
+	                is SP then
+		        {   if (ins & 0b1_0000) == 0 then
+			            opc = OpcR0SP_0[ins>>11];
+		            else
+			            opc = OpcR0SP_1[ins>>11];
+		        }
+	                is LR then
+			{   if (ins & 0b1_0000) == 0 then
+				    opc = OpcR0LR_0[ins>>11];
+			    else
+				    opc = OpcR0LR_1[ins>>11];
+			}
+	            }
+	        }
+	        is RI6 then
+	        {   imm = (imm<<6) | (ins & 0x3F);
+	            dst = Register((ins>>6)&0xF);
+	            opc = OpcRI6[(ins>>10)-0b0101_00];
+	        }
+	        is RI6x then
+	        {   imm = (imm<<6) | (ins & 0x3F);
+	            dst = Register((ins>>6)&0xF);
+	            if (ins & 0b0100_0000_0000) == 0 then
+	                opc = SETCI;
+	            else
+	                opc = BAD;
+	        }
+	        is BI6 then
+	        {   imm = (imm<<6) | (ins & 0x3F);
+	            dst = Register((ins>>6)&0xF);
+	            if dst
+	            is CP then opc = OpcBI6CP[(ins>>10)-0b0111_00];
+	            is DP then opc = OpcBI6DP[(ins>>10)-0b0111_00];
+	            is SP then opc = OpcBI6SP[(ins>>10)-0b0111_00];
+	            is LR then opc = OpcBI6LR[(ins>>10)-0b0111_00];
+	            else       opc = OpcBI6[(ins>>10)-0b0111_00];
+	        }
+	        is I10 then
+	        {   imm = (imm<<10) | (ins & 0x3FF);
+	            opc = OpcI10[(ins>>10)-0b1101_00];
+	        }
+	    }
+fderr.chr('\t'); fderr.str(insttab[opc]);
+	    if trace then fderr.nl();
+	    if opc
+	    is LDC    then tp.regs[dst] = imm;
+	    is ADD    then tp.regs[dst] = tp.regs[src1] + tp.regs[src2];
+	    is ADDI   then tp.regs[dst] = tp.regs[src1] + _uint32(src2);
+	    is SUB    then tp.regs[dst] = tp.regs[src1] - tp.regs[src2];
+	    is SUBI   then tp.regs[dst] = tp.regs[src1] - _uint32(src2);
+	    is SHL    then tp.regs[dst] = tp.regs[src1] << tp.regs[src2];
+	    is SHLI   then tp.regs[dst] = tp.regs[src1] << bitnum[_uint32(src2)];
+	    is SHR    then tp.regs[dst] = tp.regs[src1] >> tp.regs[src2];
+	    is SHRI   then tp.regs[dst] = tp.regs[src1] >> bitnum[_uint32(src2)];
+	    is ASHR   then tp.regs[dst] = _uint32(_int32(tp.regs[src1]) >> tp.regs[src2]);
+	    is ASHRI  then tp.regs[dst] = _uint32(_int32(tp.regs[src1]) >> bitnum[_uint32(src2)]);
+	    is AND    then tp.regs[dst] = tp.regs[src1] & tp.regs[src2];
+	    is OR     then tp.regs[dst] = tp.regs[src1] | tp.regs[src2];
+	    is XOR    then tp.regs[dst] = tp.regs[src1] ^ tp.regs[src2];
+	    is ANDNOT then tp.regs[dst] = tp.regs[dst] & ~tp.regs[src1];
+	    is NOT    then tp.regs[dst] = ~tp.regs[src1];
+	    is NEG    then tp.regs[dst] = -tp.regs[src1];
+	    is EQ     then tp.regs[dst] = _uint32(tp.regs[src1] == tp.regs[src2]);
+	    is EQI    then tp.regs[dst] = _uint32(tp.regs[src1] == _uint32(src2));
+	    is LSU    then tp.regs[dst] = _uint32(tp.regs[src1] < tp.regs[src2]);
+	    is LSS    then tp.regs[dst] = _uint32(_int32(tp.regs[src1]) < _int32(tp.regs[src2]));
+	    is ZEXT   then
+	    {   imm = tp.regs[src1];
+	        if imm > 0 && imm < BPW then
+		    tp.regs[dst] = (tp.regs[dst] << imm) >> imm;
+	    }
+	    is ZEXTI  then
+	    {   imm = bitnum[_uint32(src1)];
+	        if imm < BPW then
+		    tp.regs[dst] = (tp.regs[dst] << imm) >> imm;
+	    }
+	    is SEXT   then
+	    {   imm = tp.regs[src1];
+	        if imm > 0 && imm < BPW then
+		    tp.regs[dst] = _uint32((_int32(tp.regs[dst]) << imm) >> imm);
+	    }
+	    is SEXTI  then
+	    {   imm = bitnum[_uint32(src1)];
+	        if imm < BPW then
+		    tp.regs[dst] = _uint32((_int32(tp.regs[dst]) << imm) >> imm);
+	    }
+	    is MKMSK  then
+	    {   imm = tp.regs[src1];
+	        if imm < BPW then
+	            imm = (1 << imm) -1;
+	        else
+	            imm = 0xFFFFFFFF;
+	        tp.regs[dst] = imm;
+	    }
+	    is MKMSKI then
+	    {   imm = bitnum[src1];
+	        if imm < BPW then
+	            imm = (1 << imm) -1;
+	        else
+	            imm = 0xFFFFFFFF;
+	        tp.regs[dst] = imm;
+	    }
+	    // Branches
+	    is BRFU   then tp.regs[PC] += imm<<1;
+	    is BRBU   then tp.regs[PC] -= imm<<1;
+	    is BRFT   then if tp.regs[dst] != 0 then tp.regs[PC] += imm<<1;
+	    is BRBT   then if tp.regs[dst] != 0 then tp.regs[PC] -= imm<<1;
+	    is BRFF   then if tp.regs[dst] == 0 then tp.regs[PC] += imm<<1;
+	    is BRBF   then if tp.regs[dst] == 0 then tp.regs[PC] -= imm<<1;
+	    is BRU    then tp.regs[PC] += _int32(tp.regs[dst]) << 1;
+	    is BLRF   then { tp.regs[LR] = tp.regs[PC]; tp.regs[PC] += imm<<1; }
+	    is BLRB   then { tp.regs[LR] = tp.regs[PC]; tp.regs[PC] -= imm<<1; }
+	    is BAU    then
+	    {   if (tp.regs[dst] & 1) != 0 then
+	            ThreadSetException(tp, ILLEGAL_PC, 0);
+	        else
+	            tp.regs[PC] = tp.regs[dst];
+	    }
+	    is BLA    then
+	    {   tp.regs[LR] = tp.regs[PC];
+	        if (tp.regs[dst] & 1) != 0 then
+	            ThreadSetException(tp, ILLEGAL_PC, 0);
+	        else
+	            tp.regs[PC] = tp.regs[dst];
+	    }
+	    is RETSP  then
+	    {   if imm != 0 then
+	        {   tp.regs[LR] = Load(tp, tp.regs[SP], WORD);
+	            tp.regs[SP] += (imm << 2);
+	        }
+	        tp.regs[PC] = tp.regs[LR];
+	    }
+	    is ENTSP  then  // documentation wrong?
+	    {   if imm != 0 then
+	        {   tp.regs[SP] -= (imm << 2);
+	            Store(tp, tp.regs[SP], tp.regs[LR], WORD);
+	        }
+	    }
+	    // Misc DP, SP, CP
+	    is EXTDP  then tp.regs[DP] -= imm * (BPW/8);
+	    is EXTSP  then tp.regs[SP] -= imm * (BPW/8);
+	    is SETCP  then tp.regs[CP] = tp.regs[dst];
+	    is SETDP  then tp.regs[DP] = tp.regs[dst];
+	    is SETSP  then tp.regs[SP] = tp.regs[dst];
+	    // Load Address
+	    is LDAWF  then tp.regs[dst] = tp.regs[src1] + (tp.regs[src2]<<2);
+	    is LDAWB  then tp.regs[dst] = tp.regs[src1] - (tp.regs[src2]<<2);
+	    is LDAWFI then tp.regs[dst] = tp.regs[src1] + (src2<<2);
+	    is LDAWBI then tp.regs[dst] = tp.regs[src1] - (src2<<2);
+	    is LDA16F then tp.regs[dst] = tp.regs[src1] + (tp.regs[src2]<<1);
+	    is LDA16B then tp.regs[dst] = tp.regs[src1] - (tp.regs[src2]<<1);
+	    is LDAWDP then tp.regs[dst] = tp.regs[DP] + (imm<<2);
+	    is LDAWSP then tp.regs[dst] = tp.regs[SP] + (imm<<2);
+	    is LDAWCP then tp.regs[dst] = tp.regs[CP] + (imm<<2);
+	    is LDAPF  then tp.regs[R11] = tp.regs[PC] + (imm<<1);
+	    is LDAPB  then tp.regs[R11] = tp.regs[PC] - (imm<<1);
+	    // Loads
+	    is LDW    then
+	        tp.regs[dst] = Load(tp, tp.regs[src1] + (tp.regs[src2]<<2), WORD);
+	    is LDWI   then
+	        tp.regs[dst] = Load(tp, tp.regs[src1] + (_uint32(src2)<<2), WORD);
+	    is LD16S  then
+	        tp.regs[dst] = Load(tp, tp.regs[src1] + (tp.regs[src2]<<1), HALF);
+	    is LD8U   then
+	        tp.regs[dst] = Load(tp, tp.regs[src1] + tp.regs[src2], BYTE);
+	    is LDWDP  then
+	        tp.regs[dst] = Load(tp, tp.regs[DP] + (imm << 2), WORD);
+	    is LDWSP  then
+	        tp.regs[dst] = Load(tp, tp.regs[SP] + (imm << 2), WORD);
+	    is LDWCP  then
+	        tp.regs[dst] = Load(tp, tp.regs[CP] + (imm << 2), WORD);
+            // Stores
+            is STW    then
+                Store(tp, tp.regs[src1] + (tp.regs[src2]<<2), tp.regs[dst], WORD);
+            is STWI   then
+                Store(tp, tp.regs[src1] + (_uint32(src2)<<2), tp.regs[dst], WORD);
+            is ST16   then
+                Store(tp, tp.regs[src1] + (tp.regs[src2]<<1), tp.regs[dst], HALF);
+            is ST8    then
+                Store(tp, tp.regs[src1] + tp.regs[src2], tp.regs[dst], BYTE);
+            is STWDP  then
+                Store(tp, tp.regs[DP] + (imm<<2), tp.regs[dst], WORD);
+            is STWSP  then
+                Store(tp, tp.regs[SP] + (imm<<2), tp.regs[dst], WORD);
+            // Status Register
+	    is GETSR  then tp.regs[R11] = tp.regs[SR] & imm;
+	    is CLRSR  then tp.regs[SR] = tp.regs[SR] & ~imm;
+	    is SETSR  then tp.regs[SR] = tp.regs[SR] | imm;
+	    // Processor State Registers
+	    is GETPS  then tp.regs[dst] = GetPS(tp.regs[src1]);
+	    is SETPS  then SetPS(tp, tp.regs[src1], tp.regs[dst]);
+	    // Resources
+	    is GETR   then tp.regs[dst] = ResGet(tp, _uint32(src1));
+	    is FREER  then ResFree(tp, tp.regs[dst]);
+	    is SETCI  then SetC(tp, tp.regs[dst], imm);
+	    // Threads
+	    is TINITPC then ThreadSetReg(tp, tp.regs[src1], PC, tp.regs[dst]);
+            is TINITDP then ThreadSetReg(tp, tp.regs[src1], DP, tp.regs[dst]);
+            is TINITSP then ThreadSetReg(tp, tp.regs[src1], SP, tp.regs[dst]);
+            is TINITCP then ThreadSetReg(tp, tp.regs[src1], CP, tp.regs[dst]);
+            is TINITLR then ThreadSetReg(tp, tp.regs[src1], LR, tp.regs[dst]);
+            is MSYNC   then MSync(tp, tp.regs[dst]);
+            is MJOIN   then MJoin(tp, tp.regs[dst]);
+            is SSYNC   then SSync(tp);
+            // Syncs
+	    is GETST  then tp.regs[dst] = GetST(tp, tp.regs[src1]);
+	    // Kernel Mode
+	    is GETKEP then tp.regs[R11] = tp.regs[KEP];
+	    is SETKEP then tp.regs[KEP] = tp.regs[R11];
+	    is GETKSP then tp.regs[R11] = tp.regs[KSP];
+	    else
+	        fderr.str("Not yet implemented\n");
+            if tp.regs[ET] != 0 then
+            {   tp.regs[PC] = savepc;   // backup PC
+                ThreadTakeException(tp);
+            }
+	    if trace then ShowRegs(tp);
+	}
+	return 1;
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+
+

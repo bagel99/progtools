@@ -1,0 +1,1481 @@
+/*
+---0000	unallocated
+---0001	unallocated
+---0010	unallocated
+---0011	unallocated
+---0100 load/store
+---0101 data processing - register
+---0110 load/store
+---0111 data processing - SIMD and FP
+---1000 data processing - immediate
+---1001 data processing - immediate
+---1010 branch, system
+---1011 branch, system
+---1100 load/store
+---1101 data processing - register
+---1110 load/store
+---1111 data processing - SIMD and FP
+*/
+package arm64
+{
+    type  Inst: _uint32;	// size of an instruction
+    type  Addr: _uint64;	// size of an address
+    type  Word: _uint64;	// size of a register
+    type  SWord: _int64;
+    type  Half: _uint32;
+    type  UImm:  _uint32;	// unsigned immediate values
+    type  SImm:  _int32;	// signed immediate values
+    // The following must be the same as the size field in a LD/ST instruction
+    type  Width: (BYTE, HALF, WORD, QUAD);
+    type  Faults: (NONE, BKPT, SVC, OTHER);
+    type  Flags:
+    {	N: boolean;
+	Z: boolean;
+	C: boolean;
+	V: boolean;
+    }: packed;
+    type  CondCode:
+    (   EQ, NE,		// Z==1; Z==0
+	CS, CC,		// C==1; C==0 (aka HS, LO)
+	MI, PL,		// N==1; N==0
+	VS, VC,		// V==1; V==0
+	HI, LS,		// C==1 && Z==0; C==0 || Z==1
+	GE, LT,		// N==V; N!=V
+	GT, LE,		// Z==0 && N==V; Z==1 || N!=V
+	AL, NV		// AL=always; NV=never (not used)
+    );
+
+    type MemFlags:
+    {   x:	boolean;	// executable
+        w:	boolean;	// writeable
+        a:	boolean;	// allocate memory
+        l:	boolean;	// load from object file
+    }: packed, bits(32);
+    
+    type Mem:
+    {	adr:   _address;
+	beg:   Addr;
+	end:   Addr;
+	flg:   MemFlags;
+	read:  @_(adr: Addr, w: Width): Word;
+	write: @_(adr: Addr, w: Width, data: Word);
+	init:  @_();
+    };
+
+    var memtab: @[]Mem;
+    var nmem: _uint;
+
+    const regname: [33]@[]_byte =
+    {	"x0",	"x1",	"x2",	"x3",	"x4",	"x5",	"x6",	"x7",
+	"x8",	"x9",	"x10",	"x11",	"x12",	"x13",	"x14",	"x15",
+	"x16",	"x17",	"x18",	"x19",	"x20",	"x21",	"x22",	"x23",
+	"x24",	"x25",	"x26",	"x27",	"x28",	"fp",	"lr",	"sp",
+	"pc"
+    };
+    const breakpoint: Inst = 0xD420_0000;
+    const LR = 30;
+    const SP = 31;
+    const PC = 32;	// not a general register
+
+    var   reg:    [33]Word;	// includes PC
+    var   instpc: Inst;		// value of PC for this instruction
+    var   psN, psZ, psC, psV, psQ: boolean;	// processor status flags
+    var   fault:  Faults = NONE;
+    var   faultarg: UImm;
+    var   rlast: _uint = 0;
+    var   cycles: _uint = 0;
+
+    type shiftT: (LSL, LSR, ASR, ROR);
+    const shiftN: [shiftT]@[]_byte = { "LSL", "LSR", "ASR", "ROR" };
+
+
+    proc Fault(s:@[]_byte, info: Word)
+    {   
+	fderr.str("\nFault cycle ");
+	fderr.uint(cycles);
+	fderr.str(" at ");
+	fderr.hex64(instpc);
+	fderr.str(" : ");
+	fderr.str(s);
+	fderr.str(" : ");
+	fderr.hex64(info);
+	fderr.nl();
+	fault = OTHER;
+    }
+
+    proc Map(addr: Addr): boolean, _address
+    {   var i: _uint;
+
+	for i from 0 to nmem-1 do
+	{   if addr >= memtab[i].beg && addr <= memtab[i].end then
+	    {	addr -= memtab[i].beg;
+		return true, memtab[i].adr@[addr-];
+	    }
+	}
+	return false, 0;
+    }
+
+    proc LoadBytes(addr: Word, data: @[]_byte, len: _uint): boolean
+    {   var i: _uint;
+
+        i = 0;
+        while !(addr >= memtab[i].beg && addr+len <= memtab[i].end) do
+	{  i += 1;
+	   exit i >= nmem with return false;
+	}
+	addr -= memtab[i].beg;
+	memtab[i].adr@[addr:len] = data[0:len];
+	return true;
+    }
+
+    proc SysCall()
+    {   var n: _uint;
+	var ok: boolean;
+	var addr: _address;
+	var rv: _int;
+
+	n = _uint(reg[8]);
+	if n
+	is 1 then	// open
+	{   ok, addr = Map(reg[0]);
+	    if ok then
+	    {
+		rv = sys.open(addr, _uint(reg[1]), _uint(reg[2]));
+		reg[0] = SWord(rv);
+	    }
+	}
+	is 2 then	// close
+	{   sys.close(_int(reg[0]));
+	    rv = 0;	// FIXME sys.close
+	}
+	is 3 then	// read
+	{   ok, addr = Map(reg[1]);
+	    if ok then
+	    {
+		rv = sys.read(_int(reg[0]), addr, _uint(reg[2]));
+		if rv < 0 then
+		{
+fderr.str("read error "); fderr.int(rv); fderr.nl();
+		}
+		reg[0] = SWord(rv);
+	    }
+	}
+	is 4 then	// write
+	{   ok, addr = Map(reg[1]);
+	    if ok then
+	    {
+//fderr.str("write("); fderr.uint(_uint(reg[0]));
+//fderr.chr(','); fderr.hex(_uint(addr)); 
+//fderr.chr(','); fderr.uint(_uint(reg[2])); fderr.str(")\n");
+		rv = sys.write(_uint(reg[0]), addr, _uint(reg[2]));
+		if rv < 0 then
+		{
+fderr.str("write error "); fderr.int(rv); fderr.nl();
+		}
+		reg[0] = SWord(rv);
+	    }
+	}
+	else
+	{
+fderr.str("** Unimplemented system call\n");
+	}
+    }
+
+    proc Read(addr: Addr, w: Width): Word
+    {   var i: _uint;
+	var rv: Word;
+
+        i = rlast;
+        while !(addr >= memtab[i].beg && addr <= memtab[i].end) do
+	{   i += 1;
+	    if i >= nmem then i = 0;
+	   exit i == rlast with
+	    {
+		Fault("Read violation", addr);
+		return 0;
+	    }
+	}
+	rlast = i;
+	if memtab[i].read == 0 then	// ordinary memory
+	{   addr -= memtab[i].beg;
+	    if w
+            is BYTE then
+		rv = memtab[i].adr@[addr];
+	    is HALF then
+		rv = (Word(memtab[i].adr@[addr+1]) << 8) | memtab[i].adr@[addr];
+	    is WORD then
+		rv = (Word(memtab[i].adr@[addr+3]) << 24) |
+		     (Word(memtab[i].adr@[addr+2]) << 16) |
+		     (Word(memtab[i].adr@[addr+1]) << 8)  |
+		     memtab[i].adr@[addr];
+	    else
+		rv = _unpkle(memtab[i].adr@[addr:8]);
+	}
+	else
+	    rv = memtab[i].read@(addr, w);
+	return rv;
+    }
+
+    proc Write(addr: Addr, w: Width, v: Word)
+    {   var i: _uint;
+
+//fderr.str("Write ["); fderr.hex64(addr);
+//fderr.str("] = "); fderr.hex64(v);
+//fderr.nl();
+        i = rlast;
+        while !(addr >= memtab[i].beg && addr <= memtab[i].end) do
+	{   i += 1;
+	    if i >= nmem then i = 0;
+	   exit i == rlast with
+	    {
+		Fault("Write violation", addr);
+		return;
+	    }
+	}
+	rlast = i;
+	if memtab[i].write == 0 then	// ordinary memory
+	{   addr -= memtab[i].beg;
+	    memtab[i].adr@[addr] = v;
+	    if w
+	    is BYTE then
+		memtab[i].adr@[addr] = v;
+	    is HALF then
+	    	_packle(memtab[i].adr@[addr:2], _uint16(v));
+	    is WORD then
+	    	_packle(memtab[i].adr@[addr:4], _uint32(v));
+	    else
+	    	_packle(memtab[i].adr@[addr:8], v);
+	}
+	else
+	    memtab[i].write@(addr, w, v);
+    }
+
+    proc SetBreakpoint(addr: Addr, n: _uint): Inst: inline
+    {   var old: Inst;
+
+	old = Read(addr, WORD);
+	Write(addr, WORD, 0xD420_0000 | (n << 5));
+	return old;
+    }
+
+    proc ClrBreakpoint(addr: Addr, inst: Inst):: inline
+    {
+	Write(addr, WORD, inst);
+    }
+
+    proc SetFlagsNZCV(cc: Flags)
+    {
+	psZ = cc.Z;
+	psN = cc.N;
+	psC = cc.C;
+	psV = cc.V;
+    }
+
+    proc CondPassed(cc: CondCode): boolean
+    {
+
+	if cc
+	is EQ then return  psZ;
+	is NE then return !psZ;
+	is CS then return  psC;
+	is CC then return !psC;
+	is MI then return  psN;
+	is PL then return !psN;
+	is VS then return  psV;
+	is VC then return !psV;
+	is HI then return  psC && !psZ;
+	is LS then return !psC ||  psZ;
+	is GE then return psN == psV;
+ 	is LT then return psN != psV;
+	is GT then return !psZ && psN == psV;
+	is LE then return  psZ || psN != psV;
+	is AL then return true;
+	return false;
+    }
+
+    // Fake an interrupt
+    proc Interrupt(vec: _uint)
+    {
+    }
+
+    // Sign extend from a bit, leave as unsigned
+    proc Sext(bit: _uint, x: Word): Word: inline
+    {   var tmp: SWord;
+
+	tmp = SWord(x);
+	tmp = tmp << (Word?bits-1 - bit);
+	tmp = tmp >> (Word?bits-1 - bit);
+	return Word(tmp);
+    }
+
+    // Sign extend a bit field from instruction
+    proc SExtend(beg: _uint, end: _uint, x: Word): Word: inline
+    {   var tmp: SWord;
+
+	tmp = SWord(x);
+	tmp = tmp << (Inst?bits-1 - end);
+	tmp = tmp >> (Inst?bits-1 - end + beg);
+	return Word(tmp);
+    }
+
+    // Unsign extend a bitfield from instruction
+    proc UExtend(beg: _uint, end: _uint, x: Word): Word: inline
+    {   var tmp: Word;
+
+	tmp = x;
+	tmp = tmp << (Inst?bits-1 - end);
+	tmp = tmp >> (Inst?bits-1 - end + beg);
+	return tmp;
+    }
+
+    proc SBitField(r: _uint, s: _uint, fm: Word): Word
+    {   var tmp: SWord;
+
+	tmp = SWord(fm);
+if db > 2 then { fderr.str("UBitField r="); fderr.uint(r);
+fderr.str(" s="); fderr.uint(s);
+fderr.str(" tmp="); fderr.hex64(tmp); }
+	tmp = tmp << (Word?bits-1 - s);
+if db > 2 then { fderr.chr(','); fderr.hex64(tmp); }
+	tmp = tmp >> (Word?bits-1 - s + r);
+if db > 2 then { fderr.chr(','); fderr.hex64(tmp); fderr.nl(); }
+	return Word(tmp);
+    }
+
+    proc UBitField(r: _uint, s: _uint, fm: Word): Word
+    {   var tmp: Word;
+
+	tmp = fm;
+if db > 2 then { fderr.str("UBitField r="); fderr.uint(r);
+fderr.str(" s="); fderr.uint(s);
+fderr.str(" tmp="); fderr.hex64(tmp); }
+	tmp = tmp << (Word?bits-1 - s);
+if db > 2 then { fderr.chr(','); fderr.hex64(tmp); }
+	tmp = tmp >> (Word?bits-1 - s + r);
+if db > 2 then { fderr.chr(','); fderr.hex64(tmp); fderr.nl(); }
+	return tmp;
+    }
+
+    // r is lsb, s is width
+    proc BitFieldModify(r: _uint, s: _uint, fm: Word, to: Word): Word
+    {   var mask: Word;
+
+	// FIXME - need size
+	if s < r then	// BFI
+	{    r = (~r & 0x3F) + 1;
+	     mask = ((1 << (s+1)) - 1) << r;
+if db > 2 then { fderr.str("BitFieldModify r="); fderr.uint(r);
+fderr.str(" s="); fderr.uint(s);
+fderr.str(" mask="); fderr.hex64(mask);
+fderr.nl(); }
+	     fm = fm << r;
+	     fm = fm & mask;
+	     to = to & ~mask;
+	     return fm | to; 
+	}
+	else
+	{
+	}
+    }
+
+    proc RevBits(x: Word, is64: boolean): Word
+    {   var i, n: _uint;
+	var tmp: Word;
+
+	if is64 then n = 64; else n = 32;
+	tmp = 0;
+	for i from 0 to n-1 do
+	{   tmp = tmp | ((x&1) << (n-i-1));
+	    x = x >> 1;
+	}
+	return tmp;
+    }
+
+    proc RevBytes16(x: Word): Word
+    {   var tmp: Word;
+
+	tmp = ((x & 0x00FF00FF_00FF00FF) << 8) |
+	      ((x >> 8) & 0x00FF00FF_00FF00FF);
+	return tmp;
+    }
+
+    proc RevBytes32(x: Word): Word
+    {   var tmp: Word;
+
+	x = RevBytes16(x);
+	tmp = ((x & 0x0000FFFF_0000FFFF) << 16) |
+	      ((x >> 16) & 0x0000FFFF_0000FFFF);
+	return tmp;
+    }
+
+    proc RevBytes64(x: Word): Word
+    {   var tmp: Word;
+
+	x = RevBytes32(x);
+	tmp = ((x & 0x00000000_FFFFFFFF) << 32) |
+	      ((x >> 32) & 0x00000000_FFFFFFFF);
+	return tmp;
+    }
+
+    // Extract signed immediate from instruction
+    proc XSImm(beg: _uint, end: _uint, inst: Inst): SImm: inline
+    {   var tmp: SImm;
+
+	tmp = inst << (Inst?bits-1 - end);
+	tmp = tmp  >> (Inst?bits-1 - end + beg);
+	return tmp;
+    }
+
+    // Extract unsigned immediate from instruction
+    proc XUImm(beg: _uint, end: _uint, inst: Inst): UImm: inline
+    {   var tmp: UImm;
+
+	tmp = inst << (Inst?bits-1 - end);
+	tmp = tmp  >> (Inst?bits-1 - end + beg);
+	return tmp;
+    }
+
+    /*
+     * Table used to decode the logical immediate values.
+     * Values of s that yield all ones are reserved, but
+     * the table values are still there.
+     */
+    const LogicalImmTable: [64]_uint32 =
+    {	// 32-bit patterns
+	0x00000001, 0x00000003,	0x00000007, 0x0000000f,
+	0x0000001f, 0x0000003f, 0x0000007f, 0x000000ff,
+	0x000001ff, 0x000003ff, 0x000007ff, 0x00000fff,
+	0x00001fff, 0x00003fff, 0x00007fff, 0x0000ffff,
+	0x0001ffff, 0x0003ffff, 0x0007ffff, 0x000fffff,
+	0x001fffff, 0x003fffff, 0x007fffff, 0x00ffffff,
+	0x01ffffff, 0x03ffffff, 0x07ffffff, 0x0fffffff,
+	0x1fffffff, 0x3fffffff, 0x7fffffff, 0xffffffff,
+	// 16-bit patterns	
+	0x00010001, 0x00030003, 0x00070007, 0x000f000f,
+	0x001f001f, 0x003f003f, 0x007f007f, 0x00ff00ff,
+	0x01ff01ff, 0x03ff03ff, 0x07ff07ff, 0x0fff0fff,
+	0x1fff1fff, 0x3fff3fff, 0x7fff7fff, 0xffffffff,	
+	// 8-bit patterns
+	0x01010101, 0x03030303, 0x07070707, 0x0f0f0f0f,
+	0x1f1f1f1f, 0x3f3f3f3f, 0x7f7f7f7f, 0xffffffff,	
+	// 4-bit patterns
+	0x11111111, 0x33333333, 0x77777777, 0xffffffff,	
+	// 2-bit patterns
+	0x55555555, 0xffffffff,
+	0, 0
+    };	
+
+    proc BitMask(inst: Inst): Word
+    {   var r, s: _uint;
+	var tmp1: _uint32;
+	var tmp2: Word;
+
+	s = (inst >> 10) & 0b111111;
+	r = (inst >> 16) & 0b111111;
+	tmp1 = LogicalImmTable[s];
+if db > 3 then {
+fderr.str("BitMask s="); fderr.uint(s);
+fderr.str(" r="); fderr.uint(r);
+fderr.str(" W="); fderr.uint((inst >> 31)&1);
+fderr.str(" N="); fderr.uint((inst >> 22)&1);
+fderr.str(" tmp="); fderr.hex32(tmp1); fderr.nl(); }
+	if inst & 0x8000_0000 != 0 then		// sf=1 64-bit
+	{   if inst & 0x0040_0000 != 0 then 	// N=1
+	    	tmp2 = Word(tmp1);			// zero extend
+	    else
+		tmp2 = (tmp1 << 32) | tmp1;	// dup pattern in hi half
+	    if r != 0 then
+		tmp2 = _ror(tmp2, r);		// 64-bit rotate
+	}
+	else					// 32-bit
+	{   // sf=0, if N=1 then reserved value, not checked
+	    if r != 0 then
+		tmp1 = _ror(tmp1, r);		// 32-bit rotate
+	    tmp2 = Word(tmp1);			// zero extend
+	}	
+	return tmp2;
+    }
+
+    // Load/Store subroutine
+    proc LoadStore1(inst: Inst)
+    {	var rd, rm, rn, sz: _uint;
+	var offs: SImm;
+	var addr: Addr;
+	var tmp: Word;
+	var store: boolean;
+	var signed: boolean;
+	var writeback: boolean;
+
+	signed = false; store = false;		// default to unsigned load
+	writeback = false;	// default
+	sz = (inst >> 30) & 0b11;
+	rd = inst & 0b11111;	// otherwise known as Rt
+	if inst & 0x2000_0000 == 0 then		// load literal
+	{   offs = XSImm(5, 23, inst);
+	    addr = reg[PC] + offs;
+	    if sz
+	    is 0b00, 0b10 then
+	    {	tmp = Read(addr, HALF);
+		if sz == 0b10 then
+		    tmp = Sext(31, tmp);
+	    }
+	    is 0b01 then
+		tmp = Read(addr, WORD);
+	    is 0b11 then
+		return;		// prefetch, ignore
+if db > 1 then {
+fderr.str("LD literal sz=");  fderr.uint(sz);
+fderr.str(" rd="); fderr.uint(rd);
+fderr.str(" addr="); fderr.hex64(addr); fderr.nl(); }
+	    reg[rd] = tmp;
+	}
+	else	// inst & 0x2000_0000 != 0
+	{   rn = (inst >> 5) & 0b11111;
+	    if inst & 0x0100_0000 == 0 then
+	    {   if inst & 0x0020_0000 == 0 then
+		{   offs = XSImm(12, 20, inst);
+		    addr = reg[rn];
+		    if (inst >> 10) & 0b11
+		    is 0b00 then	// unscaled
+			addr += offs;	// no writeback
+		    is 0b01 then	// post-index
+			writeback = true;
+		    is 0b11 then	// pre-index
+		    {   addr += offs;
+			writeback = true;
+		    }
+		    is 0b10 then	// scaled?
+		    {
+Fault("Unimplemented STTRx", inst);
+		    }
+		    if (inst >> 22) & 0b111
+		    is 0b000 then store = true;		// STRB,STRH,STR
+		    is 0b001 then ;			// LDRB,LDRH,LDR
+		    is 0b010 then signed = true;	// LDRSB, LDRSH, LDRSW
+		    else
+		    {
+Fault("Undecoded load/store 1a", inst);
+		    }
+		}
+		else	// inst & 0x0020_0000 != 0
+		{	// LD/ST via register (indexed)
+		    rm = (inst >> 16) & 0b11111;
+		    addr = reg[rm];
+if db > 2 then {fderr.str("rm=");  fderr.uint(rm);
+fderr.str(" addr=");  fderr.hex64(addr); }
+		    if (inst >> 13) & 0b111
+		    is 0b010 then	// UXTW
+			addr = addr & 0xFFFF;
+		    is 0b110 then	// SXTW
+			addr = Sext(31, addr);
+		    is 0b011 then	// LSL (UXTX)
+			;
+		    is 0b111 then	// SXTX
+			;		// signed
+		    else
+		    {
+Fault("Undecoded index option", inst);
+		    }
+		    if inst & 0x0000_1000 != 0 then	// S-bit set
+			addr = addr << sz;
+if db > 2 then { fderr.chr(' ');  fderr.hex64(addr); }
+		    addr += reg[rn];
+if db > 2 then { fderr.chr(' ');  fderr.hex64(addr);  fderr.nl(); }
+		    if (inst >> 22) & 0b111
+		    is 0b000 then store = true;	// STRB,STRH,STR
+		    is 0b001 then ;		// LDRB,LDRH,LDR
+		    is 0b010 then signed = true;// LDRS[BHW] 64-bit target
+		    is 0b011 then signed = true;// LDRS[BHW] 32-bit target
+		    else
+		    {
+Fault("Undecoded load/store via register", inst);
+		    }
+	    	}
+	    }
+	    else	// inst & 0x0100_0000 != 0
+	    {   // unsigned offset
+		addr = XUImm(10, 21, inst);
+		addr = addr << sz;		// scaled
+		if (inst >> 22) & 0b11
+		is 0b00 then store = true;
+		is 0b01 then ;
+		is 0b10 then signed = true;	// 64-bit target
+		is 0b11 then signed = true;	// 32-bit target
+		addr += reg[rn];
+	    }
+	    if store then
+	    {	if rd == SP then tmp = 0; else tmp = reg[rd];
+		Write(addr, Width(sz), tmp);
+if db > 1 then {
+fderr.str("ST sz=");  fderr.uint(sz);
+fderr.str(" rd="); fderr.uint(rd);
+fderr.str(" addr="); fderr.hex64(addr); fderr.nl(); }
+	    }
+	    else
+	    {   tmp = Read(addr, Width(sz));
+	    	if signed then
+		    tmp = Sext(8<<sz, tmp);
+if db > 1 then {
+fderr.str("LD sz=");  fderr.uint(sz);
+fderr.str(" rd="); fderr.uint(rd);
+fderr.str(" addr="); fderr.hex64(addr); fderr.nl(); }
+	    	reg[rd] = tmp;
+	    }
+	    if writeback then
+	    	reg[rn] += offs;
+	}
+
+    }
+
+    // Load/Store subroutine for register pairs
+    proc LoadStore2(inst: Inst)
+    {	var rd, rm, rn, rt, sz: _uint;
+	var offs: _int32;	// branch offset
+	var adj: (NONE, PRE, POST);
+	var pair: boolean;
+	var store: boolean;
+	var addr: Addr;
+
+	pair = false;		// default
+	store = false;		// default
+	sz = (inst >> 30) & 0b11;
+	rd = inst & 0b11111;
+	rn = (inst >> 5) & 0b11111;
+	if (inst >> 22) & 0b111
+	is 0b010 then		// STP post-index
+	{   adj = POST;
+	    store = true;
+	    pair = true;
+	}
+	is 0b011 then		// LDP post-index
+	{   adj = POST;
+	    store = false;
+	    pair = true;
+	}
+	is 0b100 then		// STP signed offset
+	{   adj = NONE;
+	    store = true;
+	    pair = true;
+	}
+	is 0b101 then		// LDP signed offset
+	{   adj = NONE;
+	    store = false;
+	    pair = true;
+	}
+	is 0b110 then		// STP pre-index
+	{   adj = PRE;
+	    store = true;
+	    pair = true;
+	}
+	is 0b111 then		// LDP pre-index 
+	{   adj = PRE;
+	    store = false;
+	    pair = true;
+	}
+	else
+	{
+Fault("Undecoded load/store 2", inst);
+	}
+	if pair then
+	{   var tmp: Word;
+	    offs = XSImm(15, 21, inst);
+	    if sz
+	    is 0b10 then offs = offs * 8;
+	    else         offs = offs * 4;
+	    rt = (inst >> 10) & 0b11111;
+if db > 1 then {
+if store then fderr.str("STP sz="); else fderr.str("LDP sz=");
+fderr.uint(sz);
+fderr.str(" rn=");  fderr.uint(rn);
+fderr.str(" rd=");  fderr.uint(rd);
+fderr.str(" rt=");  fderr.uint(rt);
+fderr.str(" offs=");  fderr.int32(offs);
+fderr.nl(); }
+	    if adj == PRE then
+		reg[rn] += offs;
+	    addr = reg[rn];
+	    if adj == NONE then
+	    	addr += offs;
+	    if store then
+	    {   if rd == SP then tmp = 0; else tmp = reg[rd];
+		if sz == 0 then
+		    Write(addr,   WORD, tmp);
+		else
+		    Write(addr,   QUAD, tmp);
+		if rt == SP then tmp = 0; else tmp = reg[rt];
+		if sz == 0 then
+		    Write(addr+4, WORD, tmp);
+		else
+		    Write(addr+8, QUAD, tmp);
+	    } else
+	    {	if sz == 0 then
+		{   reg[rd] = Read(addr, WORD);
+		    reg[rt] = Read(addr+4, WORD);
+		}
+		else
+		{   reg[rd] = Read(addr, QUAD);
+		    reg[rt] = Read(addr+8, QUAD);
+		}
+	    }
+	    if adj == POST then
+		reg[rn] += offs;
+	}
+    }
+
+    proc AddWithCarry(v1: Word, v2: Word, carry_in:0..1): Word, Flags
+    {   var result: Word;
+	var cc: Flags;
+
+	result = v1 + v2 + carry_in;
+	cc.Z = result == 0;
+	cc.N = result&0x80000000 != 0;
+	if carry_in == 0 then
+	    cc.C = result < v1;
+	else
+	    cc.C = result <= v1;
+	cc.V = 0;	// FIXME
+	return result, cc;
+    }
+
+    // ---
+    proc DataProcessingReg1(inst: Inst)
+    {	var rd, rm, rn: _uint;
+	var shf: _uint;
+	var tmp1, tmp2: Word;
+	var flags: Flags;
+	var setflags, sz: boolean;
+
+	setflags = false;	// default
+	sz = inst & 0x8000_0000 != 0;
+	rd = inst & 0b11111;
+	rm = (inst >> 16) & 0b11111;
+	rn = (inst >> 5) & 0b11111;
+	if rn != SP then tmp1 = reg[rn]; else tmp1 = 0;
+	if rm != SP then tmp2 = reg[rm]; else tmp2 = 0;
+	if (inst & 0x0100_0000 == 0 || inst & 0x0020_0000 == 0) then
+	{   shf = (inst >> 10) & 0x3F;		// 6-bit immediate
+	    if shf != 0 then
+	    {	if (inst >> 22) & 0b11
+		is 0b00 then	// LSL
+		    tmp2 = tmp2 << shf;
+		else
+		    Fault("Unimplemented shift dp reg 1", inst);
+	    }
+	}
+	if inst & 0x0100_0000 == 0 then
+	{
+	    if inst & 0x0020_0000 != 0 then		// invert
+		tmp2 = ~tmp2;
+	    if (inst >> 29) & 0b11
+	    is 0b00 then		// AND
+	    {   tmp1 = tmp1 & tmp2;
+if db > 1 then fderr.str("AND");
+	    }
+	    is 0b01 then		// OR
+	    {   tmp1 = tmp1 | tmp2;
+if db > 1 then fderr.str("ORR");
+	    }
+	    is 0b10 then		// EOR
+	    {   tmp1 = tmp1 ^ tmp2;
+if db > 1 then fderr.str("EOR");
+	    }
+	    is 0b11 then		// ANDS
+	    {
+	        tmp1 = tmp1 & tmp2;
+if db > 1 then fderr.str("ANDS");
+	        flags.N = tmp1 & 0x8000_0000 != 0; // FIXME - sign for 32-bit?
+	        flags.Z = tmp1 == 0;
+	        flags.C = false;
+	        flags.V = false;
+	        setflags = true;
+	    }
+if db > 1 then {
+fderr.str(" rd=");  fderr.uint(rd);
+fderr.str(" rm=");  fderr.uint(rm);
+fderr.str(" rn=");  fderr.uint(rn);  fderr.nl(); }
+	    // FIXME - test for store size
+	    reg[rd] = tmp1;
+	}
+	else
+	{
+	    setflags = inst & 0x2000_0000 != 0;
+	    if inst & 0x0020_0000 == 0 then
+	    {
+		if inst & 0x4000_0000 == 0 then		// ADD
+		    tmp1, flags = AddWithCarry(tmp1, tmp2, 0);
+		else					// SUB
+		    tmp1, flags = AddWithCarry(tmp1, ~tmp2, 1);
+if db > 1 then {
+fderr.str("ADD/SUB/CMP rd=");  fderr.uint(rd);
+fderr.str(" rm=");  fderr.uint(rm);
+fderr.str(" rn=");  fderr.uint(rn);
+fderr.str(" tmp1=");  fderr.hex64(tmp1);
+fderr.str(" flags=");  fderr.uint8(_uint8(flags));
+fderr.str(" setflags=");  fderr.uint8(_uint8(setflags)); fderr.nl(); }
+	    }
+	    else	// inst & 0x0020_0000 != 0
+	    {   var n: _uint;
+		shf = (inst >> 10) & 0b111;
+	    	// assert 0 <= shf <= 4
+	    	n = 8 << (inst >> 13) & 0b11;
+	    	if inst & 0x0000_8000 == 0 then	// unsigned
+		    tmp2 = UExtend(0, n-1, tmp2);
+	    	else				// signed
+		    tmp2 = SExtend(0, n-1, tmp2);
+		tmp2 = tmp2 << shf;
+		if inst & 0x4000_0000 == 0 then		// ADD
+		    tmp1, flags = AddWithCarry(tmp1, tmp2, 0);
+		else					// SUB
+		    tmp1, flags = AddWithCarry(tmp1, ~tmp2, 1);
+if db > 1 then {
+fderr.str("ADD/SUB/CMP rd=");  fderr.uint(rd);
+fderr.str(" rm=");  fderr.uint(rm);
+fderr.str(" rn=");  fderr.uint(rn);
+fderr.str(" tmp1=");  fderr.hex64(tmp1);
+fderr.str(" flags=");  fderr.uint8(_uint8(flags));
+fderr.str(" setflags=");  fderr.uint8(_uint8(setflags)); fderr.nl(); }
+	    }
+	    if rd != SP then
+		reg[rd] = tmp1;
+	}
+	if setflags then
+	    SetFlagsNZCV(flags);
+    }
+
+    proc DataProcessingReg2(inst: Inst)
+    {	var rd, rm, rn, ra: _uint;
+	var tmp1, tmp2: Word;
+	var is64: boolean;
+
+	is64 = inst & 0x8000_0000 != 0;
+	rd = inst & 0b11111;
+	rm = (inst >> 16) & 0b11111;
+	rn = (inst >> 5) & 0b11111;
+	if inst & 0x0100_0000 == 0 then			// not 3-source
+	{
+	    if (inst >> 21) & 0b111
+	    is 0b000 then
+		Fault("Unimplemented ADD/SUB with carry", inst);
+	    is 0b010 then
+		Fault("Unimplemented conditional compare", inst);
+	    is 0b100 then	// CSEL
+	    {   if rn == SP then tmp1 = 0; else tmp1 = reg[rn];
+		if rm == SP then tmp2 = 0; else tmp2 = reg[rm];
+		if !CondPassed(CondCode((inst >> 12) & 0b1111)) then
+		{   tmp1 = tmp2;
+		    if inst & 0x4000_0000 != 0 then
+			tmp1 = ~tmp1;
+		    if inst & 0x0000_0400 != 0 then
+			tmp1 += 1;
+		}
+		reg[rd] = tmp1;
+if db > 1 then {
+fderr.str("CSEL rd=");  fderr.uint(rd);
+fderr.str(" rm=");  fderr.uint(rm);
+fderr.str(" rn=");  fderr.uint(rn);  fderr.nl(); }
+	    }
+	    is 0b110 then			// 1 or 2-source
+	    {   if rn == SP then tmp1 = 0; else tmp1 = reg[rn];
+		if inst & 0x4000_0000 == 0 then	// 2-source
+		{   if rm == SP then tmp2 = 0; else tmp2 = reg[rm];
+		    if (inst >> 10) & 0b111111
+		    is 0b000010 then	// UDIV
+		    {   if tmp2 == 0 then
+			    tmp1 = 0;
+			else
+			    tmp1 = tmp1 / tmp2;
+		    }
+		    is 0b000011 then	// SDIV
+		    {
+			Fault("Unimplemented SDIV", inst);
+		    }
+		    is 0b001000 .. 0b001011 then
+		    {	var shf: shiftT;
+			shf = shiftT((inst >> 10) & 0b11);
+if db > 1 then {
+fderr.str(shiftN[shf]);
+fderr.str(" rd=");  fderr.uint(rd);
+fderr.str(" rm=");  fderr.uint(rm);
+fderr.str(" rn=");  fderr.uint(rn);  fderr.nl(); }
+			if shf
+			is LSL then
+			    tmp1 = tmp1 << tmp2;
+			is LSR then
+			    tmp1 = tmp1 >> tmp2;
+			is ASR then
+			{   var tmps: SWord;
+			    tmps = SWord(tmp1);
+			    tmps = tmps >> tmp2;
+			    tmp1 = Word(tmp2);
+			}
+			is ROR then
+			    tmp1 = _ror(tmp1, tmp2);
+		    }
+		    else
+			Fault("Unimplemented dp reg2 2-source", inst);
+		}
+		else				// 1-source
+		{
+		    if (inst >> 10) & 0b111111
+		    is 0b000000 then	// RBIT
+		    {	tmp1 = RevBits(tmp1, is64);
+if db > 1 then fderr.str("RBIT");
+		    }
+		    is 0b000001 then	// REV16
+		    {	tmp1 = RevBytes16(tmp1);
+if db > 1 then fderr.str("REV16");
+		    }
+		    is 0b000010 then	// REV32
+		    {	tmp1 = RevBytes32(tmp1);
+if db > 1 then fderr.str("REV32");
+		    }
+		    is 0b000011 then	// REV64
+		    {	tmp1 = RevBytes64(tmp1);
+if db > 1 then fderr.str("REV");
+		    }
+		    is 0b000100 then	// CLZ
+			tmp1 = _clz(tmp1);
+		    is 0b000101 then	// CLS
+			Fault("Unimplemented CLS", inst);
+		    else
+			Fault("Unimplemented dp reg2 1-source", inst);
+if db > 1 then {
+fderr.str(" rd="); fderr.uint(rd);
+fderr.str(" rn="); fderr.uint(rn);
+fderr.nl(); }
+		}
+		if !is64 then tmp1 = tmp1 & 0xFFFFFFFF;
+		reg[rd] = tmp1;
+	    }
+	    else
+		Fault("Unimplemented dp reg 2a", inst);
+	}
+	else						// 3-source
+	{   
+	    ra = (inst >> 10) & 0b11111;
+	    if ra == SP then tmp1 = 0; else tmp1 = reg[ra];
+	    if (inst >> 21) & 0b111
+	    is 0b000 then		// MADD/MSUB 
+	    {   tmp2 = reg[rn] * reg[rm];
+		if inst & 0x0000_8000 != 0 then
+		    tmp1 -= tmp2;
+		else
+		    tmp1 += tmp2;
+		reg[rd] = tmp1;
+if db > 1 then {
+fderr.str("MULx rd=");  fderr.uint(rd);
+fderr.str(" rm=");  fderr.uint(rm);
+fderr.str(" rn=");  fderr.uint(rn);  fderr.nl(); }
+	    }
+	    is 0b010 then		// SMULH
+	    {   var tmpsd: _int128;
+if db > 1 then {
+fderr.str("SMULH rd=");  fderr.uint(rd);
+fderr.str(" rm=");  fderr.uint(rm);
+fderr.str(" rn=");  fderr.uint(rn);  fderr.nl(); }
+		tmpsd = SWord(reg[rn]) * SWord(reg[rm]);
+		tmpsd = tmpsd >> 64;
+		reg[rd] = Word(tmpsd);
+	    }
+	    is 0b110 then		// UMULH
+	    {   var tmpud: _uint128;
+if db > 1 then {
+fderr.str("UMULH rd=");  fderr.uint(rd);
+fderr.str(" rm=");  fderr.uint(rm);
+fderr.str(" rn=");  fderr.uint(rn);  fderr.nl(); }
+		tmpud = reg[rn] * reg[rm];
+		tmpud = tmpud >> 64;
+		reg[rd] = Word(tmpud);
+	    }
+	    else
+		Fault("Undecoded dp reg 3-source", inst);
+	}
+    }
+
+
+    proc DataProcessingImm1(inst: Inst)
+    {	var rd, rn: _uint;
+	var tmp: Word;
+	var imm: Word;
+	var offs: SImm;
+	var flags: Flags;
+	var setflags: boolean;
+
+	rd = inst & 0b11111;
+	if inst & 0x0100_0000 == 0 then		// ADR, ADRP
+	{
+	    offs = XSImm(5, 23, inst);				// hi part
+	    offs = (offs << 2) | ((inst >>29) & 0x0000_0003);	// lo part
+	    tmp = instpc;
+	    if inst & 0x8000_0000 != 0 then	// adrp
+	    {	offs = offs << 12;
+		tmp = tmp & 0xFFFFFFFF_FFFFF000;
+	    }
+if db > 1 then {
+fderr.str("ADR/ADRP rd=");  fderr.uint(rd);
+fderr.str(" offs=");  fderr.hex64(offs);
+fderr.str(" tmp=");  fderr.hex64(tmp);  fderr.nl(); }
+	    reg[rd] = tmp + offs;
+	}
+	else					// ADD, SUB, CMP
+	{   rn = (inst >> 5) & 0b11111;
+	    imm = Word(XUImm(10, 21, inst));
+	    setflags = inst & 0x2000_0000 != 0;
+	    if (inst >> 22) & 0b11		// shift code
+	    is 0b00 then ;
+	    is 0b01 then imm = imm << 12;
+	    else ;	// reserved
+if db > 1 then {
+fderr.str("ADD/SUB/CMP rd="); fderr.uint(rd);
+fderr.str("  rn="); fderr.uint(rn);
+fderr.str(" imm="); fderr.hex64(imm); fderr.nl(); }
+	    if inst & 0x4000_0000 == 0 then	// ADD
+		tmp, flags = AddWithCarry(reg[rn], imm, 0);
+	    else
+		tmp, flags = AddWithCarry(reg[rn], ~imm, 1);
+	    if inst & 0x8000_0000 == 0 then	// 32-bit
+	    {   // FIXME
+	    }
+	    if rd != SP || !setflags then
+		reg[rd] = tmp;
+	    if setflags then	// set flags
+		SetFlagsNZCV(flags);
+	}
+    }
+
+    // ---1001
+    proc DataProcessingImm2(inst: Inst)
+    {   var rd, rn: _uint;
+	var r, s: _uint;
+	var tmp1, tmp2: Word;
+	var setflags, sf: boolean;
+
+	if (inst >> 23) & 0b11
+	is 0b00 then
+	{   rd = inst & 0b11111;
+	    rn = (inst >> 5) & 0b11111;
+	    sf = (inst & 0x8000_0000) != 0;
+	    tmp1 = BitMask(inst);
+	    if rn == SP then tmp2 = 0; else tmp2 = reg[rn];
+if db > 2 then {
+fderr.str("AND/ORR/EOR tmp1="); fderr.hex64(tmp1);
+fderr.str(" tmp2="); fderr.hex64(tmp2); fderr.nl(); }
+	    if (inst >> 29) & 0b11
+	    is 0b00 then		// AND
+	    {   tmp1 = tmp1 & tmp2;
+if db > 1 then fderr.str("AND");
+		setflags = false;
+	    }
+	    is 0b01 then		// ORR
+	    {   tmp1 = tmp1 | tmp2;
+if db > 1 then fderr.str("ORR");
+		setflags = false;
+	    }
+	    is 0b10 then		// EOR
+	    {   tmp1 = tmp1 ^ tmp2;
+if db > 1 then fderr.str("EOR");
+		setflags = false;
+	    }
+	    is 0b11 then		// ANDS
+	    {   tmp1 = tmp1 & tmp2;
+if db > 1 then fderr.str("ANDS");
+		setflags = true;
+	    }
+if db > 1 then {
+fderr.str(" rd="); fderr.uint(rd);
+fderr.str(" rn="); fderr.uint(rn); fderr.nl(); }
+	    // FIXME - truncate on 32-bit size?
+	    if rd != SP then
+		reg[rd] = tmp1;
+	    if setflags then
+	    {   var flags: Flags;
+		if inst & 0x8000_0000 == 0 then
+		    tmp1 = tmp1 << 32;
+		flags.V = 0;
+		flags.C = 0;
+		flags.Z = tmp1 == 0;
+		flags.N = tmp1 >> 63;
+		SetFlagsNZCV(flags);
+	    }
+	}
+	is 0b01 then
+	{   rd = inst & 0b11111;
+	    s  = ((inst >> 21) & 0b11) << 4;	// shift amount
+	    tmp1 = Word(XUImm(5, 20, inst));
+if db > 1 then {
+fderr.str("MOVN/MOVZ/MOVK rd="); fderr.uint(rd);
+fderr.str(" s="); fderr.uint(s);
+fderr.str(" tmp="); fderr.hex64(tmp1); }
+	    tmp1 = tmp1 << s;
+	    if (inst >> 29) & 0b11
+	    is 0b00 then	// MOVN
+		tmp1 = ~tmp1;
+	    is 0b10 then	// MOVZ
+		;
+	    is 0b11 then	// MOVK
+	    {	tmp2 = reg[rd];
+		tmp2 = tmp2 & ~(0xFFFF << s);
+		tmp1 = tmp1 | tmp2;
+	    }
+	    else
+	    {
+Fault("Illegal MOV wide", inst);
+	    }
+if db > 1 then {
+fderr.chr(','); fderr.hex64(tmp1); fderr.nl(); }
+	    reg[rd] = tmp1;
+	}
+	is 0b10 then	// bitfield instructions
+	{   rd = inst & 0b11111;
+	    rn = (inst >> 5) & 0b11111;
+	    s = (inst >> 10) & 0b111111;
+	    r = (inst >> 16) & 0b111111;
+	    tmp1 = reg[rn];
+	    if (inst >> 29) & 0b11
+	    is 0b00 then			// SBFM
+	    {
+if db > 1 then {
+fderr.str("SBFM rd=");  fderr.uint(rd);
+fderr.str(" rn="); fderr.uint(rn);
+fderr.str(" s="); fderr.uint(s);
+fderr.str(" r="); fderr.uint(r); fderr.nl(); }
+		tmp1 = SBitField(r, s, tmp1);
+	    }
+	    is 0b10 then			// UBFM
+	    {
+if db > 1 then {
+fderr.str("UBFM rd=");  fderr.uint(rd);
+fderr.str(" rn="); fderr.uint(rn);
+fderr.str(" s="); fderr.uint(s);
+fderr.str(" r="); fderr.uint(r); fderr.nl(); }
+		if s < r then
+		{   if inst & 0x8000_0000 == 0 then	// 32-bit
+		    {   tmp1 = tmp1 & 0xFFFF_FFFF;
+			tmp1 = tmp1 << (32 - r);
+		    }
+		    else				// 64-bit
+			tmp1 = tmp1 << (64 - r);
+		}
+		else
+		    tmp1 = UBitField(r, s, tmp1);
+	    }
+	    is 0b01 then			// BFM
+	    {
+if db > 1 then {
+fderr.str("BFM rd=");  fderr.uint(rd);
+fderr.str(" rn="); fderr.uint(rn);
+fderr.str(" s="); fderr.uint(s);
+fderr.str(" r="); fderr.uint(r); fderr.nl(); }
+		tmp1 = BitFieldModify(r, s, tmp1, reg[rd]);
+	    }
+	    else
+	    	Fault("Illegal instruction", inst);
+	    reg[rd] = tmp1;
+	}
+	else
+	{
+Fault("Undecoded dp imm 2b", inst);
+	}
+    }
+
+
+    // ---101x
+    proc Branch(inst: Inst)
+    {   var rn: _uint;
+	var offs: SImm;
+	var imm:  UImm;
+	var tmp: Word;
+	var shf: _uint;
+
+	if (inst >> 29) & 0b111
+	is 0b000, 0b100 then			// B, BL
+	{   offs = XSImm(0, 25, inst);
+	    if inst & 0x8000_0000 != 0 then	// BL
+		reg[LR] = reg[PC];
+	    reg[PC] = instpc + (offs << 2);
+if db > 1 then fderr.str("B/BL\n");
+	}
+	is 0b001, 0b101 then
+	{   rn = inst & 0b11111;	// actually Rt
+	    tmp = reg[rn];
+	    if inst & 0x0200_0000 == 0 then	// CBZ, CBNZ
+	    {   offs = XSImm(5, 23, inst);
+		if inst & 0x8000_0000 == 0 then	// 32-bit
+		    tmp = tmp & 0xFFFF;
+		if inst & 0x0100_0000 == 0 then			// CBZ
+	        {   if tmp == 0 then
+			reg[PC] = instpc + (offs << 2);
+if db > 1 then fderr.str("CBZ"); 
+		}
+		else						// CBNZ
+		{   if tmp != 0 then
+		        reg[PC] = instpc + (offs << 2);
+if db > 1 then fderr.str("CBNZ"); 
+		}
+	    }
+	    else				// TBZ, TBNZ
+	    {   offs = XSImm(5, 18, inst);
+		shf = (inst >> 19) & 0b11111;
+		if inst & 0x8000_0000 != 0 then shf += 32;
+		tmp = (tmp >> shf) & 0b1;
+		if inst & 0x0100_0000 == 0 then			// TBZ
+	        {   if tmp == 0 then
+			reg[PC] = instpc + (offs << 2);
+if db > 1 then fderr.str("TBZ");
+		}
+		else						// TBNZ
+		{   if tmp != 0 then
+		        reg[PC] = instpc + (offs << 2);
+if db > 1 then fderr.str("TBNZ");
+		}
+if db > 1 then { fderr.str(" bit="); fderr.uint(shf); }
+	    }
+if db > 1 then {
+fderr.str(" rt="); fderr.uint(rn); 
+fderr.chr('='); fderr.hex64(tmp); fderr.nl(); }
+	}
+	is 0b010 then				// B.cond
+	{   offs = XSImm(5, 23, inst);
+	    if CondPassed(CondCode(inst & 0b1111)) then
+		reg[PC] = instpc + (offs << 2);
+if db > 1 then fderr.str("B.cond\n");
+	}
+	is 0b110 then
+	{   if (inst >> 24) & 0b11
+	    is 0b00 then	// exception generation
+	    {	faultarg = XUImm(5, 20, inst);
+		if (inst >> 21) & 0b11
+		is 0b00 then	// SVC
+		    SysCall();
+		is 0b01 then	// BKP
+		    fault = BKPT;
+		is 0b10 then	// HLT
+		{
+if db > 1 then fderr.str("HLT\n");
+		    fault = OTHER;
+		}
+	    }
+	    is 0b01 then	// system
+	    {
+		Fault("Unimplemented system instruction", inst);
+	    }
+	    is 0b10 then	// unconditional branch register
+	    {   rn = (inst >> 5) & 0b11111;
+		if (inst >> 21) & 0b11 == 0b01 then	// BLR
+		    reg[LR] = reg[PC];
+		reg[PC] = reg[rn];
+if db > 1 then fderr.str("BR/BLR/RET\n");
+	    }
+	    else
+	    {
+		Fault("Undecoded branch", inst);
+	    }
+	}
+	else
+	{
+	}
+    }
+
+    // run a single instruction
+    proc Run(): boolean
+    {
+	var inst: Inst;
+	var rd, rm, rn, rt: _uint;
+	var offs: _int32;	// branch offset
+	var imm: _uint64;
+
+	cycles += 1;
+	fault = NONE;
+	instpc = reg[PC];
+	inst = Read(instpc, WORD);
+if db > 0 then {
+fderr.str("\nPC="); fderr.hex64(instpc);
+fderr.str(" inst="); fderr.hex32(inst); fderr.nl(); }
+	reg[PC] += 4;
+	if (inst >> 25) & 0b1111
+	is 0b0000..0b0011 then	// unallocated
+	    Fault("Unallocated instruction", inst);
+	is 0b0100, 0b0110 then LoadStore2(inst);
+	is 0b0101         then DataProcessingReg1(inst);
+	is 0b1101         then DataProcessingReg2(inst);
+	is 0b0111, 0b1111 then	// data processing - SIMD and FP
+	    Fault("Unimplemented simd/fp instruction", inst);
+	is 0b1000         then DataProcessingImm1(inst);
+	is 0b1001         then DataProcessingImm2(inst);
+	is 0b1010, 0b1011 then Branch(inst);
+	is 0b1100, 0b1110 then LoadStore1(inst);
+	return fault == NONE;
+    }
+
+    // ****
+    // initialize state using ELF segments
+    // ****
+    proc Load()
+    {
+    }
+
+    // ****
+    // chip reset
+    // ****
+    proc Reset(addr: Addr)
+    {
+//	reg[SP] = Read(addr+0, WORD);
+//	reg[PC] = Read(addr+4, WORD) & ~1;
+	reg[PC] = Read(memtab[0].beg+0x18, QUAD);
+	reg[SP] = memtab[0].end+1;
+	// FIXME - fake argument list
+	reg[0]  = Read(memtab[1].beg, QUAD);
+//	reg]1]  = memtab[1].beg+8;	// FIXME - compiler error?
+	reg[1]  = 0x00F0_0008;
+    }
+
+    // ****
+    // display current register state
+    // ****
+    proc Dump()
+    {   var n: 0..32;
+
+	n = 0;
+	fderr.str("x0-x3    ");
+	while n < 4 do
+	{   fderr.str("  ");
+	    fderr.hex64(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\nx4-x7    ");
+	while n < 8 do
+	{   fderr.str("  ");
+	    fderr.hex64(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\nx8-x11   ");
+	while n < 12 do
+	{   fderr.str("  ");
+	    fderr.hex64(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\nx12-x15  ");
+	while n < 16 do
+	{   fderr.str("  ");
+	    fderr.hex64(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\nx16-x19  ");
+	while n < 20 do
+	{   fderr.str("  ");
+	    fderr.hex64(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\nx20-x23  ");
+	while n < 24 do
+	{   fderr.str("  ");
+	    fderr.hex64(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\nx24-x27  ");
+	while n < 28 do
+	{   fderr.str("  ");
+	    fderr.hex64(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\nr28-lr,sp");
+	while n < 32 do
+	{   fderr.str("  ");
+	    fderr.hex64(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\npc         ");
+	fderr.hex64(reg[PC]);
+	fderr.str("      NZCV  ");
+	fderr.uint8(_uint8(psN));
+	fderr.uint8(_uint8(psZ));
+	fderr.uint8(_uint8(psC));
+	fderr.uint8(_uint8(psV));
+	fderr.str("    cycles ");
+	fderr.uint(cycles);
+	fderr.nl();
+    }
+
+
+    proc BackTrace()
+    {   var fp, ra: Word;
+
+	fp = reg[29];
+	while fp > reg[SP] do
+	{
+	    ra = Read(fp+8, WORD);
+	    fderr.str("fp="); fderr.hex64(fp);
+	    fderr.str(" ra="); fderr.hex64(ra);
+	    fderr.nl();
+	    fp = Read(fp, WORD);
+	}
+    }
+}
+
+package chip
+{
+    const name = "generic";
+    const ResetAddress = 0;
+
+    const D: arm64.MemFlags = { .x=true, .w=true, .a=true, .l=true };
+    var MemTab: []arm64.Mem =
+    {
+	{ 0, 0x0040_0000, 0x00EF_FFFF, D, 0, 0, 0 },		// RAM
+	{ 0, 0x00F0_0000, 0x00F0_0FFF, D, 0, 0, 0 },		// ARGS
+    };
+    const NSegs = MemTab?len;
+    const NELFSegs = 3;
+
+    proc Init(argc: _uint, argv: @[]@[]_byte)
+    {   var i, j, k, n: _uint;
+
+	memory = pMemory(sys.malloc(Memory?size + NELFSegs*Segment?size));
+	j = 0;
+	for i from 0 to MemTab?len-1 do
+	{
+	    if MemTab[i].flg.a then	// allocate memory
+	    {
+var size: _uint;
+var addr: _address;
+size = MemTab[i].end - MemTab[i].beg + 1;
+addr = sys.malloc(size);
+fderr.str("size="); fderr.uint(size);
+fderr.str(" addr="); fderr.hex(_uint(addr));  fderr.nl();
+MemTab[i].adr = addr;
+//	        MemTab[i].adr = sys.malloc(MemTab[i].end - MemTab[i].beg + 1);
+	    }
+	    if MemTab[i].flg.l then	// ELF needs to load this
+	    {   if j < NELFSegs then
+	    	{   memory.seg[j].mem = MemTab[i].adr;
+	    	    memory.seg[j].beg = MemTab[i].beg;
+	    	    memory.seg[j].end = MemTab[i].end;
+	    	    memory.seg[j].typ = 0;
+	    	    j += 1;
+	    	}
+	    }
+	}
+	memory.nsegs = j;
+	arm64.memtab = MemTab;
+	arm64.nmem = MemTab?len;
+	// generate argument list
+	const ptrsize = 8;	// size of pointer on target
+	arm64.Write(arm64.memtab[1].beg,   QUAD, argc);
+	j = ptrsize;		// really size of argc
+	k = j + ptrsize * argc;
+	for n from 0 to argc-1 do
+	{
+fderr.str("argv["); fderr.uint(n);
+fderr.str("]="); fderr.str(argv[n]@); fderr.nl();
+	    arm64.Write(arm64.memtab[1].beg+j,   QUAD, arm64.memtab[1].beg+k);
+	    i = 0;
+	    loop
+	    {   arm64.Write(arm64.memtab[1].beg+k+i,BYTE, argv[n]@[i]);
+	      exit argv[n]@[i] == 0;
+		i += 1;
+	    }
+	    k += i+1;
+	    j += ptrsize;
+	}
+    }
+}
+

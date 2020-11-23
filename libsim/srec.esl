@@ -1,0 +1,122 @@
+package srec
+{
+    proc Store(data: @[]_byte, alen: _uint, dlen: _uint)
+    {   var i: _uint;
+	var addr: _uint32;
+
+	addr = 0;
+	for i from 0 to alen-1 do
+	{   addr = addr << 8;
+	    addr += data[i];
+	}
+	cpu.LoadBytes(addr, data[i:], dlen);
+    }
+
+    proc Start(data: @[]_byte, alen: _uint)
+    {   var i: _uint;
+	var addr: _uint32;
+
+	addr = 0;
+	for i from 0 to alen-1 do
+	{   addr = addr << 8;
+	    addr += data[i];
+	}
+	// FIXME - unused?
+    }
+
+    proc GetHex(s: @[]_byte, b: @[]_byte, n: _uint): _uint
+    {   var v: _uint32;
+	var i, j: _uint;
+
+	v = 0;
+	i = 0;
+	j = 0;
+	while j < n do
+    	{
+    	    v = v << 4;
+    	    if s[i]
+ 	    is '0'..'9' then v += s[i] - '0';
+	    is 'A'..'F' then v += s[i] - 'A' + 10;
+	    is 'a'..'f' then v += s[i] - 'a' + 10;
+	    else return n;
+	    i += 1;
+	    if i&1 == 0 then
+	    {   b[j] = v;
+	    	j += 1;
+	    	v = 0;
+	    }
+    	}
+    	return n;
+    }
+
+    proc Line(line: @[]_byte, len: _uint)
+    {   var i, k, n: _uint;
+	var adr: _uint32;
+	var data: [64]_byte;
+
+	if line[0] == 'S' then
+	{
+	    n = GetHex(line[2:], data, (len-2)/2);
+	    k = data[0];	// bytes of data
+	    // FIXME - check for short line
+	    // FIXME - validate checksum
+	    if line[1]
+	    is '0' then	{}			 // header, ignore
+	    is '1' then Store(data[1:], 2, k-3); // data, 16-bit address
+	    is '2' then Store(data[1:], 3, k-4); // data, 24-bit address
+	    is '3' then Store(data[1:], 4, k-5); // data, 32-bit address
+	    is '7' then Start(data[1:], 4);	 // start, 32-bit address
+	    is '8' then Start(data[1:], 3);	 // start, 24-bit address
+	    is '9' then Start(data[1:], 2);	 // start, 16-bit address
+	    else
+	    {
+fderr.str("Unimplemented format: "); fderr.chr(line[1]); fderr.nl();
+	    }
+	}
+	else
+	{
+fderr.str("Missing leading 'S'\n");
+fderr.strn(line, _min(len,48));
+	}
+    }
+
+    proc FindEOL(line: @[]_byte, len: _uint): _uint
+    {   var i: _uint;
+
+	i = 0;
+	while i < len && line[i] != '\n' do
+	    i += 1;
+	return i;
+    }
+
+    proc Load(fd: sys.fildes, memory: @Memory)
+    {
+	var k: _int;
+	var i, j, m, n: _uint;
+	var buf: [4096]_byte;
+
+	i = 0;
+	n = 0;
+	loop
+	{   m = buf?len - n;
+	    k = sys.read(fd, buf[n:m], m);
+	  exit k <= 0;
+	    n += _uint(k);
+	    i = 0;	// start at beginning of buffer
+//fderr.str("S i,n="); fderr.uint(i); fderr.chr(','); fderr.uint(n); fderr.nl();
+	    loop
+	    {
+		j = FindEOL(buf[i:n], n) + 1;
+	      exit j > n with	// incomplete line
+	      { buf[0:n] = buf[i:n];	// move remnant up
+	      }
+	    	Line(buf[i:j], j);
+	    	i += j;
+	    	n -= j;
+	      exit n == 0;
+	    }
+//fderr.str("E i,n="); fderr.uint(i); fderr.chr(','); fderr.uint(n); fderr.nl();
+	}
+    }
+}
+

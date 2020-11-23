@@ -1,0 +1,301 @@
+package lpc17xx
+{
+    const name = "lpc1768";
+    const debugout: boolean = true;
+
+    package SC
+    {
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr - 0x400F_C000;
+	    rv = 0;		// default
+	    if offs
+	    is 0x088 then // PLL0 status
+		rv = 0x0700_0000;	// fake lock...
+	    is 0x1A0 then // SCS
+		rv = 0x0000_0040;	// osc ready
+	    LogR("SC", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{
+	    LogW("SC", addr, data, w);
+	}
+    }
+
+    package PC
+    {   var regs:  [32]_uint32;	// not all used
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr - 0x4002_C000;
+	    rv = 0;		// default
+	    if w == WORD && offs < 0x80 then
+		rv = regs[offs>>2];
+	    LogR("PC", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var offs: _uint32;
+
+	    offs = addr - 0x4002_C000;
+	    if w == WORD && offs < 0x80 then
+		regs[offs>>2] = data;
+	    LogW("PC", addr, data, w);
+	}
+    }
+
+    package GPIO
+    {   var regs: [40]_uint32;
+    
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr - 0x2009_C000;
+	    rv = 0;		// default
+	    if w == WORD && offs < 0xA0 then
+		rv = regs[offs>>2];
+	    LogR("GPIO", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var offs: _uint32;
+
+	    offs = addr - 0x2009_C000;
+	    if w == WORD && offs < 0xA0 then
+		regs[offs>>2] = data;
+	    LogW("GPIO", addr, data, w);
+	}
+    }
+
+    package GPINT
+    {
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr - 0x2009_8000;
+	    rv = 0;		// default
+	    LogR("GPINT", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var offs: _uint32;
+
+	    offs = addr - 0x2009_C000;
+	    LogW("GPINT", addr, data, w);
+	}
+    }
+
+    package UART
+    {   type Regs:
+	( RBR, THR, DLL, DLH, IER, IIR, FCR, LCR, LSR, SCR, ACR, ICR, FDR, TER);
+	var regs: [Regs]_byte;
+	
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr - 0x4000_C000;
+	    rv = 0;		// default
+	    if w == BYTE then
+	    {   if offs
+		is 0x00 then
+		{   if regs[LCR] & 0x80 == 0 then
+			rv = regs[RBR];
+		    else
+			rv = regs[DLL];
+		}
+		is 0x04 then
+		{   if regs[LCR] & 0x80 == 0 then
+			rv = regs[IER];
+		    else
+			rv = regs[DLH];
+		}
+		is 0x08 then rv = regs[IIR];
+		is 0x0C then rv = regs[LCR];
+		is 0x14 then rv = 0b0110_0000;  // THRE+TEMT
+		
+	    }
+	    LogR("UART", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var offs: _uint32;
+
+	    offs = addr - 0x4000_C000;
+	    if w == BYTE then
+	    {   if offs
+		is 0x00 then
+		{   if regs[LCR] & 0x80 == 0 then
+		    {	regs[THR] = data;
+			if debugout then
+			    fdout.chr(_uint8(data));
+		    }
+		    else
+			regs[DLL] = data;
+		}
+		is 0x04 then
+		{   if regs[LCR] & 0x80 == 0 then
+			regs[IER] = data;
+		    else
+			regs[DLH] = data;
+		}
+		is 0x08 then regs[FCR] = data;
+		is 0x0C then regs[LCR] = data;
+	    }
+	    LogW("UART", addr, data, w);
+	}
+    }
+
+    package SSP1
+    {   var regs: [10]_uint32;
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr - 0x4003_0000;
+	    rv = 0;		// default
+	    if w == WORD && offs <= 0x24 then rv = regs[offs>>2];
+	    LogR("SSP1", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var offs: _uint32;
+
+	    offs = addr - 0x4003_0000;
+	    if w == WORD && offs <= 0x24 then regs[offs>>2] = data;
+	    LogW("SSP", addr, data, w);
+	}
+    }
+
+    package TMR3
+    {   var regs: [16]_uint32;
+	var ccr: _uint32;
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr - 0x4009_4000;
+	    regs[2] += 100;	// increment TC to fake counting
+	    rv = 0;		// default
+	    if w == WORD then
+	    {   if offs <= 0x3C then
+		    rv = regs[offs>>2];
+		else if offs == 0x70 then
+		    rv = ccr;
+	    }
+	    LogR("TMR3", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var offs: _uint32;
+
+	    offs = addr - 0x4009_4000;
+	    if w == WORD then
+	    {   if offs <= 0x3C then
+		    regs[offs>>2] = data;
+		else if offs == 0x70 then
+		    ccr = data;
+	    }
+	    LogW("TMR3", addr, data, w);
+	}
+    }
+
+    package BOOT
+    {
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+
+	    // FIXME - if addr == 0x1FFF1FF0 this the IAP
+	    // r0 has adr of command vector of 5 words
+	    // r1 has adr of result vector of 5 words
+	    rv = 0x4770;	// bx lr
+	    LogR("BOOT", addr, rv, w);
+	    return rv;
+	}
+    }
+
+    proc NoRead(addr: _uint32, w: cpu.Width): _uint32
+    {
+	LogR("*UNDEF*", addr, 0, w);
+	return 0;
+    }
+
+    proc NoWrite(addr: _uint32, w: cpu.Width, data: _uint32)
+    {
+	LogW("*UNDEF*", addr, data, w);
+    }
+
+    const ResetAddress = 0x00000000;
+    // some useful MemFlags
+    const N: armm.MemFlags = { .w=true };	// all the rest are false
+    const X: armm.MemFlags = { .x=true };
+    const F: armm.MemFlags = { .w=false };
+    const T: armm.MemFlags = { .x=true, .a=true, .l=true };
+    const D: armm.MemFlags = { .w=true, .a=true, .l=true };
+    const R: armm.MemFlags = { .w=false, .a=true, .l=true };
+    var MemTab: []armm.Mem =
+    {	{ 0, 0x0000_0000, 0x0000_FFFF, T, 0, 0, 0 },	// remapped flash
+	{ 0, 0x1000_0000, 0x1000_FFFF, D, 0, 0, 0 },	// 64kB RAM
+	{ 0, 0x1FFF_0000, 0x1FFF_FFFF, X, BOOT.Read, NoWrite, 0 }, // Boot ROM
+	{ 0, 0x2007_C000, 0x2007_FFFF, D, 0, 0, 0 },	// AHB SRAM 32kB
+	{ 0, 0x2008_0000, 0x2008_3FFF, D, 0, 0, 0 },	// AHB SRAM 32kB
+	{ 0, 0x2009_C000, 0x2009_FFFF, N, GPIO.Read, GPIO.Write, 0 },
+	{ 0, 0x4000_C000, 0x4000_FFFF, N, UART.Read, UART.Write, 0 },
+	{ 0, 0x4002_8000, 0x4002_BFFF, N, GPINT.Read, GPINT.Write, 0 },
+	{ 0, 0x4002_C000, 0x4002_FFFF, N, PC.Read, PC.Write, 0 },
+	{ 0, 0x4003_0000, 0x4003_3FFF, N, SSP1.Read, SSP1.Write, 0 },
+	{ 0, 0x4009_4000, 0x4009_7FFF, N, TMR3.Read, TMR3.Write, 0 }, //TIMER3
+	{ 0, 0x400F_C000, 0x400F_FFFF, N, SC.Read, SC.Write, 0 },
+    	{ 0, 0xE000_E010, 0xE000_E01F, N, syscm3.Tick.Read, syscm3.Tick.Write, 0 },
+    	{ 0, 0xE000_E100, 0xE000_E7FF, N, syscm3.NVIC.Read, syscm3.NVIC.Write, 0 },
+    	{ 0, 0xE000_ED00, 0xE000_ED8F, N, syscm3.CB.Read, syscm3.CB.Write, 0 },
+    	{ 0, 0xE000_EDF0, 0xE000_EDFF, N, syscm3.DB.Read, syscm3.DB.Write, 0 }
+    };
+    const NSegs = MemTab?len;
+
+    const NELFSegs = 3;
+
+
+    proc Init(argc: _uint, argv: @[]@[]_byte)
+    {   var i, j: _uint;
+
+	memory = pMemory(sys.malloc(Memory?size + NELFSegs*Segment?size));
+	j = 0;
+	for i from 0 to MemTab?len-1 do
+	{
+	    if MemTab[i].flg.a then	// allocate memory
+	    {   MemTab[i].adr = sys.malloc(MemTab[i].end - MemTab[i].beg + 1);
+	    }
+	    if MemTab[i].flg.l then	// ELF needs to load this
+	    {   if j < NELFSegs then
+	    	{   memory.seg[j].mem = MemTab[i].adr;
+	    	    memory.seg[j].beg = MemTab[i].beg;
+	    	    memory.seg[j].end = MemTab[i].end;
+	    	    memory.seg[j].typ = 0;
+	    	    j += 1;
+	    	}
+	    }
+	}
+	memory.nsegs = j;
+	armm.memtab = MemTab;
+	armm.nmem = MemTab?len;
+    }
+}
+
+

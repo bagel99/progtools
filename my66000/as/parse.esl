@@ -1,0 +1,1384 @@
+
+package parse
+{
+    const db: boolean = false;
+    alias lex.SkipWS as SkipWS;
+    alias lex.Symbol as GetSym;
+    alias expr.Expr0 as Expr;
+    alias segment.curseg as curseg;
+
+    proc TryReg(s: @[]_byte): @[]_byte, _uint
+    {
+	if s[0] == 'r' then
+	{   if s[1]
+	    is '1' then
+	    {	if s[2]
+	    	is '0'..'9' then
+	    	    return s[3:], s[2] - '0' + 10;
+	    	else
+	    	    return s[2:], 1;
+	    }
+	    is '2' then
+	    {	if s[2]
+	    	is '0'..'9' then
+	    	    return s[3:], s[2] - '0' + 20;
+	    	else
+	    	    return s[2:], 2;
+	    }
+	    is '3' then
+	    {	if s[2]
+	    	is '0'..'1' then
+	    	    return s[3:], s[2] - '0' + 30;
+	    	else
+	    	    return s[2:], 3;
+	    }
+	    is '0', '4'..'9' then
+	    	return s[2:], s[1] - '0';
+	}
+	elif s[0] == 's' && s[1] == 'p' then return s[2:], 31;
+	elif s[0] == 'i' && s[1] == 'p' then return s[2:], 32;
+	return s[0:], 0;
+    }
+
+    proc GetReg(s: @[]_byte): @[]_byte, _uint
+    {   var reg: _uint;
+	var r: @[]_byte;
+
+	r, reg = TryReg(s);
+	if r == s then
+{
+	    Syntax("register expected");
+fde.str(r); fde.nl();
+}
+	return r, reg;
+    }
+
+    proc GetBaseReg(s: @[]_byte): @[]_byte, _uint
+    {   var reg: _uint;
+
+         s, reg = GetReg(s);
+	 if reg == 32 then reg = 0;	// ip as base register
+	 return s, reg;
+    }
+
+    proc CheckComma(s: @[]_byte): @[]_byte
+    {
+	s = SkipWS(s);
+	if s[0] != ',' then
+	    return 0;
+	s = SkipWS(s[1:]);
+	return s;
+    }
+
+    proc SkipComma(s: @[]_byte): @[]_byte
+    {   var r: @[]_byte;
+
+	r = CheckComma(s);
+	if r == 0 then
+	{   Syntax("',' expected");
+	    return s;
+	}
+	return r;
+    }
+
+    proc ScanComma(s: @[]_byte, term: _byte): @[]_byte
+    {
+	loop
+	{ exit s[0] == ',';
+	  exit s[0] == '\n' || s[0] == term with s = 0;
+	    s = s[1:];
+	}
+	return s;
+    }
+
+
+import my66000def;
+
+    const CondNames4: [Conditions][4]_byte =
+    {	'nm',  'nn',  'eq0', 'ne0', 'ge0', 'gt0', 'le0', 'lt0',
+	'fcm', 'fun', 'feq', 'fne', 'fge', 'flt', 'fle', 'fgt',
+	'fde', "",    'fif', "",    'fna', "",    'fneg', "",
+	'in',  'exit',"",    "",    "",    "",    'rfe', 'al'
+    };
+
+    proc GetCond(s: @[]_byte): @[]_byte, _uint
+    {   var r:  @[]_byte;
+	var n: _uint;
+	var cond: [4]_byte;
+
+	r = s;
+	s, n = lex.Symbol(s);
+	if s == r then	// not a symbol
+	{   Syntax("Expecting branch condition");
+	    return r, 0;
+	}
+	cond[0:n] = r[0:n];
+	while n < 4 do
+	{   cond[n] = 0;
+	    n += 1;
+	}
+//fde.str("GetCond='"); fde.strn(cond, 4); fde.str("'\n");
+	// search for condition name
+	n = 0;
+	while n <= 31 && cond != CondNames4[n] do
+	    n += 1;
+	if n > 31 then
+	{   Syntax("Unknown branch condition");
+	    return r, 0;
+	}
+	return s, n;
+    }
+
+    // All 16-bit immediates are sign extended
+    proc IsImm16(x: _int64): boolean
+    {
+	return _abs(x) <= 32767 || x == 0x8000;
+    }
+
+    proc IsImm32(x: _int64, unsigned: boolean): boolean
+    {
+	if unsigned then
+	    return _uint64(x) <= _uint64(_uint32?max);
+	else
+	    return _abs(x) <= _int32?max || x == 0x8000_0000;
+    }
+
+    proc IsFloat32(x: @_uint64): boolean
+    {
+//fde.str("IsFloat32: "); fde.hex64(x@); fde.nl();
+/*
+	var exp: _uint;
+	// If the low 29 bits not zero, can't shorten
+	if (x@ & 0x1FFF_FFFF) != 0 then
+	    return false;
+	exp = (x@ >> 52) ^ 0x7FF;
+*/
+	var fxx, f64: _float64;
+	var f32: _float32;
+	f64 = _float64(x@);
+	f32 = f64;
+	fxx = f32;
+	if fxx == f64 then
+	{   x@ = _uint64(_uint32(f32));
+	    return true;
+	}
+	return false;
+    }
+
+    proc ZeroOp(s: @[]_byte, opt: _uint32)
+    {
+	segment.Put4(opt);
+    }
+
+    proc Int3Op(s: @[]_byte, opt: _uint32)
+    {	var op3: OP3 = OP3(opt);
+	var imm: expr.ExprT;
+
+	s, op3.rd = GetReg(s);
+	s = SkipComma(s);
+	s, op3.rs1 = GetReg(s);
+	s = SkipComma(s);
+	s, op3.rs2 = GetReg(s);
+	s = SkipComma(s);
+	if s[0] == '#' then
+	{   if op3.minor == 0b010 then	// INS, parse like shift
+	    {	s = SkipWS(s[1:]);
+		if s[0] == '<' then	// immediate definition
+		{   var w, o: _uint;
+		    s = SkipWS(s[1:]);
+		    s, o = lex.Dec(s);
+		    s = SkipWS(s);
+		    w = 0;
+		    if s[0] == ':' then
+		    {	w = o;
+			s = SkipWS(s[1:]);
+			s, o = lex.Dec(s);
+		    }
+		    imm.offs = (w << 6)| o;
+		    imm.op = NONE;
+		    // check for terminating '>'?
+		}
+		else
+		    Syntax("expecting '<'");
+	    }
+	    else
+	    {	s = Expr(s[1:], imm);
+		if imm.op != NONE then
+		{	Syntax("Illegal immediate value");
+		    return;
+		}
+	    }
+	    op3.I = 1;
+	}
+	else
+	{   s, op3.rs3 = GetReg(s);
+	}
+	if op3.I == 0 then
+	{
+	    segment.Put4(_uint32(op3));
+	}
+	else
+	{   if IsImm32(imm.offs, false) then
+	    {   op3.s1 = 0;
+		segment.Put4(_uint32(op3));
+		segment.Put4(_uint32(imm.offs));
+	    }
+	    else
+	    {   op3.s1 = 1;
+		segment.Put4(_uint32(op3));
+		segment.Put8(_uint64(imm.offs));
+	    }
+	}
+    }
+
+    // FIXME - refactor this and Int3Op to have common tail?
+    proc FmacOp(s: @[]_byte, opt: _uint32)
+    {	var op3: OP3 = OP3(opt);
+	var imm: expr.ExprT;
+
+	s, op3.rd = GetReg(s);
+	s = SkipComma(s);
+	s, op3.rs1 = GetReg(s);
+	s = SkipComma(s);
+	if s[0] == '#' then
+	{   s = Expr(s[1:], imm);
+	    if imm.op != NONE then
+	    {	Syntax("Illegal immediate value");
+		return;
+	    }
+	    op3.I = 1;
+	    op3.s2 = 1;
+	}
+	else
+	{   if s[0] == '-' then
+	    {	s = SkipWS(s[1:]);
+		op3.s1 = 1;
+	    }
+	    s, op3.rs2 = GetReg(s);
+	}
+	s = SkipComma(s);
+	if s[0] == '#' then
+	{   s = Expr(s[1:], imm);
+	    if imm.op != NONE then
+	    {	Syntax("Illegal immediate value");
+		return;
+	    }
+	    // FIXME - if op3.I already set then error
+	    op3.I = 1;
+	    op3.s1 = 1;
+	}
+	else
+	{   if s[0] == '-' then
+	    {	s = SkipWS(s[1:]);
+		op3.s2 = 1;
+	    }
+	    s, op3.rs3 = GetReg(s);
+	}
+	if op3.I == 0 then
+	{
+	    segment.Put4(_uint32(op3));
+	}
+	else
+	{   var tmp: _uint64;
+	    tmp = _uint64(imm.offs);
+	    if IsFloat32(tmp) then
+	    {   op3.s1 = 0;
+		segment.Put4(_uint32(op3));
+		segment.Put4(_uint32(tmp));
+	    }
+	    else
+	    {   op3.s1 = 1;
+		segment.Put4(_uint32(op3));
+		segment.Put8(_uint64(imm.offs));
+	    }
+	}
+    }
+
+    proc Int1Op(s: @[]_byte, opt: _uint32)
+    {   var op: OP1b = OP1b(opt);
+
+	s, op.rd = GetReg(s);
+	s = SkipWS(s[1:]);
+	if s[0] == '-' then
+	{   op.s1 = 1;
+	    s = SkipWS(s[1:]);
+	}
+	s, op.rs1 = GetReg(s);
+	segment.Put4(_uint32(op));
+   }
+
+    proc MovOp(s: @[]_byte, opt: _uint32)
+    {   var rd, rs: _uint;
+	var opim: OPIMM = OPIMM(opt);
+	var op3: OP3;
+	var imm: expr.ExprT;
+
+	s, rd = GetReg(s);
+	s = SkipComma(s);
+	if s[0] == '#' then
+	{   s = Expr(s[1:], imm);
+	    if imm.op == NONE && IsImm16(imm.offs) then
+	    {   opim.rd = rd;
+		opim.imm = _uint16(imm.offs);
+		segment.Put4(_uint32(opim));
+		return;
+	    }
+	    op3 = {.major=0b001100, .minor=0,.I=1,.s2=1,.rs3=0,.rs2=0 };
+	    op3.rd = rd;
+	    if imm.op == NONE then
+	    {
+		if IsImm32(imm.offs, false) then
+		{   op3.s1 = 0;
+		    segment.Put4(_uint32(op3));
+		    segment.Put4(_uint32(imm.offs));
+		}
+		else
+		{   op3.s1 = 1;
+		    segment.Put4(_uint32(op3));
+		    segment.Put8(_uint64(imm.offs));
+		}
+	    }
+	    else
+	    {	op3.s1 = 1;	// FIXME - only 64-bit fixups?
+		segment.Put4(_uint32(op3));
+		segment.FixNew(imm, ABS64, EXPR);
+		segment.Put8(_uint64(imm.offs));
+	    }
+	}
+	else
+	{   s, rs = GetReg(s);
+	    op3 = {.major=0b001100, .minor=0,.I=0,.s1=1,.s2=0,.rs3=0 };
+	    op3.rd = rd;
+	    op3.rs2 = rs;
+	    segment.Put4(_uint32(op3));
+	}
+    }
+
+    proc Int1rOp(s: @[]_byte, opt: _uint32)
+    {	var op2: OP2 = OP2(opt);
+	op2.major = 0b001010;	// assume not imm16
+	s, op2.rd = GetReg(s);
+	s = SkipComma(s);
+	if s[0] == '-' then
+	{   op2.s1 ^= 1;
+	    s = SkipWS(s[1:]);
+	}
+	s, op2.rs1 = GetReg(s);
+	// rs2 set to same as rs1
+	op2.rs2 = op2.rs1;
+	segment.Put4(_uint32(op2));
+    }
+
+    proc IntOp(s: @[]_byte, opt: _uint32)
+    {	var op2: OP2 = OP2(opt);
+	var opim: OPIMM;
+	var imm: expr.ExprT;
+	var kind: (RRR,R5R,RRI,RIR) = RRR;	// assume r,r,r
+	var isfloat, islogic, inv: boolean;
+
+	op2.major = 0b001010;	// assume not imm16
+	s, op2.rd = GetReg(s);
+	s = SkipComma(s);
+	// second arg can be '#imm' or '-reg' or 'reg'
+	if s[0] == '#' then
+	{   s = Expr(s[1:], imm);
+	    inv = op2.s1 != 0;
+	    if imm.op == NONE && _abs(imm.offs) <= 31 then
+	    {   op2.D = 1;
+		op2.s1 = 0;	// assume non-negative
+		if imm.offs < 0 then
+		{   imm.offs = -imm.offs;
+		    op2.s1 = 1;
+		}
+		op2.rs1 = imm.offs;
+		kind = R5R;	// IMM5
+	    }
+	    else
+	    {	op2.s1 = 1;
+		kind = RIR;
+	    }
+	}
+	else
+	{   if s[0] == '-' then
+	    {   op2.s1 ^= 1;
+		s = SkipWS(s[1:]);
+	    }
+	    s, op2.rs1 = GetReg(s);
+	}
+	s = SkipComma(s);
+	// third arg can be '#imm' (if 2nd was not) or '-reg' or 'reg'
+	// if third arg is 16-bit immediate then different format
+	// save forced inversion, e.g. sub
+	if kind == RRR && s[0] == '#' then
+	{   s = Expr(s[1:], imm);
+	    inv = op2.s2 != 0;
+	    op2.s2 = 1;
+	    kind = RRI;
+	}
+	else
+	{   if s[0] == '-' then
+	    {   op2.s2 ^= 1;
+		s = SkipWS(s[1:]);
+	    }
+	    s, op2.rs2 = GetReg(s);
+	}
+	if kind <= R5R then
+	{   segment.Put4(_uint32(op2));
+	    return;
+	}
+	else	// we have an immediate
+	{   islogic = (opt >> 26) >= 0b111000;
+	    if inv then	// if forced inversion
+	    {   if islogic then
+		    imm.offs = ~imm.offs;
+		else
+		    imm.offs = -imm.offs;
+	    }
+	    // Check for 16-bit immediate version
+	    if kind == RRI && imm.op == NONE && IsImm16(imm.offs) then
+	    {   var altop: _uint;
+		altop = opt >> 26;	// get alternate opcode
+		if altop != 0 then	// 16-bit immediate available
+		{   opim = OPIMM(_uint32(op2));
+		    opim.major = altop;	// use alternate opcode
+		    opim.imm = _uint16(imm.offs);
+		    segment.Put4(_uint32(opim));
+		    return;
+		}
+	    }
+	    op2.I = 1;
+	    isfloat = ((opt >> 9) & 1) != 0;
+	    // Now check size of immediate
+	    if imm.op == NONE then
+	    {   if isfloat then
+		{   var tmp: _uint64;
+		    tmp = _uint64(imm.offs);
+		    if IsFloat32(tmp) then
+		    {	imm.offs = _int64(tmp);
+			op2.D = 0;
+		    }
+		    else
+			op2.D = 1;
+		}
+		else
+		{   if IsImm32(imm.offs, false) then
+			op2.D = 0;
+		    else
+			op2.D = 1;
+		}
+	    }
+	    else
+	    {	fde.str("arg non-constant immediate kind=");
+		fde.uint8(_uint8(kind));
+		fde.str(" expr="); expr.Dump(fde, imm); fde.nl();
+	    }
+	    if kind == RRI then
+		op2.s2 = 0;
+	    else	// RIR
+	    {	op2.s1 = op2.s2;
+		op2.s2 = 1;
+	    }
+	    segment.Put4(_uint32(op2));
+	    if op2.D == 0 then
+		segment.Put4(_uint32(imm.offs));
+	    else
+		segment.Put8(_uint64(imm.offs));
+	}
+    }
+
+    proc ShfOp1(s: @[]_byte, opt: _uint32): boolean
+    {	var ops: OPSHF = OPSHF(opt);
+	var w, o: _uint;
+	var sawimm: boolean = false;
+
+	s, ops.rd = GetReg(s);
+	s = SkipComma(s);
+	s = SkipWS(s);
+	if s[0] == '-' || s[0] == '#' then
+	    return false;
+	s, ops.rs1 = GetReg(s);
+	s = SkipComma(s);
+	if s[0] == '#' then	// optional for now if "#<"
+	{   s = SkipWS(s[1:]);
+	    sawimm = true;
+	}
+	if s[0] == '<' then	// immediate definition
+	{   s = SkipWS(s[1:]);
+	    s, o = lex.Dec(s);
+	    s = SkipWS(s);
+	    w = 0;
+	    if s[0] == ':' then
+	    {	w = o;
+		s = SkipWS(s[1:]);
+		s, o = lex.Dec(s);
+	    }
+	    // check for terminating '>'?
+	}
+	else
+	{   if !sawimm then	// register form
+		return false;
+	    w = 0;
+	    s, o = lex.Dec(s);
+	}
+	ops.w = w;
+	ops.o = o;
+	segment.Put4(_uint32(ops));
+	return true;
+    }
+
+    proc ShfOp(s: @[]_byte, opt: _uint32)
+    {	var op2: OP2;
+
+	if ShfOp1(s, opt) then
+	    return;
+	// Re-parse as an RR version
+	op2 = OP2(opt);
+	op2.I = 0;
+	op2.s1 = 0;
+	op2.s2 = 0;
+	op2.D = 0;
+	IntOp(s, _uint32(op2));
+    }
+
+    proc Pred(s: @[]_byte, opt: _uint32)
+    {	var op: OPPB = OPPB(opt);	// or OPPC
+	var m, i, n: _uint;
+
+	s,op.rs1 = GetReg(s);
+	s = SkipComma(s);
+	s, n = lex.Dec(s);
+	op.I = n;
+	s = SkipComma(s);
+	s = SkipWS(s);
+	m = 0;
+	i = 0;
+	while i < 8 &&
+	      s[i] == 'T' || s[i] == 't' ||
+	      s[i] == 'F' || s[i] == 'f' do
+	{   if s[i] == 'F' || s[i] == 'f' then
+		m |= 1 << i;
+	    i += 1;
+	}
+//fde.str("shadow='"); fde.strn(s, i); fde.str("' i="); fde.uint(i);
+//fde.str(" m="); fde.hex8(_uint8(m)); fde.nl();
+	op.ml = i-1;
+	op.shadow = m;
+	segment.Put4(_uint32(op));
+    }
+
+    proc PcOp(s: @[]_byte, opt: _uint32)
+    {	var op: OPPC = OPPC(opt);
+	var r: @[]_byte;
+	var n, m: _uint;
+
+	r, n = GetCond(s);
+	op.cond = n;
+	s = SkipComma(s);
+	Pred(s, _uint32(op));
+    }
+
+    proc PbOp(s: @[]_byte, opt: _uint32)
+    {	var op: OPPB = OPPB(opt);
+	var r: @[]_byte;
+	var n, m: _uint;
+
+	r = s;
+	s, n = lex.Dec(s);
+	if s == r then	// not literal bit number
+	{
+	}
+	op.bit = n;
+	s = SkipComma(s);
+	Pred(s, _uint32(op));
+    }
+
+    proc VecOp(s: @[]_byte, opt: _uint32)
+    {   var op: OPVEC = OPVEC(opt);
+	var r: @[]_byte;
+	var reg: _uint;
+
+	s,op.rd = GetReg(s);
+	s = SkipComma(s);
+	// FIXME - parse vector operand
+	if s[0] == '{' then
+	{   s = SkipWS(s[1:]);
+	    loop
+	    {
+	      exit s[0] == '}';
+	        s,reg = GetReg(s);
+		if reg >= 1 && reg <= 21 then
+		{   op.imm |= (1 << (reg-1));
+		}
+		else
+		    Syntax("Illegal register in vec instruction\n");
+		r = CheckComma(s);
+	      exit r == 0;
+		s = r;
+	    }
+	}
+	else
+	    Syntax("'{' expected\n");
+	segment.Put4(_uint32(op));
+    }
+
+    proc GetLoopCompare(s: @[]_byte): @[]_byte, _uint
+    {   var i: _uint;
+
+	if s[0] == 't' then return s[1:0], 6;	// 6 => tS
+	i = 0;
+	while i < 16 && s[0:2] != CBitNames[i][0:2] do
+	    i += 1;
+	if i > 15 then
+	{   Syntax("Illegal loop condition\n");
+	    return s, 0;
+	}
+	return s[2:0], i;
+    }
+
+    proc GetLoopAmt(s: @[]_byte): @[]_byte, _int
+    {	var isneg: boolean = false;
+	var val: _int;
+
+	if s[0] == '-' then
+	{   s = s[1:];
+	    isneg = true;
+	}
+	s, val = lex.Dec(s);
+	if isneg then val =- val;
+	return s, val;
+    }
+
+    proc IsLoopTest(s: @[]_byte): boolean
+    {
+	s = SkipWS(s);
+	if s[0:2] == '!=' then
+	{   s = SkipWS(s[2:]);
+	    if s[0] == '0' then return true;
+	}
+	return false;
+    }
+
+    proc GetLoopCmp(s: @[]_byte): @[]_byte, _uint
+    {   var cmp: _uint = 0b00110;	// default to none
+	var n: _uint = 0;
+
+	if s[0]
+	is '!' then
+	{   if s[1] == '=' then { n = 2; cmp = 0b01101; }
+	    else Syntax("Invalid comparison");
+	}
+	is '=' then
+	{   if s[1] == '=' then { n = 2; cmp = 0b11101; }
+	    else Syntax("Invalid comparison");
+	}
+	is '>' then
+	{   if s[1] == '=' then { n = 2; cmp = 0b11110; }
+	    else { n = 1; cmp = 0b01110; }
+	}
+	is '<' then
+	{   if s[1] == '=' then { n = 2; cmp = 0b11111; }
+	    else { n = 1; cmp = 0b01111; }
+	}
+	return s[n:], cmp;
+    }
+
+    proc LoopOp(s: @[]_byte, opt: _uint32)
+    {   var op: OP3 = OP3(opt);
+	var comp: _uint;
+	var type: 0..2;
+	var incamt, cmpamt: _int;
+	var r: @[]_byte;
+	type IncKind: (Reg, Plus1, Imm5, Imm32);
+	type CmpKind: (Reg, Imm5, Imm10, Imm32);
+	var inckind: IncKind;
+	var cmpkind: CmpKind;
+	const ISSForm: [CmpKind][IncKind]_uint8 =
+	{   { 0b000, 0b001, 0b001, 0b101 },
+	    { 0b100, 0b010, 0b010, 0b110 },
+	    { 0b100, 0b011, 0b110, 0b110 },
+	    { 0b100, 0b110, 0b110, 0b110 }
+	};
+
+	// rd is cnd
+	// rs1 is rloop
+	// rs2 is rcmp or imm4:0
+	// rs3 is rinc or imm4:0 or imm9:5
+	s, comp = GetLoopCompare(s);
+	s = SkipComma(s);		// 1st comma
+	s, op.rs1 = GetReg(s);		// loop register
+	s = SkipComma(s);		// 2nd comma
+	if comp != 6 then	// CMP is for loop counter
+	{
+	    // initial map condition bits into loop conditions
+	    if comp >= 8 then	// unsigned compare
+		comp -= 8;
+	    elif comp > 2 then	// signed compare
+		comp += 16;
+	    type = 1;
+	    if s[0] == '#' then
+	    {   cmpkind = Imm32;
+		s, cmpamt = GetLoopAmt(s[1:0]);
+	    }
+	    else
+	    {	cmpkind = Reg;
+		s, op.rs2 = GetReg(s);
+	    }
+	    r = CheckComma(s);
+	    if r != 0 then		// 3rd comma
+	    {	s = r;
+		if s[0] == '#' then
+		{   inckind = Imm32;
+		    s, incamt = GetLoopAmt(s[1:]);
+		}
+		else
+		{   inckind = Reg;
+		    s, op.rs3 = GetReg(s);
+		    if IsLoopTest(s) then
+		    {	type = 2;
+			comp += 7;
+		    }
+		}
+	    }
+	    else	// no 3rd comma, assume +1 increment
+	    {	inckind = Plus1;
+		incamt = 1;
+	    }
+	}
+	else			// compare is 't'
+	{   type = 3;
+	    s, op.rs2 = GetReg(s);
+	    s, comp = GetLoopCmp(s);
+	    cmpkind = Reg;
+	    if comp != 0b00110 then
+	    {	if s[0] == '#' then
+		{   inckind = Imm32;
+		    s, cmpamt = GetLoopAmt(s[1:]);
+		}
+		else
+		{   s, op.rs3 = GetReg(s);
+		    inckind = Reg;
+		}
+	    }
+	    else
+	    {	type = 1;
+		inckind = Plus1;
+		incamt = 1;
+	    }
+	}
+	op.rd = comp;
+	// map inc and cmp kinds
+	if inckind == Imm32 then
+	{   if incamt == 1 then
+		inckind = Plus1;
+	    elif incamt >= -16 && incamt < 16 then
+		inckind = Imm5;
+	}
+	if cmpkind == Imm32 then
+	{   if cmpamt >= -16 && cmpamt < 16 then
+		cmpkind = Imm5;
+	    elif cmpamt >= -512 && cmpamt < 512 then
+		cmpkind = Imm10;
+	}
+	if ISSForm[cmpkind][inckind]
+	is 0b001 then
+	{   op.rs3 = _uint(incamt) & 0x1F;
+	    op.s2 = 1;
+	}
+	is 0b010 then
+	{   op.rs3 = _uint(incamt) & 0x1F;
+	    op.rs2 = _uint(cmpamt) & 0x1F;
+	    op.s1 = 1;
+	}
+	is 0b011 then
+	{   op.rs2 = _uint(cmpamt) & 0x1F;
+	    op.rs2 = (_uint(cmpamt) >> 5) & 0x1F;
+	    op.s1 = 1; op.s2 = 1;
+	}
+	is 0b100 then { op.I = 1; }
+	is 0b101 then { op.I = 1; op.s2 = 1; }
+	is 0b110 then { op.I = 1; op.s1 = 1; }
+fde.str("type="); fde.uint8(type);
+fde.str(" comp="); fde.uint(comp);
+fde.str(" cmpkind="); fde.uint8(_uint8(cmpkind));
+if cmpkind != Reg then { fde.str(" cmpamt="); fde.int(cmpamt); }
+fde.str(" inckind="); fde.uint8(_uint8(inckind));
+if inckind != Reg then { fde.str(" incamt="); fde.int(incamt); }
+fde.str(" ISS="); fde.uint((op.I<<2)|(op.s1<<1)|op.s2);
+fde.nl();
+	segment.Put4(_uint32(op));
+	if op.I != 0 then
+	{   if op.s2 == 0 then
+		segment.Put4(_uint32(cmpamt));
+	    if op.s1 != 0 || op.s2 != 0 then
+		segment.Put4(_uint32(incamt));
+	}
+    }
+
+    proc CarryOp(s: @[]_byte, opt: _uint32)
+    {	var op: OPCARRY = OPCARRY(opt);
+	var mask: _uint16;
+	var shf: _uint;
+
+	s,op.rd = GetReg(s);
+	s = SkipComma(s);
+	if s[0] != '{' then
+	{   Syntax("Expecting '{'\n");
+	    return;
+	}
+	s = SkipWS(s[1:]);
+	mask = 0;
+	shf = 0;
+	loop
+	{   s = SkipWS(s);
+	    if s[0]
+	    is 'I' then
+	    {   mask |= 1 << shf;
+		s = s[1:];
+		if s[0] == 'O' then
+		{   mask |= 2 << shf;
+		    s = s[1:];
+		}
+	    }
+	    is 'O' then
+	    {   mask |= 2 << shf;
+		s = s[1:];
+		if s[0] == 'I' then
+		{   mask |= 1 << shf;
+		    s = s[1:];
+		}
+	    }
+	    is '-' then ;
+	    else Syntax("Bad carry IO field\n");
+	    s = SkipWS(s);
+	    shf += 2;
+	  exit shf >= 8 || s[0] != ',';
+	    s = SkipComma(s);
+	}
+	op.imm = mask;
+	segment.Put4(_uint32(op));
+    }
+
+    proc BbmOp(s: @[]_byte, opt: _uint32)
+    {	var op: OPBB = OPBB(opt);
+	var tgt: expr.ExprT;
+
+	s,op.rs1 = GetReg(s);
+	s = SkipComma(s);
+	s = Expr(s, tgt);
+	segment.FixNew(tgt, REL16, EXPR);
+	segment.Put4(_uint32(op));
+	segment.Finish(BRC);
+    }
+
+    proc BbOp(s: @[]_byte, opt: _uint32)
+    {	var op: OPBB = OPBB(opt);
+	var r: @[]_byte;
+	var tgt: expr.ExprT;
+	var n: _uint;
+
+	r = s;
+	s, n = lex.Dec(s);
+	if s == r then	// not literal bit number
+	{
+	}
+	op.bit = n;
+	s = SkipComma(s);
+	BbmOp(s, _uint32(op));
+    }
+
+    proc BcmOp(s: @[]_byte, opt: _uint32)
+    {	var op: OPBC = OPBC(opt);
+	var tgt: expr.ExprT;
+
+	s,op.rs1 = GetReg(s);
+	s = SkipComma(s);
+	s = Expr(s, tgt);
+	segment.FixNew(tgt, REL16, EXPR);
+	segment.Put4(_uint32(op));
+	segment.Finish(BRC);
+    }
+
+    proc BcOp(s: @[]_byte, opt: _uint32)
+    {	var op: OPBC = OPBC(opt);
+	var r: @[]_byte;
+	var n: _uint;
+
+	r, n = GetCond(s);
+	op.cond = n;
+	s = SkipComma(r);
+	BcmOp(s, _uint32(op));
+    }
+
+    proc JtOp(s: @[]_byte, opt: _uint32)
+    {	var op: OPTT = OPTT(opt);
+	var imm: expr.ExprT;
+
+	s,op.rs1 = GetReg(s);
+	s = SkipComma(s);
+	if s[0] == '#' then
+	{   s = Expr(s[1:], imm);
+	    if imm.op != NONE then
+		Syntax("jtt requires constant immediate");
+	    op.imm = imm.offs;
+	}
+	else
+	    Syntax("'#' expected");
+	segment.Put4(_uint32(op));
+    }
+
+    proc BrOp(s: @[]_byte, opt: _uint32)
+    {   var op: OPBR = OPBR(opt);
+	var tgt: expr.ExprT;
+
+	s = Expr(s, tgt);
+	segment.FixNew(tgt, REL26, EXPR);
+	segment.Put4(_uint32(op));
+	if op.major & 1 != 0 then
+	    segment.Finish(CALL);
+	else
+	    segment.Finish(UNC);
+    }
+
+    proc BiOp(s: @[]_byte, opt: _uint32)
+    {   var op: OP1a = OP1a(opt);
+
+	s, op.rs1 = GetReg(s);
+	segment.Put4(_uint32(op));
+	if op.r != 0 then	// hr r0=ip=rs1
+	    segment.Finish(CALL);
+	else			// hr ip=rs1
+	    segment.Finish(UNC);
+    }
+
+    proc RetOp(s: @[]_byte, opt: _uint32)
+    {
+	// hr ip=r0
+	ZeroOp(s, opt);
+	segment.Finish(UNC);
+    }
+
+    proc Xop5(s: @[]_byte, opt: _uint32)
+    {	var op: OP1b = OP1b(opt);
+
+	s, op.rd = GetReg(s);
+	s = SkipComma(s);
+	// FIXME - can we have a '-' here?
+	// FIXME - can we have an immediate here?
+	s, op.rs1 = GetReg(s);
+	// FIXME - optional 3rd argument rounding mode
+	segment.Put4(_uint32(op));
+    }
+
+    proc MemOp(s: @[]_byte, opt: _uint32)
+    {	var op: OPMEM = OPMEM(opt);
+	var rb: _uint;
+	var imm, dat: expr.ExprT;
+	var r: @[]_byte;
+	var datasize: _uint = 0;
+	var needreloc: boolean = false;
+
+	op.major = 0b001001;
+	s = SkipWS(s);
+	if s[0] == '#' then
+	{
+	    if op.minor & 0b111100 != 0b001000 then
+	    {	Syntax("Immediate data not allowed");
+		return;
+	    }
+	    op.minor |= 0b010000;	// make store immediate
+	    s = SkipWS(s[1:]);
+	    s = Expr(s, dat);
+	    if dat.op == NONE then
+	    {   if dat.offs >= -16 && dat.offs <= 15 then
+		{   op.rd = dat.offs & 0x1F;
+		    op.minor |= 0b100;	// make short version
+		    datasize = 1;
+		}
+		else	// long version
+		{   datasize = 2;
+		    if op.minor == 0b011011 then	// STD
+			datasize = 3;
+		}
+	    }
+	    else
+		fde.str("Non-constant data not yet handled\n");
+	}
+	else
+	{
+	    s, op.rd = GetReg(s);
+	}
+	s = SkipComma(s);
+	if s[0] == '[' then
+	{   s = SkipWS(s[1:]);
+	    // we require base register to be specified
+	    s, op.rb = GetBaseReg(s);
+	    if s[0] != ']' then	// not just [rb]
+	    {	s = SkipComma(s);
+		r = ScanComma(s, ']');	// is there another comma?
+		if r != 0 then		// yes, has index register
+		{   s, op.ri = GetReg(s);
+		    s = SkipWS(s);
+		    if s[0:2] == '<<' then
+		    {   s = SkipWS(s[2:]);
+			s,op.sc = lex.Dec(s);	// FIXME - op.sc in 0..3
+		    }
+		    s = SkipComma(s);
+		}
+		s = SkipWS(s);
+		// we require an offset, even if it is zero
+		s = Expr(s, imm);
+	    }
+	    else
+	    {	imm.offs = 0;
+		imm.op = NONE;
+	    }
+	    // now check if we can use a short version
+	    if datasize == 0 && op.ri == 0 && imm.op == NONE &&
+		    IsImm16(imm.offs) && (opt >> 26) != 0 then
+	    {   var opmi: OPMEMIMM = OPMEMIMM(_uint32(op));
+		opmi.major = opt >> 26;	// use alternate opcode
+		opmi.imm = _uint16(imm.offs);
+		segment.Put4(_uint32(opmi));
+		return;
+	    }
+	    if imm.op == NONE then
+	    {	if imm.offs != 0 then
+		{   op.I = 1;
+		    if IsImm32(imm.offs, false) then
+			op.D = 0;
+		    else
+			op.D = 1;
+		}
+	    }
+	    else
+	    {   op.I = 1;	// FIXME - only 32-bit offset for now
+		needreloc = true;
+	    }
+	    segment.Put4(_uint32(op));
+	    if datasize
+	    is 2 then
+	    {	if needreloc then
+		    imm.offs += 4;
+		segment.Put4(_uint32(dat.offs));
+	    }
+	    is 3 then
+	    {	if needreloc then
+		    imm.offs += 8;
+		segment.Put8(_uint64(dat.offs));
+	    }
+	    if op.I != 0 then
+	    {	if op.D == 0 then
+		{   if needreloc then
+			segment.FixNew(imm, REL32, EXPR);
+		    segment.Put4(_uint32(imm.offs));
+		}
+		else
+		{   if needreloc then
+			segment.FixNew(imm, REL64, EXPR);
+		    segment.Put8(_uint64(imm.offs));
+		}
+	    }
+	}
+	else
+	    Syntax("[ expected");
+    }
+
+    proc LdmOp(s: @[]_byte, opt: _uint32)
+    {	var op: OPMEM = OPMEM(opt);
+	var imm: expr.ExprT;
+	var needreloc: boolean = false;
+
+	s, op.rd = GetReg(s);	// Rstart
+	s = SkipComma(s);
+	s, op.ri = GetReg(s);	// Rstop
+	s = SkipComma(s);
+	if s[0] == '[' then
+	{   s = SkipWS(s[1:]);
+	    s, op.rb = GetBaseReg(s);
+	    if s[0] != ']' then	// not just [rb]
+	    {	s = SkipComma(s);
+		s = Expr(s, imm);
+	    }
+	    else
+	    {	imm.offs = 0;
+		imm.op = NONE;
+	    }
+	    if imm.op == NONE then
+	    {	if imm.offs != 0 then
+		{   op.I = 1;
+		    if IsImm32(imm.offs, false) then
+			op.D = 0;
+		    else
+			op.D = 1;
+		}
+	    }
+	    else
+	    {   op.I = 1;	// FIXME - only 32-bit offset for now
+		needreloc = true;
+	    }
+	    segment.Put4(_uint32(op));
+	    if op.I != 0 then
+	    {	if op.D == 0 then
+		{   if needreloc then
+			segment.FixNew(imm, REL32, EXPR);
+		    segment.Put4(_uint32(imm.offs));
+		}
+		else
+		{   if needreloc then
+			segment.FixNew(imm, REL64, EXPR);
+		    segment.Put8(_uint64(imm.offs));
+		}
+	    }
+	}
+	else
+	    Syntax("[ expected");
+     }
+
+    proc EnterOp(s: @[]_byte, opt: _uint32)
+    {	var op: OPMEMIMM = OPMEMIMM(opt);	// close enough model
+	var F: _uint;
+	var imm: expr.ExprT;
+
+	s, op.rd = GetReg(s);	// Rstart
+	s = SkipComma(s);
+	s, op.rb = GetReg(s);	// Rstop
+	s = SkipComma(s);
+	if s[0]
+	is '0' then F = 0;
+	is '1' then F = 1;
+	else
+	    Syntax("F bit must be 0 or 1");
+	s = SkipComma(s[1:]);
+	s = Expr(s, imm);
+	if imm.op != NONE then
+	    Syntax("Displacement must be constant");
+	op.imm = (imm.offs & 0x7FFF) | (F << 15);
+	segment.Put4(_uint32(op));
+    }
+
+    proc MmOp(s: @[]_byte, opt: _uint32)
+    {	var op: OPMEM = OPMEM(opt);
+
+	s, op.rd = GetReg(s);	// Rcnt
+	s = SkipComma(s);
+	s, op.rb = GetReg(s);	// Rfm
+	s = SkipComma(s);
+	s, op.ri = GetReg(s);	// Rto
+	segment.Put4(_uint32(op));
+    }
+
+
+    type InstT:
+    {   name:   @[]_byte;
+	len:    _uint8;
+	opt:    _uint32;
+	parse:  @_(s: @[]_byte, opt: _uint32);
+    };
+
+
+    const Insts: []InstT =
+    {
+    	{ "mov",   3,  0b111011_00000_00000_0000000000000000, MovOp },
+
+	{ "add",   3,  0b110001_00000_00000_00000_100001_00000, IntOp },
+	{ "adds",  4,  0b110001_00000_00000_00010_100001_00000, IntOp },
+	{ "sub",   3,  0b110001_00000_00000_00100_100001_00000, IntOp },
+	{ "subs",  4,  0b110001_00000_00000_00110_100001_00000, IntOp },
+	{ "mul",   3,  0b110010_00000_00000_00000_100010_00000, IntOp },
+	{ "muls",  4,  0b110010_00000_00000_00010_100010_00000, IntOp },
+	{ "div",   3,  0b110011_00000_00000_00000_100011_00000, IntOp },
+	{ "divs",  4,  0b110011_00000_00000_00010_100011_00000, IntOp },
+	{ "cmp",   3,  0b110100_00000_00000_00000_100100_00000, IntOp },
+	{ "max",   3,  0b000000_00000_00000_00000_100110_00000, IntOp },
+	{ "maxs",  4,  0b000000_00000_00000_00010_100110_00000, IntOp },
+	{ "min",   3,  0b000000_00000_00000_00000_100111_00000, IntOp },
+	{ "mins",  4,  0b000000_00000_00000_00010_100111_00000, IntOp },
+	{ "or",    2,  0b111000_00000_00000_00000_101000_00000, IntOp },
+	{ "xor",   3,  0b111001_00000_00000_00000_101001_00000, IntOp },
+	{ "and",   3,  0b111010_00000_00000_00000_101010_00000, IntOp },
+	// the next 2 must be parsed with one less register
+	{ "abs",   3,  0b000000_00000_00000_00110_100110_00000, Int1rOp },
+	{ "nabs",  4,  0b000000_00000_00000_00110_100111_00000, Int1rOp },
+
+
+	{ "ldub",  4,  0b100000_00000_00000_00000_000000_00000, MemOp },
+	{ "lduh",  4,  0b100001_00000_00000_00000_000001_00000, MemOp },
+	{ "lduw",  4,  0b100010_00000_00000_00000_000010_00000, MemOp },
+	{ "ldd",   3,  0b100011_00000_00000_00000_000011_00000, MemOp },
+	{ "ldsb",  4,  0b100100_00000_00000_00000_000100_00000, MemOp },
+	{ "ldsh",  4,  0b100101_00000_00000_00000_000101_00000, MemOp },
+	{ "ldsw",  4,  0b100110_00000_00000_00000_000110_00000, MemOp },
+	{ "la",    2,  0b000000_00000_00000_00000_000111_00000, MemOp },
+	{ "stb",   3,  0b101000_00000_00000_00000_001000_00000, MemOp },
+	{ "sth",   3,  0b101001_00000_00000_00000_001001_00000, MemOp },
+	{ "stw",   3,  0b101010_00000_00000_00000_001010_00000, MemOp },
+	{ "std",   3,  0b101011_00000_00000_00000_001011_00000, MemOp },
+
+	{ "srl",   3,  0b000111_00000_00000_10000_101100_00000, ShfOp },
+	{ "sra",   3,  0b000111_00000_00000_10010_101100_00000, ShfOp },
+	{ "sll",   3,  0b000111_00000_00000_10100_101101_00000, ShfOp },
+	{ "sla",   3,  0b000111_00000_00000_10110_101101_00000, ShfOp },
+
+	{ "bb1",   3,  0b01100_000000_00000_0000000000000000, BbOp },
+	{ "bcnd",  4,  0b011010_00000_00000_0000000000000000, BcOp },
+	{ "br",    2,  0b011110_00000000000000000000000000, BrOp },
+	{ "call",  4,  0b011111_00000000000000000000000000, BrOp },
+	// bb1 "macros"
+	{ "bne",   3,  0b01100_000000_00000_0000000000000000, BbmOp },
+	{ "beq",   3,  0b01100_000001_00000_0000000000000000, BbmOp },
+	{ "bgt",   3,  0b01100_000010_00000_0000000000000000, BbmOp },
+	{ "bge",   3,  0b01100_000011_00000_0000000000000000, BbmOp },
+	{ "blt",   3,  0b01100_000100_00000_0000000000000000, BbmOp },
+	{ "ble",   3,  0b01100_000101_00000_0000000000000000, BbmOp },
+	{ "bhi",   3,  0b01100_001010_00000_0000000000000000, BbmOp },
+	{ "bhs",   3,  0b01100_001011_00000_0000000000000000, BbmOp },
+	{ "blo",   3,  0b01100_001100_00000_0000000000000000, BbmOp },
+	{ "bls",   3,  0b01100_001101_00000_0000000000000000, BbmOp },
+	// bcnd "macros"
+	{ "bnm",   3,  0b011010_00000_00000_0000000000000000, BcmOp },
+	{ "bnn",   3,  0b011010_00001_00000_0000000000000000, BcmOp },
+	{ "beq0",  4,  0b011010_00010_00000_0000000000000000, BcmOp },
+	{ "bne0",  4,  0b011010_00011_00000_0000000000000000, BcmOp },
+	{ "bge0",  4,  0b011010_00100_00000_0000000000000000, BcmOp },
+	{ "bgt0",  4,  0b011010_00101_00000_0000000000000000, BcmOp },
+	{ "ble0",  4,  0b011010_00110_00000_0000000000000000, BcmOp },
+	{ "blt0",  4,  0b011010_00111_00000_0000000000000000, BcmOp },
+
+	{ "pb1",   3,  0b00011_000000_00000_0000_000000000000, PbOp },
+	{ "pcnd",  4,  0b000110_00000_00000_0001_000000000000, PcOp },
+	// pb1 "macros"
+	{ "pne",   3,  0b00011_000000_00000_0000_000000000000, Pred },
+	{ "peq",   3,  0b00011_000001_00000_0000_000000000000, Pred },
+	{ "pgt",   3,  0b00011_000010_00000_0000_000000000000, Pred },
+	{ "pge",   3,  0b00011_000011_00000_0000_000000000000, Pred },
+	{ "plt",   3,  0b00011_000100_00000_0000_000000000000, Pred },
+	{ "ple",   3,  0b00011_000101_00000_0000_000000000000, Pred },
+	{ "phi",   3,  0b00011_001010_00000_0000_000000000000, Pred },
+	{ "phs",   3,  0b00011_001011_00000_0000_000000000000, Pred },
+	{ "plo",   3,  0b00011_001100_00000_0000_000000000000, Pred },
+	{ "pls",   3,  0b00011_001101_00000_0000_000000000000, Pred },
+	// pcnd "macros"
+	{ "pnm",   3,  0b000110_00000_00000_0001_000000000000, Pred },
+	{ "pnn",   3,  0b000110_00001_00000_0001_000000000000, Pred },
+	{ "peq0",  4,  0b000110_00010_00000_0001_000000000000, Pred },
+	{ "pne0",  4,  0b000110_00011_00000_0001_000000000000, Pred },
+	{ "pge0",  4,  0b000110_00100_00000_0001_000000000000, Pred },
+	{ "pgt0",  4,  0b000110_00101_00000_0001_000000000000, Pred },
+	{ "ple0",  4,  0b000110_00110_00000_0001_000000000000, Pred },
+	{ "plt0",  4,  0b000110_00111_00000_0001_000000000000, Pred },
+
+	{ "jmp",   3,  0b001101_00000_00000_01000_000000_00000, BiOp },
+	{ "calli", 5,  0b001101_00000_00000_01100_000000_00000, BiOp },
+	// ret is a BiOp with implied R0
+	{ "ret",   3,  0b001101_00000_00000_01000_000000_00000, RetOp },
+
+	{ "jttb",  4,  0b011011_00000_00000_00000_000000_00000, JtOp },
+	{ "jtth",  4,  0b011011_00001_00000_00000_000000_00000, JtOp },
+	{ "jttw",  4,  0b011011_00010_00000_00000_000000_00000, JtOp },
+	{ "jttd",  4,  0b011011_00011_00000_00000_000000_00000, JtOp },
+
+	{ "carry", 5,  0b111100_00000_00000_0000000000000000, CarryOp },
+	{ "vec",   3,  0b111101_00000_00000_0000000000000000, VecOp },
+	{ "loop",  4,  0b001100_00000_00000_000_00000_111_00000, LoopOp },
+	{ "ldm",   3,  0b001001_00000_00000_00000_010011_00000, LdmOp },
+	{ "stm",   3,  0b001001_00000_00000_00000_010100_00000, LdmOp },
+	{ "mm",    2,  0b001001_00000_00000_00000_010101_00000, MmOp },
+	{ "enter", 5,  0b101100_00000_00000_0000000000000000, EnterOp },
+	{ "exit",  4,  0b100111_00000_00000_0000000000000000, EnterOp },
+
+	{ "cmov",  4,  0b001100_00000_00000_001_00000_000_00000, Int3Op },
+	{ "mux",   3,  0b001100_00000_00000_000_00000_000_00000, Int3Op },
+	{ "ins",   3,  0b001100_00000_00000_000_00000_010_00000, Int3Op },
+
+	{ "pop",   3,  0b001101_00000_00000_00000_001000_00000, Int1Op },
+	{ "ctlz",  4,  0b001101_00000_00000_00000_001001_00000, Int1Op },
+	{ "cttz",  4,  0b001101_00000_00000_00010_001001_00000, Int1Op },
+	{ "ctlo",  4,  0b001101_00000_00000_01000_001001_00000, Int1Op },
+	{ "ctto",  4,  0b001101_00000_00000_01010_001001_00000, Int1Op },
+
+	// floating point
+	{ "fadd",  4,  0b110001_00000_00000_00000_110001_00000, IntOp },
+	{ "fsub",  4,  0b110001_00000_00000_00100_110001_00000, IntOp },
+	{ "fmul",  4,  0b110010_00000_00000_00000_110010_00000, IntOp },
+	{ "fdiv",  4,  0b110011_00000_00000_00000_110011_00000, IntOp },
+	{ "fcmp",  4,  0b110100_00000_00000_00000_110100_00000, IntOp },
+	{ "fmax",  4,  0b000000_00000_00000_00000_110110_00000, IntOp },
+	{ "fmin",  4,  0b000000_00000_00000_00010_110111_00000, IntOp },
+	{ "fmac",  4,  0b001100_00000_00000_000_00000_100_00000, FmacOp },
+	// conversions
+	{ "cvtud", 5,  0b001101_00000_00000_00000_01000_010000, Xop5 },
+	{ "cvtsd", 5,  0b001101_00000_00000_00000_01000_011000, Xop5 },
+	{ "cvtdu", 5,  0b001101_00000_00000_00000_01000_000000, Xop5 },
+	{ "cvtds", 5,  0b001101_00000_00000_00000_01000_100000, Xop5 },
+	{ "cvtfd", 5,  0b001101_00000_00000_00000_01000_010001, Xop5 },
+	{ "cvtdf", 5,  0b001101_00000_00000_00000_01000_110001, Xop5 },
+	{ "cvtuf", 5,  0b001101_00000_00000_00000_01000_110000, Xop5 },
+	{ "cvtsf", 5,  0b001101_00000_00000_00000_01000_111000, Xop5 },
+	{ "cvtfu", 5,  0b001101_00000_00000_00000_01000_001000, Xop5 },
+	{ "cvtfs", 5,  0b001101_00000_00000_00000_01000_101000, Xop5 },
+
+    };
+
+    proc Instruction(s: @[]_byte, n: _uint)
+    {   var t: @[]_byte;
+	var op: _uint;
+
+	t = SkipWS(s[n:0]);
+	op = 0;
+	while op < Insts?len &&
+	      (Insts[op].len != n || Insts[op].name[0:n] != s[0:n]) do
+	    op += 1;
+	if op >= Insts?len then
+	{   Syntax2n("illegal instruction ", s, n);
+	    return;
+	}
+	Insts[op].parse@(t, Insts[op].opt);
+    }
+
+import pseudo;
+
+    proc Parse(file: @[]_byte, listing: boolean)
+    {
+	var line, opc, arg, nxt: @[]_byte;
+	var j, n: _uint;
+
+	if file != 0 then
+	{   if !bufin.Open(file) then
+	    {	// error can't open file
+		return;
+	    }
+	    filename = file;
+	}
+	else
+	{   bufin.Init(0);	// read stdin
+	    filename = "(STDIN)";
+	}
+
+	lineno = 0;
+	loop
+	{   line, n = bufin.GetLine();
+	  exit n == 0;
+	    lineno += 1;
+	    opc = SkipWS(line[0:]);
+	    loop
+	    {   arg, j = lex.Label(opc[0:]);
+	      exit j == 0;			// no symbol
+		nxt = SkipWS(arg[0:]);
+	      exit nxt[0] != ':';		// not a label
+		symbol.Label(opc, j);
+		opc = SkipWS(nxt[1:]);
+	    }
+	    if j > 0 then
+	    {   if opc[0] == '.' then
+		    PseudoOp(opc[1:], j-1);
+	        else
+	  	    Instruction(opc[0:], j);
+	    }
+	    if listing then
+	    {
+		fdo.strn(line, n);
+	    }
+    	}
+    }
+}
+

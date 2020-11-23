@@ -1,0 +1,549 @@
+
+
+package stm32f407
+{
+    const name = "stm32f407";
+
+    package RCC
+    {   var regs: [34]_uint32;
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr & 0x3FF;
+	    rv = 0;		// default
+	    if w == WORD then
+	    {
+		rv = regs[offs>>2];
+		if offs>>2
+		is 1 then rv = rv | 0x2000_0000; // rsvd bit reads as 1
+	    }
+	    else
+		armm.Fault("Read fault", addr);
+	    Log("Read  RCC", addr, rv);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var tmp: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr & 0x3FF;
+	    Log("Write RCC", addr, data);
+	    if w == WORD then
+	    {   regs[offs>>2] = data;
+	    	if offs
+	    	is 0x00 then
+		{   if (data & 0x000_0001) != 0 then	// HSION
+			regs[0] = regs[0] | 0x2;	// HSIRDY
+		    if (data & 0x0001_0000) != 0 then	// HSEON
+			regs[0] = regs[0] | 0x2_0000;	// HSERDY
+		    if (data & 0x0100_0000) != 0 then	// PLLON
+		    	regs[0] = regs[0] | 0x200_0000;	// PLLRDY
+		}
+		is 0x08 then
+		{   tmp = regs[0x08>>2];
+		    regs[0x08>>2] = (tmp & 0xFFFF_FFF3) | // SWS = SW
+			      ((tmp & 0x3) << 2);
+		}
+	    }  
+	    else
+		armm.Fault("Write fault", addr);
+	}
+
+        proc Init()
+        {
+	    _zero(regs);
+	    regs[0x00>>2] = 0x0000_0083;	// cr
+	    regs[0x04>>2] = 0x2400_3010;
+	    regs[0x30>>2] = 0x0010_0000;	// ahb1clk
+	    regs[0x50>>2] = 0x7E67_91FF;
+	    regs[0x54>>2] = 0x0000_00F1;
+	    //regs[9] = 0x0C00_0000;	// csr
+        }
+    }
+
+    package PWR
+    {   var regs: [2]_uint32;
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr & 0x3FF;
+	    rv = regs[offs>>2];
+	    Log("Read  PWR", addr, rv);
+	    return rv;
+	}
+	
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var tmp: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr & 0x3FF;
+	    Log("Write PWR", addr, data);
+	    regs[offs>>2] = data;
+	}	
+    }
+
+    package EXTI
+    {   var regs: [6]_uint32;
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr & 0x3FF;
+	    rv = regs[offs>>2];
+	    Log("Read  EXTI", addr, rv);
+	    return rv;
+	}
+	
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var tmp: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr & 0x3FF;
+	    Log("Write EXTI", addr, data);
+	    regs[offs>>2] = data;
+	}	
+    }
+
+    package FLASH
+    {   var regs: [6]_uint32;
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr & 0x3FF;
+	    rv = regs[offs>>2];
+	    Log("Read  FLS", addr, rv);
+	    return rv;
+	}
+	
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var tmp: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr & 0x3FF;
+	    Log("Write FLS", addr, data);
+	    regs[offs>>2] = data;
+	}	
+    }
+
+    package GPIO
+    {   var regs: [11][16]_uint32;
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+	    var g: _uint;
+
+	    offs = addr & 0x3F;
+	    g = (addr >> 10) & 0b1111;
+	    rv = regs[g][offs>>2];
+	    if w
+	    is BYTE then rv = (rv >> (addr&3)) & 0xFF;
+	    is HALF then rv = (rv >> ((addr >> 1) & 1)) & 0xFFFF;
+	    Log("Read  GPIO", addr, rv);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var tmp: _uint32;
+	    var offs: _uint32;
+	    var g: _uint;
+
+	    offs = addr & 0x3F;
+	    g = (addr >> 10) & 0b1111;
+	    if w
+	    is BYTE then
+	    {	tmp = regs[g][offs>>2];
+	    	// FIXME
+	    }
+	    is HALF then
+	    {	tmp = regs[g][offs>>2];
+	    	if (addr & 2) == 0 then
+	    	    data = (tmp & 0xFFFF0000) | (data & 0x0000FFFF);
+	    	else
+	    	    data = (tmp & 0x0000FFFF) | (data << 16);
+	    	    
+	    }
+	    Log("Write GPIO", addr, data);
+	    if offs>>2
+	    is 6 then	// bsbr
+	    {   tmp = regs[g][5];
+		tmp = tmp & ~(data>>16);	// reset
+		tmp = tmp | (data&0xFFFF);	// set
+	    }
+	    else
+		regs[g][offs>>2] = data;
+	}
+
+        proc Init()
+        {
+	    _zero(regs);
+	    regs[0][0x00>>2] = 0xA800_0000;	// mode
+	    regs[0][0x08>>2] = 0x0C00_0000;
+	    regs[0][0x0C>>2] = 0x6400_0000;	// pupdn
+	    regs[1][0x00>>2] = 0x0000_0280;
+	    regs[1][0x08>>2] = 0x0000_00C0;	// ospeed
+	    regs[1][0x0C>>2] = 0x0000_0100;
+	}
+    }    	
+
+    package UART
+    {   var regs: [6][7]_uint32;
+	const map: [32]_uint8 =
+	{ 0, 0, 0, 0, 1, 6, 0, 0, 
+	  0, 0, 0, 0, 0, 0, 0, 0,
+	  0, 2, 3, 4, 5, 0, 0, 0,
+	  0, 0, 0, 0, 0, 0, 0, 0
+	};
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+	    var u: _uint32;
+
+	    offs = addr & 0x3FF;
+	    u = map[(addr>>10)&0x1F];
+	    rv = regs[u-1][offs>>2];
+	    if offs>>2
+	    is 0 then  rv = rv | 0xC0;	// always TXE,TC
+	    is 1 then
+	    {   if (regs[u-1][0]&0x20) == 0 then rv = 0;
+	    }
+	    //Log("Read  UART", addr, rv);
+	    return rv;
+	}
+	
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var tmp: _uint32;
+	    var offs: _uint32;
+	    var u: _uint32;
+
+	    offs = addr & 0x3FF;
+	    u = map[(addr>>10)&0x1F];
+	    regs[u-1][offs>>2] = data;
+	    // Log("Write UART", addr, data);
+	    if offs>>2
+	    is 1 then
+	    {
+		fderr.chr(data&0xFF);	// fake XMIT
+	    }
+	}	
+    }
+
+    package CFG
+    {   var regs: [8]_uint32;
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr & 0x3FF;
+	    rv = 0;		// default
+	    if w == WORD then
+		rv = regs[offs>>2];
+	    else
+		armm.Fault("Read fault", addr);
+	    Log("Read  CFG", addr, rv);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var tmp: _uint32;
+	    var offs: _uint32;
+
+	    Log("Write CFG", addr, data);
+	    offs = addr & 0x3FF;
+	    if w == WORD then
+	    {   regs[offs>>2] = data;
+	    }  
+	    else
+		armm.Fault("Write fault", addr);
+	}
+    }
+
+    package ETH
+    {   var mac: [6]_uint32;
+	var ptp: [6]_uint32;
+	var dma: [6]_uint32;
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr & 0x3FF;
+	    //rv = regs[offs>>2];
+	    Log("Read  ETH", addr, rv);
+	    return rv;
+	}
+	
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var tmp: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr & 0x3FF;
+	    Log("Write ETH", addr, data);
+	    //regs[offs>>2] = data;
+	}	
+    }
+
+    package OTGFS
+    {   var core: [80]_uint32;
+	var host: [72]_uint32;
+	var dev:  [200]_uint32;
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr & 0x3FFFF;
+	    rv = 0;
+	    if offs < 0x400 then
+	    {	rv = core[offs>>2];
+		if offs
+		is 0x10 then	// reset control
+		{   rv = rv & ~0x37;	// clear reset bits
+		    rv = rv | 0x8000_0000;	// ahbidle
+		}
+	    }
+	    else if offs < 0x800 then
+	    	rv = host[(offs-0x400)>>2];
+	    else if offs < 0xC00 then
+		rv = dev[(offs-0x800)>>2];
+	    Log("Read  OTGFS", addr, rv);
+	    return rv;
+	}
+	
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var tmp: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr & 0x3FFFF;
+	    Log("Write OTGFS", addr, data);
+	    if offs < 0x400 then
+	    	core[offs>>2] = data;
+	    else if offs < 0x800 then
+	    	host[(offs-0x400)>>2] = data;
+	    else if offs < 0xC00 then
+		dev[(offs-0x800)>>2] = data;
+	}	
+    }
+
+    package SPI
+    {	var regs: [9]_uint16;
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    fderr.str("\tRead  SPI addr=");  fderr.hex32(addr);
+	    offs = addr & 0x3F;
+	    rv = 0;		// default
+	    if offs == 0x0C then	// DR
+	    {
+	    }
+	    else if w != BYTE then
+	    {   rv = regs[offs>>2];
+	    	if offs == 0x08 then	// SR
+	    	    rv = rv | 0x0003;	// fake txe, rxne
+	    }
+	    else
+		armm.Fault("Read fault", addr);
+	    fderr.str(" rv=");  fderr.hex32(rv);  fderr.nl();
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var tmp: _uint32;
+	    var offs: _uint32;
+
+	    fderr.str("\tWrite SPI addr=");  fderr.hex32(addr);
+	    fderr.str(" data=");  fderr.hex32(data);  fderr.nl();
+	    offs = addr & 0x3F;
+	    if offs == 0x0C then	// DR
+	    {
+	    }
+	    else if w != BYTE then
+		regs[offs>>2] = _uint16(data);
+	    else
+		armm.Fault("Write fault", addr);
+	}
+    }
+
+    package I2C
+    {	var state: (IDLE, WR, RD);
+	var nbytes: _uint8;
+	type Regs:
+	    (CR1, CR2, OAR1, OAR2, TIME, TIMO, ISR, ICR, PECR, RxDR, TxDR);  
+	var regs: [Regs]_uint32;
+
+	proc Transfer()
+	{
+	    nbytes -= 1;
+	    if nbytes == 0 then
+	    {   if (regs[CR2] & 0x100_0000) != 0 then	// reload
+	    	{   nbytes = (regs[CR2]>>16) & 0xFF;
+	    	    regs[ISR] = regs[ISR] | 0x80;	// tcr
+	    	}
+	    	else if (regs[CR2] & 0x200_0000) != 0 then	// autoend
+	    	    regs[ISR] = regs[ISR] | 0x20;	// stopf
+	    	else
+	    	    regs[ISR] = regs[ISR] | 0x40;	// tc
+	    }
+	}
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    fderr.str("\tRead  I2C addr=");  fderr.hex32(addr);
+	    offs = addr & 0x3F;
+	    rv = regs[Regs(offs>>2)];
+	    if Regs(offs>>2)
+	    is RxDR then Transfer();
+	    	    
+	    fderr.str(" rv=");  fderr.hex32(rv);  fderr.nl();
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var tmp: _uint32;
+	    var offs: _uint32;
+
+	    fderr.str("\tWrite I2C addr=");  fderr.hex32(addr);
+	    fderr.str(" data=");  fderr.hex32(data);  fderr.nl();
+	    offs = addr & 0x3F;
+	    regs[Regs(offs>>2)] = data;
+	    if Regs(offs>>2)
+	    is CR2 then
+	    {	if (data&0x2000) != 0 then	// start
+	    	{   nbytes = (data >> 16) & 0xFF;
+	    	    if nbytes != 0 then
+	    	    	regs[ISR] = regs[ISR] & ~0x80;	// clear tcr
+	    	    regs[ISR] = regs[ISR] & ~0x40;	// clear tc
+	    	    if (data&0x0400) == 0 then	// write
+	    	    {   regs[ISR] = regs[ISR] | 0x2;	// txis
+	    	    	state = WR;
+	    	    }
+	    	    else
+	    	    {   regs[ISR] = regs[ISR] | 0x4;	// rxne
+	    	    	state = RD;
+	    	    }
+	    	}
+	    }
+	    is ICR then
+	    	regs[ISR] = regs[ISR] & ~(data & 0x3F38);
+	    is TxDR then Transfer();
+	}
+
+	proc Init()
+	{
+	    _zero(regs);
+	    regs[ISR] = 1;	// txe
+	    state = IDLE;
+	}
+    }
+
+    proc NoRead(addr: _uint32, w: cpu.Width): _uint32
+    {
+	fderr.str("\tRead  addr=");  fderr.hex32(addr);
+	fderr.str(" size=");  fderr.uint8(_uint8(w));
+	fderr.nl();
+	return 0;
+    }
+
+    proc NoWrite(addr: _uint32, w: cpu.Width, data: _uint32)
+    {
+	fderr.str("\tWrite addr=");  fderr.hex32(addr);
+	fderr.str(" size=");  fderr.uint8(_uint8(w));
+	fderr.str(" data=");  fderr.hex32(data);  fderr.nl();
+    }
+
+    const ResetAddress = 0x08000000;
+    const NSegs = 21;
+    // some useful MemFlags
+    const N: armm.MemFlags = { .w=true };	// all the rest are false
+    const X: armm.MemFlags = { .x=true };
+    const F: armm.MemFlags = { .w=false };
+    const T: armm.MemFlags = { .x=true, .a=true, .l=true };
+    const D: armm.MemFlags = { .w=true, .a=true, .l=true };
+    const R: armm.MemFlags = { .w=false, .a=true, .l=true };
+    var MemTab: [NSegs]armm.Mem =
+    {	{ 0, 0x0000_0000, 0x000F_FFFF, X, 0, 0, 0 },	// remapped flash
+	{ 0, 0x0800_0000, 0x080F_FFFF, T, 0, 0, 0 },	// 1024KB flash
+	{ 0, 0x1000_0000, 0x1000_FFFF, D, 0, 0, 0 },	// CCM RAM
+	{ 0, 0x1FFF_D800, 0x1FFF_F7FF, N, NoRead, NoWrite, 0 }, // BootMemory
+	{ 0, 0x1FFF_F800, 0x1FFF_FFFF, N, NoRead, NoWrite, 0 }, // OptionBytes
+	{ 0, 0x2000_0000, 0x2000_FFFF, D, 0, 0, 0 },	// 64KB SRAM1
+
+	{ 0, 0x4000_4400, 0x4000_47FF, N, UART.Read, UART.Write, 0 }, // USART2
+	{ 0, 0x4000_4800, 0x4000_4BFF, N, UART.Read, UART.Write, 0 }, // USART3
+	{ 0, 0x4000_4C00, 0x4000_4FFF, N, UART.Read, UART.Write, 0 }, // UART4
+	{ 0, 0x4000_5000, 0x4000_53FF, N, UART.Read, UART.Write, 0 }, // UART5
+	{ 0, 0x4000_7000, 0x4000_73FF, N, PWR.Read, PWR.Write, 0 }, // PWR
+	{ 0, 0x4001_3800, 0x4001_3BFF, N, CFG.Read, CFG.Write, 0 }, // SYSCFG
+	{ 0, 0x4001_3C00, 0x4001_3C2F, N, EXTI.Read, EXTI.Write, 0 }, // EXTI
+	{ 0, 0x4002_0000, 0x4002_2BFF, N, GPIO.Read, GPIO.Write, 0 }, // GPIO
+	{ 0, 0x4002_3800, 0x4002_3BFF, N, RCC.Read, RCC.Write, 0 }, // RCC
+	{ 0, 0x4002_3C00, 0x4002_3FFF, N, FLASH.Read, FLASH.Write, 0 }, // FLASH
+	{ 0, 0x4002_8000, 0x4002_93FF, N, ETH.Read, ETH.Write, 0 }, // ETH
+	{ 0, 0x5000_0000, 0x5003_FFFF, N, OTGFS.Read, OTGFS.Write, 0 },
+/*
+	{ 0, 0x4000_5400, 0x4000_57FF, N, I2C.Read, I2C.Write, 0}, // I2C1
+	{ 0, 0x4001_3000, 0x4001_33FF, N, SPI.Read, SPI.Write, 0 }, // SPI1
+	{ 0, 0x4002_2000, 0x4002_23FF, N, NoRead, NoWrite, 0 },	// Flash
+*/
+    	{ 0, 0xE000_E010, 0xE000_E01F, N, syscm3.Tick.Read, syscm3.Tick.Write, 0 },
+    	{ 0, 0xE000_E100, 0xE000_E7FF, N, syscm3.NVIC.Read, syscm3.NVIC.Write, 0 },
+    	{ 0, 0xE000_ED00, 0xE000_ED8F, N, syscm3.CB.Read, syscm3.CB.Write, 0 }
+    };
+
+    const NELFSegs = 3;
+	
+    proc Init(argc: _uint, argv: @[]@[]_byte)
+    {   var i, j: _uint;
+
+	memory = pMemory(sys.malloc(Memory?size + NELFSegs*Segment?size));
+	j = 0;
+	for i from 0 to MemTab?len-1 do
+	{
+	    if MemTab[i].flg.a then	// allocate memory
+	    {   MemTab[i].adr = sys.malloc(MemTab[i].end - MemTab[i].beg + 1);
+	    }
+	    if MemTab[i].flg.l then	// ELF needs to load this
+	    {   if j < NELFSegs then
+	    	{   memory.seg[j].mem = MemTab[i].adr;
+	    	    memory.seg[j].beg = MemTab[i].beg;
+	    	    memory.seg[j].end = MemTab[i].end;
+	    	    memory.seg[j].typ = 0;
+	    	    j += 1;
+	    	}
+	    }
+	}
+	// map flash to 0
+	MemTab[0].adr = MemTab[1].adr;
+
+	memory.nsegs = j;
+	armm.memtab = MemTab;
+	armm.nmem = MemTab?len;
+	RCC.Init();
+	GPIO.Init();
+//	I2C.Init();
+    }
+
+    /*
+     * Chip specific commands
+     */
+    proc DumpGPIO(narg: _uint, args: @[]@[]_byte)
+    {
+	fderr.str("Not yet implemented\n");
+    }
+}
+
+

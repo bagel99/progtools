@@ -1,0 +1,30 @@
+const CPU = "atsam4e";
+
+import sys;
+import zstr;
+import out;
+
+const fdin: sys.fildes = 0;
+const fdout: out.OutFD = 1;
+const fderr: out.OutFD = 2;
+
+var db: _uint = 0;		// debug level
+var log: _uint = 2;		// logging level
+
+const PHYINTR_UNIT   =  3;
+const PHYINTR_PIN    = 28;
+const RADIOINTR_UNIT =  0;
+const RADIOINTR_PIN  = 17;
+
+package atsam4e
+{
+    proc SetPin(unit: _uint, bit: _uint, val: boolean);		// forward
+}
+
+alias atsam4e as chip;
+
+import at86rf233;
+alias at86rf233 as spislave;
+
+import main;
+

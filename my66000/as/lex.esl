@@ -1,0 +1,95 @@
+package lex
+{
+    const COMMENT: _byte = ';';
+
+    const CharType: [128]_uint8 =
+    {	0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,	// NUL-SI
+	0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,	// DLE-US
+	0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,0,	// SP-'/'
+	1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,	// '0'-'?'
+	0,3,3,3,3,3,3,2,2,2,2,2,2,2,2,2,	// '@'-'O'
+	2,2,2,2,2,2,2,2,2,2,2,0,0,0,0,2,	// 'P'-'_'
+	0,4,4,4,4,4,4,2,2,2,2,2,2,2,2,2,	// '`'-'o'
+	2,2,2,2,2,2,2,2,2,2,2,0,0,0,0,0,	// 'p'-DLE
+    };
+
+    proc isDec(c: _byte): boolean
+    {
+	return c <= 127 && CharType[c] == 1;
+    }
+
+    proc Symbol(s: @[]_byte):@[]_byte, _uint
+    {   var i: _uint;
+
+	i = 0;
+	if s[0] <= 127 && CharType[s[0]] >= 2 then
+	{  do
+	   {	i += 1;
+	   } while s[i] <= 127 && CharType[s[i]] != 0;
+	}
+	return s[i:], i;
+    }
+
+    proc Label(s: @[]_byte):@[]_byte, _uint
+    {   var i: _uint;
+
+	if isDec(s[0]) then	// possible local label
+	{   return s[1:], 1;
+	}
+	s, i = Symbol(s);
+	return s, i;
+    }
+
+    proc Dec(s: @[]_byte): @[]_byte, _uint64
+    {   var n: _uint64;
+	var i: _uint;
+
+	i = 0;
+	n = 0;
+	while isDec(s[i]) do
+	{   n = n * 10;
+	    n += s[i] - '0';
+	    i += 1;
+	}
+	return s[i:], n;
+    }
+
+    proc Hex(s: @[]_byte): @[]_byte, _uint64
+    {   var n: _uint64;
+	var i: _uint;
+
+	i = 0;
+	n = 0;
+	while s[i] <= 127 do
+	{   if CharType[s[i]]
+	    is 1 then
+	    {	n = n * 16;
+		n += s[i] - '0';
+		i += 1;
+	    }
+	    is 3 then
+	    {   n = n * 16;
+		n += s[i] - 'A' + 10;
+		i += 1;
+	    }
+	    is 4 then
+	    {   n = n * 16;
+		n += s[i] - 'a' + 10;
+		i += 1;
+	    }
+	    else
+	    	return s[i:], n;
+	}
+    }
+
+    // Warning: string known to end with '\n'
+    proc SkipWS(s: @[]_byte): @[]_byte
+    {   var i: _uint;
+
+	i = 0;
+	while s[i] != '\n' && s[i] != COMMENT &&
+	      (s[i] == ' ' || s[i] == '\t') do
+	    i += 1;
+	return s[i:];
+    }
+}

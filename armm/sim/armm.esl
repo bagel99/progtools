@@ -1,0 +1,1818 @@
+/*
+ * Simulator for ARMv7-M (Thumb-2 only) Architecture
+ * This instruction set presents many problems for simulation:
+ * 1. The 32-bit instruction formats are hard to crack, with bits for values
+ *    scattered through the instruction.
+ * 2. The 32-bit branch instructions have inconsistant, non-obvious, encodings.
+ * 3. The PC as a general register, when used as a source or destination,
+ *    has special rules.
+ */
+
+package armm
+{
+    type  Inst: _uint16;	// shortest instruction
+    type  Addr: _uint32;
+    type  Word: _uint32;
+    type  SWord: _int32;
+    type  Half: _uint16;
+    type  Width: (BYTE, HALF, WORD);
+
+    type MemFlags:
+    {   x:	boolean;	// executable
+        w:	boolean;	// writeable
+        a:	boolean;	// allocate memory
+        l:	boolean;	// load from object file
+    }: packed, bits(32);
+    
+    type Mem:
+    {	adr:   _address;
+	beg:   Addr;
+	end:   Addr;
+	flg:   MemFlags;
+	read:  @_(adr: _uint32, w: Width): Word;
+	write: @_(adr: _uint32, w: Width, data: Word);
+	init:  @_();
+    };
+
+    var memtab: @[]Mem;
+    var nmem: _uint;
+
+    type  condcode:
+    (   EQ, NE,		// Z==1; Z==0
+	CS, CC,		// C==1; C==0 (aka HS, LO)
+	MI, PL,		// N==1; N==0
+	VS, VC,		// V==1; V==0
+	HI, LS,		// C==1 && Z==0; C==0 || Z==1
+	GE, LT,		// N==V; N!=V
+	GT, LE,		// Z==0 && N==V; Z==1 || N!=V
+	AL, NV		// AL=always; NV=never (not used)
+    );
+    type  flags:
+    {	N: boolean;
+	Z: boolean;
+	V: boolean;
+	C: boolean;
+    }: packed;
+    const PC = 15;			// PC is register 15
+    const LR = 14;
+    const SP = 13;
+    type Faults: (NONE, BKPT, SVC, OTHER);
+
+    /*
+     *  CPU STATE
+     */
+    var   reg:       [16]Word;
+    var   psN, psZ, psC, psV, psQ: boolean;	// processor status flags
+    var   psT:       0..1;
+    var   ITblock:   0..4;		// instructions left in IfThen block
+    var   ITcond:    0..15;		// condition code for IfThen block
+    var   ITmask:    0..15;		// condition mask for IfThen block
+    var   instpc:    Word;		// saved PC for faults
+    var   vtor:      Word;		// vector table address
+    var   basePri:   _uint8 = 0;
+    var   priMask:   0..1 = 0;
+    var   faultMask: 0..1 = 0;
+    var   curPri:    _int16 = 256;	// <256 if in exception
+    var   schedIntr: _uint16 = 0;	// >0 if exception should happen next
+    var   schedPri:  _int16;		// priority of exception
+    var   fault: Faults = NONE;
+    var   ilast: _uint = 0;
+    var   rlast: _uint = 0;
+    var   wlast: _uint = 0;
+    var   cycles: _uint = 0;
+
+
+    // The mask is bit reversed for easier testing
+    // It contains low bit of CC
+    // Low bit (first test) is taken from the CC
+    const ittable: [16]{ len:  0..4; mask: 0..15; } =
+    {   { 0, 0b0000 },	// 0000 - illegal
+	{ 4, 0b0000 },  // 0001 - xyz1 -> zyx0
+	{ 3, 0b0000 },	// 0010 - xy10 -> 0yx0
+	{ 4, 0b1000 },	// 0011 - xyz1 -> zyx0
+	{ 2, 0b0000 },	// 0100 - x100 -> 00x0
+	{ 4, 0b0100 },	// 0101 - xyz1 -> zyx0
+	{ 3, 0b0100 },	// 0110 - xy10 -> 0yx0
+	{ 4, 0b1100 },	// 0111 - xyz1 -> zyx0
+	{ 1, 0b0000 },	// 1000 - 1000 -> 0000
+	{ 4, 0b0010 },	// 1001 - xyz1 -> zyx0
+	{ 3, 0b0010 },	// 1010 - xy10 -> 0yx0
+	{ 4, 0b1010 },	// 1011 - xyz1 -> zyx0
+	{ 2, 0b0010 },	// 1100 - x100 -> 00x0
+	{ 4, 0b0110 },	// 1101 - xyz1 -> zyx0
+	{ 3, 0b0110 },	// 1110 - xy10 -> 0yx0
+	{ 4, 0b1110 }	// 1111 - xyz1 -> zyx0
+    };
+    type instT:
+    (   UNDF, NOP,  MOV,  MVN,  TST,  TEQ,  CMP,  CMN,
+        ADD,  SUB,  ADC,  SBC,  AND,  EOR,  ORR,  ORN,
+	LSL,  LSR,  ASR,  ROR,  RSB,  MUL,  BIC,  MOVT,  
+	STR,  STRH, STRB, LDR,  LDRH, LDRB, LDRSB,LDRSH,
+	STRT, STRHT,STRBT,LDRT, LDRHT,LDRBT,LDRSBT,LDRSHT,
+	STRD, LDRD, STMIA,STMDB,LDMIA,LDMDB,
+	SXTH, SXTB, UXTH, UXTB, SXTAH,SXTAB,UXTAH,UXTAB,
+	SBFX, UBFX, BFC,  BFI,  SSAT, SSATh,USAT, USATh,
+	UMULL,SMULL,UDIV, SDIV, MLA,  MLS,
+	REV,  REV16,REVSH,RBIT, CLZ,
+	MSR,  MRS,
+	YIELD,WFE,  WFI,  SEV,  BKPT, SVC,  CPS,
+	CBZ,  CBNZ, IT,
+	TBB,  TBH,
+	PKHBT,PKHTB,
+	BX,   BLX,  BC,   B,    BL,
+	CLREX,DSB,  DMB,  ISB,
+	CPin, CPout,CPld, CPst
+    );
+    type shiftT: ( LSL, LSR, ASR, ROR, RRX );
+
+//* FOR DEBUGGING
+    const opname: [instT]@[]_byte =
+    {   [UNDF] ="UNDF",  [NOP]  ="NOP",   [MOV]  ="MOV",   [MVN]  ="MVN",
+	[TST]  ="TST",   [TEQ]  ="TEQ",   [CMP]  ="CMP",   [CMN]  ="CMN",
+	[ADD]  ="ADD",   [SUB]  ="SUB",   [ADC]  ="ADC",   [SBC]  ="SBC",   
+	[AND]  ="AND",   [EOR]  ="EOR",   [ORR]  ="ORR",   [ORN]  ="ORN",
+	[LSL]  ="LSL",   [LSR]  ="LSR",   [ASR]  ="ASR",   [ROR]  ="ROR",
+	[RSB]  ="RSB",   [MUL]  ="MUL",   [BIC]  ="BIC",   [MOVT] ="MOVT",
+	[STR]  ="STR",   [STRH] ="STRH",  [STRB] ="STRB",  [LDR]  ="LDR",
+	[LDRH] ="LDRH",  [LDRB] ="LDRB",  [LDRSB]="LDRSB", [LDRSH]="LDRSH",
+	[STRT]  ="STRT", [STRHT] ="STRHT",[STRBT] ="STRBT",[LDRT]  ="LDRT",
+	[LDRHT] ="LDRHT",[LDRBT] ="LDRBT",[LDRSBT]="LDRSBT",[LDRSHT]="LDRSHT",
+	[STRD] ="STRD",  [LDRD] ="LDRD",  [STMIA]="STMIA", [STMDB]="STMDB",
+	[LDMIA]="LDMIA", [LDMDB]="LDMDB",
+	[SXTH] ="SXTH",  [SXTB] ="SXTB",  [UXTH] ="UXTH",  [UXTB] ="UXTB",
+	[SBFX] ="SBFX",  [UBFX] ="UBFX",  [BFC]  ="BFC",   [BFI]  ="BFI",
+	[SSAT] ="SSAT",  [SSATh]="SSAT16",[USAT] ="USAT",  [USATh]="USAT16",
+	[UMULL]="UMULL", [SMULL]="SMULL", [UDIV] ="UDIV",  [SDIV] ="SDIV",
+	[MLA]  ="MLA",   [MLS]  ="MLS", 
+	[REV]  ="REV",   [REV16]="REV16", [REVSH]="REVSH",
+	[RBIT] ="RBIT",  [CLZ]  ="CLZ",
+	[MSR]  ="MSR",   [MRS]  ="MRS",
+	[YIELD]="YIELD", [WFE]  ="WFE",   [WFI]  ="WFI",
+	[SEV]  ="SEV",   [BKPT] ="BKPT",  [SVC]  ="SVC",   [CPS]  ="CPS",
+	[CBZ]  ="CBZ",   [CBNZ] ="CBNZ",  [IT]   ="IT",
+	[TBB]  ="TBB",   [TBH]  ="TBH",
+	[BX]   ="BX",    [BLX]  ="BLX",
+	[BC]   ="BC",    [B]    ="B",     [BL]   ="BL",
+	[CLREX]="CLREX", [DSB]  ="DSB",   [DMB]  ="DMB",   [ISB]  ="ISB",
+	[CPin] ="CPin",  [CPout]="CPout", [CPld] ="CPld",  [CPst] ="CPst"
+	
+    };
+    const regname: [16]@[]_byte =
+    {	"r0",	"r1",	"r2",	"r3",	"r4",	"r5",	"r6",	"r7",
+	"r8",	"r9",	"r10",	"r11",	"r12",	"sp",	"lr",	"pc"
+    };
+
+    proc Unpredictable()
+    {
+fderr.str("Unpredictable\n");
+    }
+
+    proc Undefined()
+    {
+fderr.str("Undefined\n");
+    }
+
+    proc NotImplemented(s:@[]_byte)
+    {
+	fderr.str("\nUnimplemented instruction: ");
+	fderr.str(s);
+	fderr.str(" @");
+	fderr.hex32(instpc);
+	fderr.str(" cycle ");
+	fderr.uint(cycles);
+	fderr.nl();
+    }
+
+    proc Fault(s:@[]_byte, info: _uint32)
+    {   
+	fderr.str("\nFault cycle ");
+	fderr.uint(cycles);
+	fderr.str(" at ");
+	fderr.hex32(instpc);
+	fderr.str(" : ");
+	fderr.str(s);
+	fderr.str(" : ");
+	fderr.hex32(info);
+	fderr.nl();
+	fault = OTHER;
+    }
+
+    proc LoadBytes(addr: Word, data: @[]_byte, len: _uint): boolean
+    {   var i: _uint;
+
+        i = 0;
+        while !(addr >= memtab[i].beg && addr+len <= memtab[i].end) do
+	{  i += 1;
+	   exit i >= nmem with return false;
+	}
+	addr -= memtab[i].beg;
+	memtab[i].adr@[addr:len] = data[0:len];
+	return true;
+    }
+
+    proc Read(addr: Addr, w: Width): Word
+    {   var i: _uint;
+	var rv: Word;
+
+        i = rlast;
+        while !(addr >= memtab[i].beg && addr <= memtab[i].end) do
+	{   i += 1;
+	    if i >= nmem then i = 0;
+	   exit i == rlast with
+	    {
+		Fault("Read violation", addr);
+		return 0;
+	    }
+	}
+	rlast = i;
+	if memtab[i].read == 0 then	// ordinary memory
+	{   addr -= memtab[i].beg;
+	    if w
+            is BYTE then
+		rv = memtab[i].adr@[addr];
+	    is HALF then
+		rv = (Word(memtab[i].adr@[addr+1]) << 8) | memtab[i].adr@[addr];
+	    else
+		rv = (Word(memtab[i].adr@[addr+3]) << 24) |
+		     (Word(memtab[i].adr@[addr+2]) << 16) |
+		     (Word(memtab[i].adr@[addr+1]) << 8)  |
+		     memtab[i].adr@[addr];
+	}
+	else
+	    rv = memtab[i].read@(addr, w);
+	return rv;
+    }
+
+    proc Write(addr: Addr, w: Width, v: Word)
+    {   var i: _uint;
+
+        i = wlast;
+        while !(addr >= memtab[i].beg && addr <= memtab[i].end) do
+	{   i += 1;
+	    if i >= nmem then i = 0;
+	   exit i == wlast with
+	    {
+		Fault("Write violation", addr);
+		return;
+	    }
+	}
+	wlast = i;
+	if memtab[i].write == 0 then	// ordinary memory
+	{   addr -= memtab[i].beg;
+	    memtab[i].adr@[addr] = v;
+	    if w >= HALF then
+	    {   memtab[i].adr@[addr+1] = v >> 8;
+		if w == WORD then
+		{   memtab[i].adr@[addr+2] = v >> 16;
+		    memtab[i].adr@[addr+3] = v >> 24;
+		}
+	    }
+	}
+	else
+	    memtab[i].write@(addr, w, v);
+    }
+
+    proc SetBreakpoint(addr: Addr, n: _uint): Inst: inline
+    {   var old: Inst;
+
+	old = Read(addr, HALF);
+	Write(addr, HALF, 0xBE00|_uint16(n));
+	return old;
+    }
+
+    proc ClrBreakpoint(addr: Addr, inst: Inst):: inline
+    {
+	Write(addr, HALF, inst);
+    }
+
+    // FIXME - subgroups not implemented
+    proc GetPriority(): _int
+    {   var pri, boost: _int;
+
+	pri = 256;	// normal operation
+	boost = 256;
+	pri = _min(curPri, pri);
+	if faultMask != 0 then
+	    boost = -1;
+	elif priMask != 0 then
+	    boost = 0;
+	elif basePri != 0 then
+	    boost = basePri;
+	pri = _min(boost, pri);
+	return pri;
+    }
+
+    // called from commands
+    proc Interrupt(vec: _uint)
+    {
+	schedIntr = vec;
+	schedPri = 0;
+    }
+
+    proc TakeException(vec: _uint, pri: _int)
+    {
+	schedIntr = vec;
+	schedPri = pri;
+    }
+
+    proc ExceptionReturn(newpc: Addr)
+    {   var fs: _uint;	// frame size
+	var isp: Word;	// stack pointer
+	var ra:  Word;	// return address
+	var psr: Word;	// program status register
+
+	// FIXME - if floating point, frame size is larger
+	fs = 0x20;
+	// FIXME - check if really in an exception
+	isp = reg[SP];
+	reg[0]  = Read(isp+0x00, WORD);
+	reg[1]  = Read(isp+0x04, WORD);
+	reg[2]  = Read(isp+0x08, WORD);
+	reg[3]  = Read(isp+0x0c, WORD);
+	reg[12] = Read(isp+0x10, WORD);
+	reg[LR] = Read(isp+0x14, WORD);
+	ra      = Read(isp+0x18, WORD);
+	psr     = Read(isp+0x1C, WORD);
+	reg[SP] = isp + fs;
+	reg[PC] = ra;
+	// FIXME - restore psr
+	curPri = 256;
+    }
+
+    // Fake an exception
+    proc ExceptionEnter(vec: _uint, pri: _int)
+    {   var fs: _uint;	// frame size
+	var isp: Word;	// stack pointer
+	var ra:  Word;	// return address
+	var psr: Word;	// program status register
+
+	// FIXME - if floating point, frame size is larger
+	fs = 0x20;
+	// FIXME - check for thread stack pointer
+	isp = reg[SP] - fs;
+	// FIXME - align stack pointer
+	// FIXME - return address is different for exceptions
+	ra = reg[PC];
+	psr = 0;	// FIXME;
+	// save registers
+	Write(isp+0x00, WORD, reg[0]);
+	Write(isp+0x04, WORD, reg[1]);
+	Write(isp+0x08, WORD, reg[2]);
+	Write(isp+0x0C, WORD, reg[3]);
+	Write(isp+0x10, WORD, reg[12]);
+	Write(isp+0x14, WORD, reg[LR]);
+	Write(isp+0x18, WORD, ra);
+	Write(isp+0x1C, WORD, psr);
+	// FIXME - link register is different for FP and handler vs. thread
+	reg[SP] = isp;
+	reg[LR] = 0xFFFF_FFF1;
+	reg[PC] = Read(vtor + vec*4, WORD) & 0xFFFF_FFFE;
+	// FIXME - set exception mode psr
+	curPri = pri;
+    }
+
+    proc IFetch16(iaddr: Word): Half
+    {   var inst: Half;
+
+	inst = Read(iaddr, HALF);
+	return inst;
+    }
+
+    proc SetSysReg(regno: _uint, data: Word)
+    {
+	if regno
+	is 0b10_000 then priMask = data&1;
+	is 0b10_001, 0b10_0010 then basePri = _uint8(data);
+	is 0b10_011 then faultMask = data&1;
+	else
+	    Fault("Set of unimplemented SysReg", regno);
+    }
+
+    proc GetSysReg(regno: _uint): Word
+    {
+	if regno
+	is 0b10_000 then return priMask;
+	is 0b10_001, 0b10_0010 then return basePri;
+	is 0b10_011 then return faultMask;
+	else
+	    Fault("Get of unimplemented SysReg", regno);
+	return 0;
+    }
+
+    proc SetPC(v: Word)
+    {
+	// low bit is the thumb mode bit
+	psT = v & 1;
+	reg[PC] = v & 0xFFFFFFFE;
+    }
+	
+    proc SetFlagsNZ(result: _uint32)
+    {
+	psZ = result == 0;
+	psN = result&0x8000_0000 != 0;
+    }
+
+    proc SetFlagsNZC(result: _uint32, carry: _uint32)
+    {
+	SetFlagsNZ(result);
+	psC = carry != 0;
+    }
+	
+    proc SetFlagsNZCV(cc: flags)
+    {
+	psZ = cc.Z;
+	psN = cc.N;
+	psC = cc.C;
+	psV = cc.V;
+    }
+
+    proc CondPassed(cc: condcode): boolean
+    {
+
+	if cc
+	is EQ then return  psZ;
+	is NE then return !psZ;
+	is CS then return  psC;
+	is CC then return !psC;
+	is MI then return  psN;
+	is PL then return !psN;
+	is VS then return  psV;
+	is VC then return !psV;
+	is HI then return  psC && !psZ;
+	is LS then return !psC ||  psZ;
+	is GE then return psN == psV;
+ 	is LT then return psN != psV;
+	is GT then return !psZ && psN == psV;
+	is LE then return  psZ || psN != psV;
+	is AL then return true;
+	return false;
+    }
+
+    proc AddWithCarry(v1: Word, v2: Word, ci:boolean): Word, flags
+    {   var result: Word;
+	var cc: flags;
+
+	result = v1 + v2 + Word(ci);
+	cc.Z = result == 0;
+	cc.N = result&0x80000000 != 0;
+	if !ci then
+	    cc.C = result < v1;
+	else
+	    cc.C = result <= v1;
+	cc.V = false;	// FIXME
+	return result, cc;
+    }
+
+    proc Sext8(v: Word): SWord
+    {   var rv: SWord;
+
+	rv = v & 0x7F;
+	if (v & 0x80) != 0 then
+	   return -rv;
+	else
+	   return rv;
+    }
+
+    proc Sext11(v: Word): SWord
+    {   var rv: SWord;
+
+	rv = v & 0x3FF;
+	if (v & 0x400) != 0 then
+	   return -rv;
+	else
+	   return rv;
+    }
+
+    proc ExpandT2Imm(v: Word): Word
+    {   var rv: Word;
+	var shf: Word;
+
+	rv  = v & 0xFF;
+	if (v >> 8) & 0b1111
+	is 0b0000 then {}
+	is 0b0001 then rv = (rv << 16) | rv;
+	is 0b0010 then rv = (rv << 24) | (rv << 8);
+	is 0b0011 then rv = (rv << 24) | (rv << 16) | (rv << 8) | rv;
+	else
+	{   rv = rv | 0x80;
+	    shf = (v >> 7) & 0b11111;
+	    rv = rv << (32 - shf);
+	}
+	return rv;
+    }
+
+    proc DecodeImmShift(t: Half /*0..3*/, n: Word /*0..31*/): shiftT, Word
+    {
+	if t
+	is 0b00 then	// lsl
+	    return LSL, n;
+	is 0b01 then	// lsr
+	{   if n == 0 then n = 32;
+	    return LSR, n;
+	}
+	is 0b10 then	// asr
+	{   if n == 0 then n = 32;
+	    return ASR, n;
+	}
+	is 0b11 then	// ror
+	{   if n == 0 then return RRX, 1;
+	    return ROR, n;
+	}
+    }
+
+    proc Rotate(x: Word, n: _uint): Word: inline
+    {
+	return (x >> n) | (x << (32 - n));
+    }
+
+    proc ShiftWithCarry(t: shiftT, n: Word /*0..31*/, v: Word, ci: boolean): Word, 0..1
+    {   var co: 0..1;
+        var sv: SWord;
+/*
+fderr.str("[Shift "); fderr.uint32(_uint(t));
+fderr.chr(','); fderr.uint32(n);
+fderr.chr(','); fderr.uint32(v);
+fderr.chr(','); fderr.uint32(ci); fderr.chr(']');
+*/
+	if n == 0 then
+	    return v, _uint8(ci);
+	if t
+	is LSL then
+	{   if n > 31 then
+	    {	co = 0;
+		v  = 0;
+	    }
+	    else
+	    {	co = (v >> (31-n)) & 0b1;
+		v  = v << n;
+	    }
+	}
+	is LSR then
+	{   if n > 31 then
+	    {	co = 0;
+		v  = 0;
+	    }
+	    else
+	    {	co = (v >> (n+1)) & 0b1;
+		v  = v >> n;
+	    }
+	}
+	is ASR then
+	{   if n > 31 then
+		NotImplemented("ASR Shift count > 31");
+	    else
+	    {	co = (v >> (n+1)) & 0b1;
+		sv = SWord(v);
+		sv = sv >> n;
+		v  = Word(sv);
+	    }
+	}
+	is ROR then
+	{   if n > 31 then
+		NotImplemented("ROR Shift count > 31");
+	    else
+	    {	v  = _ror(v, n);
+		co = (v >> (n-1)) & 0b1;
+	    }
+	}
+	is RRX then
+	{
+NotImplemented("RRX");
+	}
+	return v, co;
+    }
+
+    proc SSat(data: Word, bit: _uint): Word
+    {   var mask: Word;
+
+	mask = (1 << (bit-1)) - 1;
+	if data & 0x8000_0000 != 0 then 	// signed
+	{   mask = ~mask;
+if db > 1 then { fderr.str("neg: mask="); fderr.hex32(mask); fderr.nl(); }
+	    if data & mask != mask then
+	        data = mask;
+	}
+	else					// unsigned
+	{
+if db > 1 then { fderr.str("pos: mask="); fderr.hex32(mask); fderr.nl(); }
+	    if data > mask then
+		data = mask;
+	}
+	return data;
+    }
+
+    proc USat(data: Word, bit: _uint): Word
+    {   var mask: Word;
+
+	mask = (1 << (bit-1)) - 1;
+	if data > mask then
+	    data = mask;
+	return data;
+    }
+
+
+    // WARNING: registers pushed in opposite order from DDI0405B pA6-187.
+    proc StoreMDB(br: Word, list: Word): Word
+    {   var r: 0..15;
+	var addr: Word;
+	var m: Word;
+
+	addr = reg[br];
+	r = 14;		// pc not allowed
+	m = 0x4000;
+	while m != 0 do
+	{   if (list & m) != 0 then
+	    {   addr -= 4;
+	        Write(addr, WORD, reg[r]);
+	    }
+	    r -= 1;
+	    m = m >> 1;
+	}
+	return addr;
+    }
+
+    proc LoadMIA(br: Word, list: Word): Word
+    {   var r: 0..15;
+	var addr: Addr;
+	var tmp: Word;
+
+	addr = reg[br];
+	r = 0;
+	while list != 0 do
+	{   if (list & 1) != 0 then
+	    {   tmp = Read(addr, WORD);
+	    	if r == PC then
+	    	{   if (tmp & 1) == 0 then
+	    		Fault("Load PC mode", tmp);
+	    	    tmp = tmp & ~1;
+	    	}
+	    	reg[r] = tmp; 
+		addr += 4;
+	    }
+	    r += 1;
+	    list = list >> 1;
+	}
+	return addr;
+    }
+
+    proc StoreMIA(br: Word, list: Word): Word
+    {   var r: 0..15;
+	var addr: Addr;
+
+	addr = reg[br];
+	r = 0;
+	while list != 0 do
+	{   if (list & 1) != 0 then
+	    {   Write(addr, WORD, reg[r]);
+	        addr += 4;
+	    }
+	    r += 1;
+	    list = list >> 1;
+	}
+	return addr;
+    }
+
+    proc LoadMDB(br: Word, list: Word): Word
+    {   var r: 0..15;
+	var addr: Addr;
+	var m: Word;
+	var tmp: Word;
+
+	addr = reg[br];
+	r = 15;
+	m = 0x8000;
+	while m != 0 do
+	{   if (list & m) != 0 then
+	    {   addr -= 4;
+		tmp = Read(addr, WORD);
+	    	if r == PC then
+	    	{   if (tmp & 1) == 0 then
+	    		Fault("Load PC mode", tmp);
+	    	    tmp = tmp & ~1;
+	    	}
+	    	reg[r] = tmp; 
+	    }
+	    r -= 1;
+	    m = m >> 1;
+	}
+	return addr;
+    }
+
+    const optab0:   [4]instT = { LSL, LSR, ASR, UNDF };
+    const optab3:   [4]instT = { ADD, SUB, ADD, SUB };
+    const optab8a: [16]instT =
+    {   AND, EOR, LSL, LSR, ASR, ADC, SBC, ROR,
+	TST, RSB, CMP, CMN, ORR, MUL, BIC, MVN
+    };
+    const optab8b:  [4]instT = { ADD, CMP, MOV, BX };
+    const optab4:   [4]instT = { MOV, CMP, ADD, SUB };
+    const optab10:  [8]instT = { STR, STRH, STRB, LDRSB, LDR, LDRH, LDRB, LDRSH };
+    const optab22:  [4]instT = { SXTH, SXTB, UXTH, UXTB };
+    const optab23a: [4]instT = { REV, REV16, UNDF, REVSH };
+    const optab23x:[16]instT =
+    {	NOP,  YIELD, WFE,  WFI,  SEV,  UNDF, UNDF, UNDF,
+	UNDF, UNDF,  UNDF, UNDF, UNDF, UNDF, UNDF, UNDF
+    };
+    const optab29: [16]instT =
+    {	AND,  BIC,  ORR,  ORN,  EOR,  UNDF, PKHBT,UNDF,
+	ADD,  UNDF, ADC,  SBC,  UNDF, SUB,  RSB,  UNDF
+    };
+    const optab29a:[16]instT =
+    {	TST,  BIC,  ORR,  MVN,  TEQ,  UNDF, UNDF, UNDF,
+	CMN,  UNDF, ADC,  SBC,  UNDF, CMP,  RSB,  UNDF
+    };
+    const optab29m:[32]instT =
+    {	UNDF, UNDF, UNDF, UNDF, UNDF, UNDF, UNDF, UNDF,
+	STMIA,LDMIA,STMIA,LDMIA,UNDF, UNDF, UNDF, UNDF,
+	STMDB,LDMDB,STMDB,LDMDB,UNDF, UNDF, UNDF, UNDF,
+	UNDF, UNDF, UNDF, UNDF, UNDF, UNDF, UNDF, UNDF
+    };
+    const optab30a:[16]instT =
+    {	TST,  BIC,  ORR,  ORN,  TEQ,  UNDF, UNDF, UNDF,
+	CMN,  UNDF, ADC,  SBC,  UNDF, CMP,  RSB,  UNDF
+    };
+    const optab30b:[16]instT =
+    {	AND,  BIC,  MOV,  MVN,  EOR,  UNDF, UNDF, UNDF,
+	ADD,  UNDF, ADC,  SBC,  UNDF, SUB,  RSB,  UNDF
+    };
+    const optab30m:[8]instT = { ADD, UNDF, MOV, UNDF, UNDF, SUB, MOVT, UNDF };
+    const optabbr: [8]instT =
+    {	BC,   B,    BC,    B,    BLX, BL,  BLX,   BL
+    };
+    const optab31s: [4]instT = { LSL, LSR, ASR, ROR };
+    const optab31d: [8]instT =
+    {	SMULL, SDIV, UMULL, UDIV, UNDF, UNDF, UNDF, UNDF
+    };
+    const optab31b: [4]instT = { REV, REV16, RBIT, REVSH };   
+    const optab31p: [32]instT =
+    {   UNDF, LDRB, UNDF, LDRH, UNDF, LDR,  UNDF, UNDF,
+	UNDF, LDRB, UNDF, LDRH, UNDF, LDR,  UNDF, UNDF,
+	UNDF, LDRSB,UNDF, LDRSH,UNDF, UNDF, UNDF, UNDF,
+	UNDF, LDRSB,UNDF, LDRSH,UNDF, UNDF, UNDF, UNDF
+    };
+    const optab31a: [32]instT =
+    {   STRB, LDRB, STRH, LDRH, STR,  LDR,  UNDF, UNDF,
+	UNDF, UNDF, UNDF, UNDF, UNDF, UNDF, UNDF, UNDF,
+	UNDF, LDRSB,UNDF, LDRSH,UNDF, UNDF, UNDF, UNDF,
+	UNDF, UNDF, UNDF, UNDF, UNDF, UNDF, UNDF, UNDF
+    };
+    const optab31t: [32]instT =
+    {   STRBT,LDRBT,STRHT,LDRHT,STRT, LDRT, UNDF, UNDF,
+	UNDF, UNDF, UNDF, UNDF, UNDF, UNDF, UNDF, UNDF,
+	UNDF, LDRSBT,UNDF,LDRSHT,UNDF,UNDF, UNDF, UNDF,
+	UNDF, UNDF, UNDF, UNDF, UNDF, UNDF, UNDF, UNDF
+    };
+    const optab31x: [8]instT =
+    {	SXTH, UXTH, UNDF, UNDF, SXTB, UXTB, UNDF, UNDF
+    };
+    const optab31ax: [8]instT =
+    {	SXTAH,UXTAH,UNDF, UNDF, SXTAB,UXTAB, UNDF, UNDF
+    };
+    const misc1: [16]instT =
+    {	NOP,  YIELD,WFE,  WFI,  SEV,  UNDF, UNDF, UNDF,
+	UNDF, UNDF, UNDF, UNDF, UNDF, UNDF, UNDF, UNDF
+    };
+    const misc2: [8]instT =
+    {   UNDF, UNDF, CLREX,UNDF, DSB,  DMB,  ISB,  UNDF
+    };
+    proc svc(imm: 0..255)
+    {
+	if imm == 0 then fault = OTHER;
+    }
+
+    // run a single instruction
+    proc Run(): boolean
+    {
+	var inst, instx: Half;		// the 16-bit parts of the instruction
+	var rd, rn, rm: 0..15;
+	var cond: condcode;
+	var pcadjust: 0..4;
+	var inl, inr, inx, tmp: Word;	// ALU left and right inputs
+	var offs: SWord;		// branch offset
+	var op: instT;
+	var shft: shiftT;		// shift type
+	var alucc: flags;
+	var setflag, wback: boolean;
+	var co: 0..1;
+
+	if schedIntr != 0 then
+	{   ExceptionEnter(schedIntr, schedPri);
+	    schedIntr = 0;
+	}
+	cycles += 1;
+	fault = NONE;
+	// Assume 16-bit instruction
+	pcadjust = 2;
+	instpc = reg[PC];
+	inst = IFetch16(reg[PC]);		// 16 bits in low half
+if db > 0 then {
+fderr.hex32(reg[PC]);
+fderr.str(": "); fderr.hex16(inst);
+}
+	// Check for 32-bit instruction
+	if (inst & 0xF800) >= 0xE800 then	// 32-bit
+	{   instx = IFetch16(reg[PC]+2);	// get the second half
+if db > 0 then fderr.hex16(instx);
+	    pcadjust = 0;
+	}
+	// Setup the PC as address of instruction plus 4
+	reg[PC] += 4;
+	setflag = true;		// default to set flags
+	if ITblock > 0 then			// if inside an IfThen block
+	{   setflag = false;
+	    cond = condcode(ITcond | (ITmask&1));
+if db > 1 then {
+fderr.str(" it="); fderr.uint8(ITblock);
+}
+	    ITblock -= 1;
+	    ITmask = ITmask >> 1;
+	    if !CondPassed(cond) then
+	    {   reg[PC] -= pcadjust;
+if db > 0 then fderr.nl();
+	    	return true;
+	    }
+	}
+	// Crack the instruction
+	wback = false;		// default to not update dest register   
+	if inst >> 6		// get high 10 bits
+	is 0b0000_0000_00 .. 0b0001_0111_11 then	// shift
+	{   op = optab0[(inst >> 11) & 0b11];
+	    inr = (inst >> 6) & 0b11111;
+	    inl = reg[(inst >> 3) & 0b111];
+	    rd = inst & 0b111;
+	    if op == LSL && inr == 0 then
+	    {	op = MOV;
+	    	inr = inl;
+	    }
+	}
+	is 0b0001_1000_00 .. 0b0001_1011_11 then	// add/sub reg
+	{   op = optab3[(inst >> 9) & 0b11];
+	    inr = reg[(inst >> 6) & 0b111];
+	    inl = reg[(inst >> 3) & 0b111];
+	    rd = inst & 0b111;
+	}
+	is 0b0001_1100_00 .. 0b0001_1111_11 then	// add/sub #imm
+	{   op = optab3[(inst >> 9) & 0b11];
+	    inr = (inst >> 6) & 0b111;
+	    inl = reg[(inst >> 3) & 0b111];
+	    rd = inst & 0b111;
+	}
+	is 0b0010_0000_00 ..0b0011_1111_11 then		// mov/cmp/add/sub #imm8
+	{   op = optab4[(inst >> 11) & 0b11];
+	    inr = inst & 0xFF;
+	    rd = (inst >> 8) & 0b111;
+	    inl = reg[rd];
+	}
+	is 0b0100_0000_00 .. 0b0100_0011_11 then	// and/../mvn reg	
+	{   op = optab8a[(inst >> 6) & 0b1111];
+	    rd = inst & 0b111;
+	    rn = (inst >> 3) & 0b111;
+	    inl = reg[rd];
+	    inr = reg[rn];
+	    if op == RSB then
+	    {   inl = inr;
+		inr = 0;
+	    }
+	}
+	is 0b0100_0100_00 .. 0b0100_0110_11 then	// add/cmp/mov
+	{   op = optab8b[(inst >> 8) & 0b11];
+	    setflag = false;
+	    rd = ((inst >> 4) & 0b1000) | (inst & 0b111);
+	    rn = (inst >> 3) & 0b1111;
+	    inr = reg[rn];
+	    inl = reg[rd];
+	}
+	is 0b0100_0111_00 .. 0b0100_0111_01 then	// bx	
+	{   op = BX;
+	    inr = reg[(inst >> 3) & 0b1111];
+	}
+	is 0b0100_0111_10 .. 0b0100_0111_11 then	// blx	
+	{   op = BLX;
+	    inr = reg[(inst >> 3) & 0b1111];
+	}
+	is 0b0100_1000_00 .. 0b0100_1111_11 then	// ldr pc,#imm8
+	{   op = LDR;
+	    inr = (inst & 0xFF) << 2;
+	    inl = reg[PC] & 0xFFFF_FFFC;
+	    rd = (inst >> 8) & 0b111;
+	}
+	is 0b0101_0000_00 .. 0b0101_1111_11 then	// str{bh}/ldr{bh} reg
+	{   op = optab10[(inst >> 9) & 0b111];
+	    inr = reg[(inst >> 6) & 0b111];
+	    inl = reg[(inst >> 3) & 0b111];
+	    rd = inst & 0b111;
+	}
+	is 0b0110_0000_00 .. 0b0110_0111_11 then	// str #imm5
+	{   op = STR;
+	    inr = (inst >> 4) & 0b1111100;
+	    inl = reg[(inst >> 3) & 0b111];
+	    rd = inst & 0b111;
+	}
+	is 0b0110_1000_00 .. 0b0110_1111_11 then	// ldr #imm5
+	{   op = LDR;
+	    inr = (inst >> 4) & 0b1111100;
+	    inl = reg[(inst >> 3) & 0b111];
+	    rd = inst & 0b111;
+	}
+	is 0b0111_0000_00 .. 0b0111_0111_11 then	// strb #imm5
+	{   op = STRB;
+	    inr = (inst >> 6) & 0b11111;
+	    inl = reg[(inst >> 3) & 0b111];
+	    rd = inst & 0b111;
+	}
+	is 0b0111_1000_00 .. 0b0111_1111_11 then	// ldrb #imm5
+	{   op = LDRB;
+	    inr = (inst >> 6) & 0b11111;
+	    inl = reg[(inst >> 3) & 0b111];
+	    rd = inst & 0b111;
+	}
+	is 0b1000_0000_00 .. 0b1000_0111_11 then	// strh #imm5
+	{   op = STRH;
+	    inr = (inst >> 5) & 0b111110;
+	    inl = reg[(inst >> 3) & 0b111];
+	    rd = inst & 0b111;
+	}
+	is 0b1000_1000_00 .. 0b1000_1111_11 then	// ldrh #imm5
+	{   op = LDRH;
+	    inr = (inst >> 5) & 0b111110;
+	    inl = reg[(inst >> 3) & 0b111];
+	    rd = inst & 0b111;
+	}
+	is 0b1001_0000_00 .. 0b1001_0111_11 then	// str sp,#imm8
+	{   op = STR;
+	    inr = (inst & 0xFF) << 2;
+	    inl = reg[SP];
+	    rd = (inst >> 8) & 0b111;
+	}
+	is 0b1001_1000_00 .. 0b1001_1111_11 then	// ldr sp,#imm8
+	{   op = LDR;
+	    inr = (inst & 0xFF) << 2;
+	    inl = reg[SP];
+	    rd = (inst >> 8) & 0b111;
+	}
+	is 0b1010_0000_00 .. 0b1010_0111_11 then	// adr rd,#imm8
+	{   op = ADD;
+	    inr = (inst & 0xFF) << 2;
+	    inl = reg[PC] & 0xFFFF_FFFC;	// align
+	    rd = (inst >> 8) & 0b111;
+	}
+	is 0b1010_1000_00 .. 0b1010_1111_11 then	// add rd,sp,#imm8
+	{   op = ADD;
+	    inr = (inst & 0xFF) << 2;
+	    inl = reg[SP];
+	    rd = (inst >> 8) & 0b111;
+	}
+	is 0b1011_0000_00 .. 0b1011_0000_11 then	// add/sub sp,#imm7
+	{   setflag = false;
+	    if (inst & 0x80) == 0 then op = ADD; else op = SUB;
+	    inr = (inst & 0x7F) << 2;
+	    rd = SP;
+	    inl = reg[SP];
+	}
+	is 0b1011_0001_00 .. 0b1011_0001_11,
+	   0b1011_0011_00 .. 0b1011_0011_11 then	// cbz
+	{   op = CBZ;
+	    inl = reg[inst&0x7];
+	    offs = ((inst >> 2) & 0x3E) | ((inst >> 3) & 0x40);
+	}
+	is 0b1011_0010_00 .. 0b1011_0010_11 then	// sxth/../uxtb
+	{   op = optab22[(inst >> 6) & 0b11];
+	    inr = reg[(inst >> 3) & 0b111];
+	    rd = inst & 0b111;
+	}
+	is 0b1011_0100_00 .. 0b1011_0101_11 then	// push
+	{   op = STMDB;
+	    inr = (inst & 0xFF) | ((inst & 0x0100) << 6);
+	    rd = SP;
+	    wback = true;
+	}
+	is 0b1011_0110_01 then
+	{   op = CPS;
+	    inr = (inst >>4) & 1;
+	    inl = inst & 0b11;
+	}
+	is 0b1011_1001_00 .. 0b1011_1001_11,
+	   0b1011_1011_00 .. 0b1011_1011_11 then	// cbnz
+	{   op = CBNZ;
+	    inl = reg[inst&0x7];
+	    offs = ((inst >> 2) & 0x3E) | ((inst >> 3) & 0x40) ;
+	}
+	is 0b1011_1010_00 .. 0b1011_1010_11 then	// rev/rev16/revsh
+	{   op = optab23a[(inst >> 6) & 0b11];
+	    inr = reg[(inst >> 3) & 0b111];
+	    rd = inst & 0b111;
+	}
+	is 0b1011_1100_00 .. 0b1011_1101_11 then	// pop
+	{   op = LDMIA;
+	    inr = (inst & 0xFF) | ((inst & 0x0100) << 7);
+	    rd = SP;
+	    wback = true;
+	}
+	is 0b1011_1110_00 .. 0b1011_1110_11 then	// bkpt
+	{   op = BKPT;
+	    inr = inst & 0xFF;
+	}
+	is 0b1011_1111_00 .. 0b1011_1111_11 then	// nop/../it
+	{   if (inst & 0b1111) == 0b0000 then
+		op = optab23x[(inst >> 4) & 0b1111];
+	    else
+	    {   inl = (inst >> 4) & 0xF;
+		inr = inst & 0xF;
+		op = IT;
+	    }
+	}
+	is 0b1100_0000_00 .. 0b1100_0111_11 then	// stm
+	{   op = STMIA;
+	    inr = inst & 0xFF;
+	    rd = (inst >> 8) & 0b111;
+	    wback = true;
+	}
+	is 0b1100_1000_00 .. 0b1100_1111_11 then	// ldm
+	{   op = LDMIA;
+	    inr = inst & 0xFF;
+	    rd = (inst >> 8) & 0b111;
+	    // wback is true unless base register is in reg list
+	    wback = (inr & (1<<rd)) == 0;
+	}
+	is 0b1101_0000_00 .. 0b1101_1110_11 then	// bC
+	{   op = BC;
+	    cond = condcode((inst >>8) & 0b1111);
+	    offs = (inst & 0xFF) << 1;
+	    if (offs & 0x100) != 0 then offs = offs | 0xFFFF_FE00; // sign extend
+	}
+	is 0b1101_1111_00 .. 0b1101_1111_11 then	// svc
+	{   op = SVC;
+	    inr = inst & 0xFF;
+	}
+	is 0b1110_0000_00 .. 0b1110_0111_11 then	// b
+	{   op = B;
+	    inr = inst & 0x07FF;
+	    offs = inr << 1;
+	    if (offs & 0x0800) != 0 then offs = offs | 0xFFFF_F000;	// sign extend
+	}
+	is 0b1110_1000_00, 0b1110_1000_10,
+	   0b1110_1001_00, 0b1110_1001_10 then	// stmia,ldmia,stmdb,ldmdb
+	{    wback = (inst & 0x20) != 0;
+	     rd = inst & 0xF;	// really rn
+	     inr = instx;
+	     op = optab29m[(inst >> 4) & 0b11111];
+	}
+	is 0b1110_1000_01, 0b1110_1000_11,
+	   0b1110_1001_01, 0b1110_1001_11 then
+	{   rn = inst & 0xF;
+	    if (inst & 0x0120) == 0 then	// P==0 && W==0
+	    {   inr = reg[instx & 0xF];   
+	    	if (inst >> 4) & 0b1111
+		is 0b1101 then			// tbb/tbh
+		{   if (instx & 0x10) == 0 then
+			op = TBB;
+		    else
+		    {   inr = inr << 1;
+			op = TBH;
+		    }
+		}
+		else
+		    op = UNDF;		
+	    }
+	    else				// strd/ldrd
+	    {	inr = (instx & 0xFF) << 2;
+		wback = (inst & 0x20) != 0;	// W-bit
+		if (inst & 0x80) == 0 then	// U-bit
+		    inr = -inr;
+		if (inst & 0x100) == 0 then	// P-bit
+		    inl = -inr;
+		else
+		    inl = 0;
+		inr += reg[rn];
+		// inr+inl will be the access address
+		// inr will be the write back
+	    	rd = (instx >> 12) & 0xF;
+	    	rm = (instx >> 8) & 0xF;
+	    	if (inst & 0x10) == 0 then
+	     	    op = STRD;
+		else
+		{   if rn == PC then inl = inl & 0xFFFF_FFFC;
+	     	    op = LDRD;
+	     	}
+	    }
+	}
+	is 0b1110_1010_00 .. 0b1110_1011_11 then
+	{   setflag = (inst & 0x10) != 0;
+	    inr = ((instx >> 10) & 0b11100) | ((instx >> 6) & 0b11);
+	    rn = inst & 0xF;
+	    rd = (instx >> 8) & 0xF;
+	    rm = instx & 0xF;
+	    inl = reg[rn];
+	    if rd == PC then		// op rd,rn,rm{,shift}
+		op = optab29a[(inst >> 5) & 0b1111];
+	    else
+	    {   op = optab29[(inst >> 5) & 0b1111];
+		if op == ORR && rn == PC then	// shifts #imm5
+		    inl = 0;	// this keeps only the shift (or mov)
+		else
+		{   if op == PKHBT && (instx & 0b10_0000) != 0 then
+		    	op = PKHTB;
+		}
+	    }
+	    shft, inr = DecodeImmShift((instx>>4)&0b11, inr);
+	    inr, tmp = ShiftWithCarry(shft, inr, reg[rm], psC);
+	    if setflag then psC = tmp != 0;
+	}
+	is 0b1110_1101_00 .. 0b1110_1101_11 then
+	{   rn = inst & 0xF;
+	    inl = reg[rn];
+	    if rn == PC then inl = inl & 0xFFFF_FFFC;
+	    inr = (instx & 0xFF) << 2;
+	    rm = (instx >> 8) & 0xF;	// coprocessor number
+	    if (inst & 0x10) != 0 then op = CPld; else op = CPst;
+	}
+	is 0b1110_1110_00 .. 0b1110_1110_11 then
+	{   setflag = false;
+	    rd = (instx >> 12) & 0xF;
+	    rm = (instx >> 8) & 0xF;	// coprocessor number
+	    if (inst & 0x10) != 0 then op = CPout; else op = CPin;
+	}
+	is 0b1111_0000_00 .. 0b1111_0111_11 then	// 32-bit
+	{   if (instx & 0x8000) == 0 then	//11110----------- 0------------
+	    {   setflag = (inst & 0b10000) != 0;
+		rn = inst & 0b1111;
+		rd = (instx >> 8) & 0b1111;
+		inr = ((inst << 1) & 0x800)| ((instx >> 4) & 0x700) | (instx & 0xFF);
+		inl = reg[rn];
+		if (inst & 0x0200) == 0 then		// op rd,rn,#t2imm
+		{   inr = ExpandT2Imm(inr);
+		    if rd == PC then
+			op = optab30a[(inst >> 5) & 0b1111];
+		    else if rn == PC then
+			op = optab30b[(inst >> 5) & 0b1111];
+		    else
+			op = optab29[(inst >> 5) & 0b1111];
+		}
+		else
+		{   if (inst & 0x0010) == 0 then
+		    {   if (inst & 0x0100) == 0 then
+			{   op = optab30m[(inst >> 5) & 0b111];
+			    if (inst & 0x0040) != 0 then	// movw,movt
+			    	// FIXME - inr = (rn << 12) | inr;
+				inr = ((inst << 12) & 0xF000) | inr;
+			    else if rn == PC then
+			    	inl = inl & 0xFFFF_FFFC;    // align PC
+			}
+			else	// bitfield instructions
+			{   inr = (instx & 0x1F)+1;		// width or bitno
+			    inl = ((instx >> 6)  & 0b00011) |
+			    	  ((instx >> 10) & 0b11100);	// start or shift
+			    if (inst >> 5) & 0b111
+			    is 0b000, 0b001 then
+			    {   op = SSAT;
+				if (inst&0x0020) != 0 && inl == 0 then
+			    	    op = SSATh;
+				shft, inl = DecodeImmShift((inst>>4)&0b11, inl);
+				inl, _ = ShiftWithCarry(shft, inl, reg[rn], psC);
+			    }
+			    is 0b010 then op = SBFX;
+			    is 0b011 then
+			    {   op = BFI;
+				if rn == PC then op = BFC;
+			    }
+			    is 0b100, 0b101 then
+			    {	op = USAT;
+				if (inst&0x0020) != 0 && inl == 0 then
+			    	    op = USATh;
+				shft, inl = DecodeImmShift((inst>>4)&0b11, inl);
+				inl, _ = ShiftWithCarry(shft, inl, reg[rn], psC);
+			    }
+			    is 0b110 then op = UBFX;
+			    else op = UNDF;
+			}
+		    }
+		    else op = UNDF;
+		}
+	    }
+	    else	// branch and misc. control
+	    {   var high: Word;
+	 	// crack as if a branch, adjust for others later
+		offs = ((instx & 0x7FF) << 1);
+		op = optabbr[(instx >> 12) & 0b111];
+		if op == BC then
+		{   cond = condcode((inst >> 6) & 0b1111);
+		    if cond		// bc overloaded on some cond codes
+		    is 0b1110 then
+		    {   if (inst >> 4) & 0b11
+		    	is 0b00 then
+		    	{   op = MSR;
+		    	    rn = inst & 0xF;
+		    	    inr = instx & 0xFF;
+		    	}
+		    	is 0b01 then
+		    	    op = UNDF;
+		    	is 0b10 then
+		    	{   op = UNDF;	// most encondings undefined
+			    if (instx>>8) ==  0b1000_0000 then
+			    {   if (instx>>4) & 0b1111
+			    	is 0b0000 then op = misc1[instx & 0b1111];
+			    	is 0b1111 then
+			    	{   // dbg
+			    	}
+			    }
+		    	}
+		    	is 0b11 then
+		    	{   if (instx&0xFF80) == 0x8F00 then
+				op = misc2[(instx>>4)&0b111];
+		    	    else
+				op = UNDF;	// FIXME
+		    	}
+		    }
+		    is 0b1111 then
+		    {   op = MRS;
+			rd = (instx >> 8) & 0xF;
+			inl = reg[rd];
+			inr = instx & 0xFF;
+		    }
+		    else	// really a BC
+		    {	// get J2,J1 as two low bits (opposite of unconditional)
+			high = ((instx >> 13) & 0b01) | ((instx >> 10) & 0b10);
+			if (inst & 0x0400) != 0 then	// if S-bit on
+			    high = high | 0xFFFC;	// make negative	
+			offs = (high << 18) | ((inst & 0x3F) << 12) | offs; 
+		    }
+		}
+		else				// unconditional
+		{   // get J1,J2 as two low bits
+		    high = ((instx >> 11) & 0b01) | ((instx >> 12) & 0b10);
+		    if (inst & 0x0400) != 0 then	// if S-bit on
+			high = high | 0xFFFC;		// make negative	
+		    if (inst & 0x0400) == 0 then	// if S-bit off
+			high = high ^ 0b11;		// invert J bits
+		    // offset is longer
+		    offs = (high << 22) | ((inst & 0x3FF) << 12 ) | offs;
+		}
+	    }
+	}
+	is 0b1111_1000_00 .. 0b1111_1001_11 then	// 32-bit
+	{   rn = inst & 0xF;
+	    rd = (instx >> 12) & 0xF;
+	    if rn == PC then	// ldrX [pc,#+-imm12]
+	    {   inl = reg[PC] & 0xFFFF_FFFC;
+	    	inr = instx & 0xFFF;
+	    	if (inst & 0x80) == 0 then
+	    	    inr = -inr;
+	    	op = optab31p[(inst >> 4) & 0b11111];
+	    	// FIXME - if LDRB && rd==pc then PLD?
+	    }
+	    else if (inst & 0x80) == 0 then
+	    {
+		if (instx & 0x0800) == 0 then	// strb/../ldr shift imm2
+		{   inl = reg[rn];
+		    inr = reg[instx&0xF] << ((instx>>4)&0b11);
+		    op = optab31a[(inst >> 4) & 0b10111];		
+	        }
+		else				// strb/../ldr imm8
+		{   inr = instx & 0xFF;
+		    wback = (instx & 0x100) != 0;	// W-bit
+		    if (instx & 0x200) == 0 then	// U-bit
+			inr = -inr;
+		    if (instx & 0x400) == 0 then	// P-bit
+			inl = -inr;
+		    else
+			inl = 0;
+		    inr += reg[rn];
+		    // inr+inl will be the access address
+		    // inr will be the write back
+		    if (instx & 0x0F00) == 0x0E00 then
+			op = optab31t[(inst >> 4) & 0b10111];
+		    else
+			op = optab31a[(inst >> 4) & 0b10111];
+		}
+	    }
+	    else	// ld/st #imm12
+	    {   inr = instx & 0xFFF;
+		inl = reg[rn];
+		op = optab31a[(inst >> 4) & 0b10111];		
+	    }
+	}
+	is 0b1111_1010_00 .. 0b1111_1010_01 then	// 32-bit
+	{   rd = (instx >> 8) & 0xF;
+	    rn = inst & 0xF;
+	    inr = reg[instx&0xF];
+	    if (instx & 0x0080) == 0 then		// shifts reg
+	    {   setflag = (inst & 0x10) != 0;
+		inl = reg[rn];
+	    	op = optab31s[(inst >> 5) & 0b11];
+	    }
+	    else					// sxth/../uxtb
+	    {   tmp = (instx >> 4) & 0b11;	// rotate amount
+	    	if tmp != 0 then
+	    	    inr = Rotate(inr, tmp<<3);
+	    	if rn == 0xF then
+	            op = optab31x[(inst >> 4) & 0b111];
+	        else
+	        {   inl = reg[rn];
+	            op = optab31ax[(inst >> 4) & 0b111];
+	        }
+	    }
+	}
+	is 0b1111_1010_10 then				// bit rev, etc.
+	{   rn = inst & 0xF;
+	    rd = (instx >> 8) & 0xF;
+	    inr = reg[rn];
+	    if (inst >> 4) & 0b11
+	    is 0b01 then op = optab31b[(instx >> 4) & 0b11];
+	    is 0b11 then op = CLZ;
+	    else op = UNDF;
+	}
+	is 0b1111_1011_00 then				// mul/mla/mls
+	{   rd = (instx >> 8) & 0xF;
+	    inl = reg[inst & 0xF];
+	    inr = reg[instx & 0xF];
+	    rn  = (instx >> 12) & 0xF;	// this is really ra
+	    if (instx >> 4) & 0b1111
+	    is 0b0000 then
+	    {   if rn == PC then
+	    	{   op = MUL;
+	    	    setflag = false;
+	    	}
+	    	else
+	    	    op = MLA;
+	    }
+	    is 0b0001 then op = MLS;
+	    else op = UNDF;
+	}
+	is 0b1111_1011_10 then				// smull/../udiv
+	{   rn = inst & 0xF;
+	    inl = reg[rn];
+	    inr = reg[instx & 0xF];
+	    rd = (instx >> 8) & 0xF;	// hi part for Xmull
+	    rn = (instx >> 12) & 0xF;	// lo part for Xmull
+	    op = optab31d[(inst >> 4) & 0b111];		
+	}
+	else op = UNDF;
+if db > 0 then {		
+fderr.str(" op="); fderr.str(opname[op]);
+fderr.str(" wb="); fderr.uint8(_uint8(wback));
+fderr.str(" sf="); fderr.uint8(_uint8(setflag));
+fderr.str(" inl="); fderr.hex32(inl);
+fderr.str(" inr="); fderr.hex32(inr);
+fderr.str(" rd="); fderr.uint(rd);
+fderr.str(" rn="); fderr.uint(rn);
+}
+	// Next, implement the instruction
+	if op
+	is MOV then
+	{   reg[rd] = inr;
+	    if setflag && ITblock == 0 then SetFlagsNZ(reg[rd]);
+	}	
+	is MOVT then
+	{   reg[rd] = reg[rd] | (inr << 16);
+	    if setflag && ITblock == 0 then SetFlagsNZ(reg[rd]);
+	}	
+	is MVN then
+	{   reg[rd] = ~inr;
+	    if setflag && ITblock == 0 then SetFlagsNZ(reg[rd]);
+	}	
+	is LSL then
+	{   inr = inr & 0xFF;
+	    reg[rd], co = ShiftWithCarry(LSL, inr, inl, psC);
+	    if setflag && ITblock == 0 then SetFlagsNZC(reg[rd], co);
+	}	
+	is LSR then
+	{   inr = inr & 0xFF;
+	    if inr == 0 then inr = 32;
+	    reg[rd], co = ShiftWithCarry(LSR, inr, inl, psC);
+	    if setflag && ITblock == 0 then SetFlagsNZC(reg[rd], co);
+	}	
+	is ASR then
+	{   var s: SWord;
+	    inr = inr & 0xFF;
+	    if inr == 0 then inr = 32;
+	    reg[rd], co = ShiftWithCarry(ASR, inr, inl, psC);
+	    if setflag && ITblock == 0 then SetFlagsNZC(reg[rd], co);
+	}	
+	is CMN then
+	{   tmp, alucc = AddWithCarry(inl, inr, false);
+	    SetFlagsNZCV(alucc);
+	}
+	is ADD then
+	{   reg[rd], alucc = AddWithCarry(inl, inr, false);
+	    if setflag && ITblock == 0 then SetFlagsNZCV(alucc);	
+	}
+	is CMP then
+	{   tmp, alucc = AddWithCarry(inl, ~inr, true);
+	    SetFlagsNZCV(alucc);
+	}
+	is SUB then
+	{   reg[rd], alucc = AddWithCarry(inl, ~inr, true);
+	    if setflag && ITblock == 0 then SetFlagsNZCV(alucc);	
+	}
+	is RSB then
+	{   reg[rd], alucc = AddWithCarry(inr, ~inl, true);
+	    if setflag && ITblock == 0 then SetFlagsNZCV(alucc);	
+	}
+	is ADC then
+	{   reg[rd], alucc = AddWithCarry(inl, inr, psC);
+	    if setflag && ITblock == 0 then SetFlagsNZCV(alucc);	
+	}
+	is SBC then
+	{   reg[rd], alucc = AddWithCarry(inl, ~inr, psC);
+	    if setflag && ITblock == 0 then SetFlagsNZCV(alucc);	
+	}
+	is TST then
+	{   tmp = inl & inr;
+	    SetFlagsNZ(tmp);
+	}
+	is AND then
+	{   reg[rd] = inl & inr;
+	    if setflag && ITblock == 0 then SetFlagsNZ(reg[rd]);
+	}
+	is TEQ then
+	{   tmp = inl ^ inr;
+	    if setflag && ITblock == 0 then SetFlagsNZ(tmp);
+	}
+	is EOR then
+	{   reg[rd] = inl ^ inr;
+	    if setflag && ITblock == 0 then SetFlagsNZ(reg[rd]);
+	}
+	is ORR then
+	{   reg[rd] = inl | inr;
+	    if setflag && ITblock == 0 then SetFlagsNZ(reg[rd]);
+	}
+	is ORN then
+	{   reg[rd] = inl | ~inr;
+	    if setflag && ITblock == 0 then SetFlagsNZ(reg[rd]);
+	}
+	is BIC then
+	{   reg[rd] = inl & ~inr;
+	    if setflag && ITblock == 0 then SetFlagsNZ(reg[rd]);
+	}
+	is MUL then
+	{   reg[rd] = inl * inr;
+	    if setflag && ITblock == 0 then SetFlagsNZ(reg[rd]);
+	}
+	is STR then
+	{   Write(inl+inr, WORD, reg[rd]);
+	    if wback then reg[rn] = inr;
+	}
+	is STRH then
+	{   Write(inl+inr, HALF, reg[rd]);
+	    if wback then reg[rn] = inr;
+	}
+	is STRB then
+	{   Write(inl+inr, BYTE, reg[rd]);
+	    if wback then reg[rn] = inr;
+	}
+	is LDR then
+	{   reg[rd] = Read(inl+inr, WORD);
+	    if rd == PC then reg[rd] = reg[rd] & ~1;
+	    if wback then reg[rn] = inr;
+	}
+	is LDRH then
+	{   reg[rd] = Read(inl+inr, HALF);
+	    if wback then reg[rn] = inr;
+	}
+	is LDRB then
+	{   reg[rd] = Read(inl+inr, BYTE);
+	    if wback then reg[rn] = inr;
+	}
+	is LDRSH then
+	{   tmp = Read(inl+inr, HALF);
+	    reg[rd] = _int32(_int16(tmp));
+	    if wback then reg[rn] = inr;
+	}
+	is LDRSB then
+	{   tmp = Read(inl+inr, BYTE);
+	    reg[rd] = _int32(_int8(tmp));
+	    if wback then reg[rn] = inr;
+	}
+	is STRD then
+	{   Write(inl+inr, WORD, reg[rd]);
+	    Write(inl+inr+4, WORD, reg[rm]);
+	    if wback then reg[rn] = inr;
+	}
+	is LDRD then
+	{   reg[rd] = Read(inl+inr, WORD);
+	    reg[rm] = Read(inl+inr+4, WORD);
+	    if wback then reg[rn] = inr;
+	}
+	is STMDB then
+	{   tmp = StoreMDB(rd, inr);
+	    if wback then reg[rd] = tmp;
+	}
+	is STMIA then
+	{   tmp = StoreMIA(rd, inr);
+	    if wback then reg[rd] = tmp;
+	}
+	is LDMIA then
+	{   tmp = LoadMIA(rd, inr);
+	    if wback then reg[rd] = tmp;
+	    if (inr & 0x8000) != 0 then
+	    {	if reg[PC] & 0xF000_0000 == 0xF000_0000 then
+	    	    ExceptionReturn(reg[PC]);
+	    	else
+		    reg[PC] = reg[PC] & 0xFFFFFFFE;
+		pcadjust = 0;	// PC loaded
+	    }
+	}
+	is LDMDB then
+	{   tmp = LoadMDB(rd, inr);
+	    if wback then reg[rd] = tmp;
+	    if (inr & 0x8000) != 0 then
+	    {	if reg[PC] & 0xF000_0000 == 0xF000_0000 then
+	    	    ExceptionReturn(reg[PC]);
+	    	else
+		    reg[PC] = reg[PC] & 0xFFFFFFFE;
+		pcadjust = 0;	// PC loaded
+	    }
+	}
+	is SXTH then
+	{   reg[rd] = _uint32(_int32(_int16(inr)));
+	}
+	is SXTAH then
+	{   reg[rd] = inl + _uint32(_int32(_int16(inr)));
+	}
+	is SXTB then
+	{   reg[rd] = _uint32(_int32(_int8(inr)));
+	}
+	is SXTAB then
+	{   reg[rd] = inl + _uint32(_int32(_int8(inr)));
+	}
+	is UXTH then
+	{   reg[rd] = inr & 0xFFFF;
+	}
+	is UXTAH then
+	{   reg[rd] = inl + (inr & 0xFFFF);
+	}
+	is UXTB then
+	{   reg[rd] = inr & 0xFF;
+	}
+	is UXTAB then
+	{   reg[rd] = inl + (inr & 0xff);
+	}
+	is UBFX then
+	{   reg[rd] = (reg[rn] >> inl) & ((1 << inr) - 1);
+	}
+	is SBFX then
+	{
+NotImplemented("SBFX");
+	}
+	is PKHBT then
+	{   reg[rd] = (inr & 0xFFFF_0000) | (inl & 0x0000_FFFF);
+	}
+	is PKHTB then
+	{   reg[rd] = (inl & 0xFFFF_0000) | (inr & 0x0000_FFFF);
+	}
+	is BFC then
+	{   tmp = ((1 << (inr-inl)) - 1);
+	    tmp = tmp << inl;
+//fderr.str(" tmp="); fderr.hex32(tmp);
+	    reg[rd] = (reg[rd] & ~tmp);
+	}
+	is BFI then
+	{   tmp = ((1 << (inr-inl)) - 1);
+	    tmp = tmp << inl;
+//fderr.str(" tmp="); fderr.hex32(tmp);
+	    reg[rd] = (reg[rd] & ~tmp) | ((reg[rn] << inl) & tmp);
+	}
+	is SSAT then
+	{
+	    reg[rd] = SSat(inl, inr);
+	}
+	is USAT then
+	{
+	    reg[rd] = USat(inl, inr);
+	}
+	is REV then
+	{   
+	    reg[rd] = ((inr & 0x000000FF) << 24) | ((inr & 0x0000FF00) << 8) |
+		      ((inr & 0x00FF0000) >> 8)  | ((inr & 0xFF000000) >> 24);
+	}
+	is REV16 then
+	{   
+	    reg[rd] = ((inr & 0x000000FF) << 8) | ((inr & 0x0000FF00) >> 8) |
+		      ((inr & 0x00FF0000) << 8) | ((inr & 0xFF000000) >> 8);
+	}
+	is REVSH then
+	{   
+	    reg[rd] = _uint32(_int32(_int16(((inr & 0x000000FF) << 8) |
+					    ((inr & 0x0000FF00) >> 8))));
+	}
+	is CLZ then
+	{   if inr == 0 then
+		tmp = 32;
+	    else
+	    	tmp = _clznz(inr);
+	    reg[rd] = tmp;
+	}
+	is MLA then
+	{   reg[rd] = (inl * inr) + reg[rn];
+	}
+	is MLS then
+	{   reg[rd] = reg[rn] - (inl * inr);
+	}
+	is UMULL then
+	{   var prod: _uint64;
+	    prod = inl * inr;
+	    reg[rn] = _uint32(prod);
+	    reg[rd] = _uint32(prod >> 32);
+	}
+	is SMULL then
+	{   var sprod: _int64;
+	    sprod = SWord(inl) * SWord(inr);
+	    reg[rn] = _uint32(sprod);
+	    reg[rd] = _uint32(sprod >> 32);
+	}
+	is UDIV then
+	{
+	    if inr == 0 then
+	    {	// FIXME - check for exception mask
+	    	tmp = 0;
+	    }
+	    else
+	    	tmp = inl/inr;
+	    reg[rd] = tmp;
+	}
+	is SDIV then
+	{   var stmp: SWord;
+	    if inr == 0 then
+	    {	// FIXME - check for exception mask
+	    	stmp = 0;
+	    }
+	    else
+	    	stmp = SWord(inl)/SWord(inr);
+	    reg[rd] = stmp;
+	}
+	is BX then
+	{   if inr & 0xF000_0000 == 0xF000_0000 then
+	    	ExceptionReturn(inr);
+	    else
+		reg[PC] = inr & 0xFFFFFFFE;
+	    pcadjust = 0;
+	}
+	is BLX then
+	{   reg[LR] = (reg[PC] - pcadjust) | 1;
+	    reg[PC] = inr & 0xFFFFFFFE;
+	    pcadjust = 0;
+	}	
+	is BC then
+	{   if CondPassed(cond) then
+	    {   reg[PC] += offs;
+	        pcadjust = 0;
+	    }
+	}
+	is CBZ then
+	{   if inl == 0 then
+	    {   reg[PC] += offs;
+	        pcadjust = 0;
+	    }
+	}
+	is CBNZ then
+	{   if inl != 0 then
+	    {   reg[PC] += offs;
+	        pcadjust = 0;
+	    }
+	}
+	is TBB then
+	{   inl = reg[rn];
+	    offs = Read(inl+inr, BYTE);
+	    reg[PC] += offs << 1;
+	}	
+	is TBH then
+	{   inl = reg[rn];
+	    offs = Read(inl+inr, HALF);
+	    reg[PC] += offs << 1;
+	}	
+	is B then
+	{   reg[PC] += offs;
+	    pcadjust = 0;
+	}	
+	is BL then
+	{   reg[LR] = (reg[PC] - pcadjust) | 1;
+	    reg[PC] += offs;
+	    pcadjust = 0;
+	}
+	is IT then
+	{   ITcond  = inl & 0xE;
+	    ITmask  = ittable[inr].mask | (inl & 1);
+	    ITblock = ittable[inr].len;
+	}
+	is NOP then ;
+	is CPS then
+	{   if (inl & 0b01) != 0 then
+		faultMask = inr;
+	    if (inl & 0b10) != 0 then
+	    {   tmp = priMask;
+		priMask = inr;
+		if priMask == 0 && tmp != 0 then
+		    syscm3.NVIC.TryIntr();
+	    }
+	}
+	is MSR then
+	{
+	    SetSysReg(inr, inl);
+	}
+	is MRS then
+	{
+	    reg[rd] = GetSysReg(inr);
+	}
+	is SVC then		// fake system calls
+	    svc(_uint8(inr));
+	is BKPT then
+	    fault = BKPT;
+	is WFI then
+	{
+NotImplemented("WFI");
+	    fault = OTHER;
+
+	}
+	is DSB, DMB, ISB then ;	// ignore barriers
+	is CPin then
+	{
+NotImplemented("CPin");
+	}
+	is CPout then
+	{
+NotImplemented("CPout");
+	}
+	is CPld then
+	{
+NotImplemented("CPld");
+	}
+	is CPst then
+	{
+NotImplemented("CPst");
+	}
+	is UNDF then
+	    Fault("Illegal instruction", inst);
+	else
+	{
+	    Fault("Not yet implemented", inst);
+	}
+if db > 0 then fderr.nl();
+	reg[PC] -= pcadjust;
+	return fault == NONE;
+    }
+
+    // ****
+    // initialize state using ELF segments
+    // ****
+    proc Load()
+    {
+	SetPC(memory.entry);
+//	ibase = pm@.segs[0].vaddr;	// FIXME
+//	imem  = iptr(pm@.segs[0].addr);	// FIXME
+
+    }
+
+    // ****
+    // chip reset
+    // ****
+    proc Reset(addr: Addr)
+    {
+	reg[SP] = Read(addr+0, WORD);
+	reg[PC] = Read(addr+4, WORD) & ~1;
+	vtor = addr;
+    }
+
+    // ****
+    // display current register state
+    // ****
+    proc Dump()
+    {   var n: 0..16;
+
+	n = 0;
+	fderr.str("r0-r3    ");
+	while n < 4 do
+	{   fderr.str("  ");
+	    fderr.hex32(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\nr4-r7    ");
+	while n < 8 do
+	{   fderr.str("  ");
+	    fderr.hex32(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\nr8-r11   ");
+	while n < 12 do
+	{   fderr.str("  ");
+	    fderr.hex32(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\nr12,sp,lr");
+	while n < 15 do
+	{   fderr.str("  ");
+	    fderr.hex32(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\npc         ");
+	fderr.hex32(reg[PC]);
+	fderr.str("      NZCV  ");
+	fderr.uint8(_uint8(psN));
+	fderr.uint8(_uint8(psZ));
+	fderr.uint8(_uint8(psC));
+	fderr.uint8(_uint8(psV));
+	fderr.str("      IM ");
+	fderr.uint8(priMask);
+	fderr.nl();
+    }
+}
+

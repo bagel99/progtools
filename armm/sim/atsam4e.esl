@@ -1,0 +1,717 @@
+package PHY
+{   var state: (DOWN, UP, READY) = DOWN;
+
+    proc Read(preg: _uint): _uint16
+    {   var rv: _uint16;
+
+	rv = 0;		// default
+	if preg
+	is 0x01 then	// basic status
+	{   if state
+	    is READY then
+	        rv = 0b0101_0000_0010_1100;
+	}
+	is 0x04 then	// autoneg status
+	{   if state
+	    is READY then
+	        rv = 0b0100_0001_0000_0000;	// why? seems to do 100FD
+	}
+	is 0x1B then	// interrupt status
+	{
+	    chip.SetPin(PHYINTR_UNIT, PHYINTR_PIN, false); // deassert interrupt
+	    if state
+	    is DOWN then
+	    {	rv = 0x0001;	// fake link up
+		state = UP;
+		chip.SetPin(PHYINTR_UNIT, PHYINTR_PIN, true); // interrupt again
+	    }
+	    is UP then
+	    {	rv = 0x0008;	// fake partner ack
+		state = READY;
+	    }
+	}
+if log > 2 then {
+fderr.str("PHY read reg=0x"); fderr.hex8(preg);
+fderr.str(" val="); fderr.hex16(rv); fderr.nl();
+}
+	return rv;
+    }
+
+    proc Write(preg: _uint, dat: _uint16)
+    {
+if log > 2 then {
+fderr.str("PHY write reg=0x"); fderr.hex8(preg);
+fderr.str(" val="); fderr.hex16(dat); fderr.nl();
+}
+    }
+}
+
+package atsam4e
+{
+    const name = "atsam4e";
+    const debugout: boolean = true;
+
+    proc NoRead(addr: _uint32, w: cpu.Width): _uint32
+    {
+	LogR("", addr, 0, w);
+	return 0;
+    }
+
+    proc NoWrite(addr: _uint32, w: cpu.Width, data: _uint32)
+    {
+	LogW("", addr, data, w);
+    }
+
+    package PMC
+    {
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var offs: _uint32;
+	    var rv: _uint32 = 0;
+
+	    offs = addr - 0x400E_0400;
+	    if offs
+	    is 0x068 then	// PMC status register
+		rv = 0x0001_000B;	// stop loop until certain bits set
+	    LogR("PMC", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{
+	    LogW("PMC", addr, data, w);
+	}
+    }
+
+    package TWI
+    {   var mode: (NONE, MASTER, SLAVE);
+	var busy, last: boolean;
+	var mmr, smr, iadr, cwgr: _uint32;
+	var ier: _uint32;
+	var sr: _uint32;
+	var i: _uint;
+	const data: []_uint8 = { 1, 2, 3, 4, 5, 6, 7, 8 };
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var offs: _uint32;
+	    var rv: _uint32 = 0;
+
+	    // FIXME - support more than one
+	    offs = addr - 0x400A_8000;
+	    if offs
+	    is 0x04 then rv = mmr;
+	    is 0x08 then rv = smr;
+	    is 0x0C then rv = iadr;
+	    is 0x10 then rv = cwgr;
+	    is 0x20 then rv = sr;
+	    is 0x30 then
+	    {   if mode == MASTER then
+		{   rv = data[i];
+		    i += 1;
+		    if last then
+		    {   sr = sr | 0x0001;	// TXCOMP
+			sr = sr & ~0x0002;	// RXRDY;
+		    }
+		}
+	    }
+	    LogR("TWI", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var offs: _uint32;
+	
+	    // FIXME - support more than one
+	    offs = addr - 0x400A_8000;
+	    LogW("TWI", addr, data, w);
+	    if offs
+	    is 0x00 then	// cr
+	    {	if data & 0x01 != 0 then	// START
+		{   if mode == MASTER then
+		    {   if mmr & 0x1000 != 0 then	// MREAD
+		    	{   i = 0;
+			    sr = sr | 0x0002;	// RXRDY
+			    last = false;
+		    	}
+		    	else
+		    	{
+		    	}
+		    }
+		    // FIXME - slave mode
+	    	    busy = true;
+	    	}
+	    	if data & 0x02 != 0 then	// STOP
+	    	    last = true;
+	    	if data & 0x04 != 0 then	// MSEN
+	    	{   sr = sr | 0x0004;	// TXRDY
+	    	    mode = MASTER;
+	    	}
+	    	if data & 0x08 != 0 then	// MSDIS
+	    	    mode = NONE;
+	    	if data & 0x10 != 0 then	// SVEN
+	    	    mode = SLAVE;
+	    	if data & 0x20 != 0 then	// SVDIS
+	    	    mode = NONE;
+	    }
+	    is 0x04 then mmr = data;
+	    is 0x08 then smr = data;
+	    is 0x0C then iadr = data;
+	    is 0x10 then cwgr = data;
+	    is 0x24 then ier = ier | data;
+	    is 0x28 then ier = ier & ~data;
+	}
+    }
+
+    package EEFC
+    {
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var offs: _uint32;
+	    var rv: _uint32 = 0;
+
+	    LogR("EEFC", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{
+	    LogW("EEFC", addr, data, w);
+	}
+    }
+
+    package WDT
+    {
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var offs: _uint32;
+	    var rv: _uint32 = 0;
+
+	    LogR("WDT", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{
+	    LogW("WDT", addr, data, w);
+	}
+    }
+
+    package USART
+    {   var mr, imr, csr, cr: _uint32;
+	var rxenb, txenb: boolean;
+
+	// FIXME - only implements the first unit
+
+	proc SetIntr(unit: _uint)
+	{
+	    if imr & csr != 0 then
+	    {	syscm3.NVIC.SetPend(14);	// usart0 interrupt number
+	    }
+	}
+
+	proc ClrIntr(unit: _uint)
+	{
+	    if imr & csr == 0 then
+	    {	syscm3.NVIC.ClrPend(14);	// usart0 interrupt number
+	    }
+	}
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var offs: _uint32;
+	    var rv: _uint32 = 0;
+
+	    offs = addr & 0x1FF;
+	    if offs
+	    is 0x04 then	// mr
+		rv = mr;
+	    is 0x10 then	// imr
+	    {	rv = imr;
+		if !txenb then
+		   rv = rv & ~0x2;	// no TXRDY
+	    }
+	    is 0x14 then	// csr
+	    {	if txenb then
+	    	    rv = rv | 0x2;	// fake TXRDY
+	    }
+	    LogR("USART", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var offs: _uint32;
+
+	    LogW("USART", addr, data, w);
+	    offs = addr & 0x1FF;
+	    if offs
+	    is 0x00 then	// cr
+	    {	cr = data;
+		if data & 0x0004 != 0 then      // RSTRX
+		{}
+		if data & 0x0008 != 0 then      // RSTTX
+		{}
+		if data & 0x0010 != 0 then      // RXEN
+		    rxenb = true;
+		if data & 0x0020 != 0 then      // RXDIS
+		    rxenb = false;
+		if data & 0x0040 != 0 then      // TXEN
+		    txenb = true;
+		if data & 0x0080 != 0 then      // TXDIS
+		    txenb = false;
+		if txenb then
+		    csr = csr | 0x02;	// fake TXRDY
+		SetIntr(0);
+	    }
+	    is 0x04 then	// mr
+		mr = data;
+	    is 0x08 then	// ier
+	    {	imr = imr | data;
+		SetIntr(0);
+	    }
+	    is 0x0C then	// idr
+	    {	imr = imr & ~data;
+		ClrIntr(0);
+	    }
+	    is 0x1C then	// thr
+	    {	if debugout then
+		    fdout.chr(_uint8(data));
+		SetIntr(0);
+	    }
+	}
+    }
+
+    package PIO
+    {   const NPIO = 5;
+	type unitT: 0..NPIO-1;
+	const name: [unitT]@[]_byte = { "PIOA", "PIOB", "PIOC", "PIOD", "PIOE" };
+	const vector: [unitT]_uint16 = { 9, 10, 11, 12, 13 };
+	type Reg:
+	{   psr:    _uint32;	// 0x08
+	    osr:    _uint32;	// 0x18
+	    ifsr:   _uint32;	// 0x28
+	    odsr:   _uint32;	// 0x38
+	    pdsr:   _uint32;	// 0x3C
+	    imr:    _uint32;	// 0x48
+	    isr:    _uint32;	// 0x4C
+	    mdsr:   _uint32;	// 0x58
+	    pusr:   _uint32;	// 0x68
+	    abcd1:  _uint32;	// 0x70
+	    abcd2:  _uint32;	// 0x74
+	    ifscsr: _uint32;	// 0x88
+	    ppdsr:  _uint32;	// 0x98
+	    owsr:   _uint32;	// 0xA8
+	    aimmr:  _uint32;	// 0xB8
+	    elsr:   _uint32;	// 0xC8
+	    frlhsr: _uint32;	// 0xD8
+	};
+	var regs: [unitT]Reg;
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var offs: _uint32;
+	    var unit: unitT;
+	    var rv: _uint32 = 0;
+
+	    offs = addr - 0x400E0E00;
+	    unit = offs >> 9;
+	    offs = offs & 0x1FF;
+	    if offs
+	    is 0x08 then	// PSR
+	        rv = regs[unit].psr;
+	    is 0x18 then	// OSR
+	        rv = regs[unit].osr;
+	    is 0x28 then	// IFSR
+	        rv = regs[unit].ifsr;
+	    is 0x38 then	// ODSR
+	        rv = regs[unit].odsr;
+	    is 0x3C then	// PDSR
+	    {	rv = regs[unit].pdsr;
+		if unit == 0 then rv = 0x0000_0020;	// fake pin 5
+	    }
+	    is 0x48 then	// IMR
+	        rv = regs[unit].imr;
+	    is 0x4C then	// ISR
+	    {	rv = regs[unit].isr;
+		regs[unit].isr = 0;	// read clears?
+		// FIXME - clear pending?
+	    }
+	    is 0x58 then	// MDSR
+		rv = regs[unit].mdsr;
+	    is 0x68 then	// PUSR
+		rv = regs[unit].pusr;
+	    is 0x70 then	// ABCDSR1
+		rv = regs[unit].abcd1;
+	    is 0x74 then	// ABCDSR2
+		rv = regs[unit].abcd2;
+	    is 0x88 then	// IFSCSR
+		rv = regs[unit].ifscsr;
+	    is 0x98 then	// PPDSR
+		rv = regs[unit].ppdsr;
+	    is 0xA8 then	// OWSR
+		rv = regs[unit].owsr;
+	    is 0xB8 then	// AIMMR
+		rv = regs[unit].aimmr;
+	    is 0xC8 then	// ELSR
+		rv = regs[unit].elsr;
+	    is 0xD8 then	// RFLHSR
+		rv = regs[unit].frlhsr;
+	    LogR(name[unit], addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var offs: _uint32;
+	    var unit: unitT;
+
+	    offs = addr - 0x400E0E00;
+	    unit = offs >> 9;
+	    offs = offs & 0x1FF;
+	    if offs
+	    is 0x00 then	// PER
+		regs[unit].psr = regs[unit].psr | data;
+	    is 0x04 then	// PDR
+		regs[unit].psr = regs[unit].psr & ~data;
+	    is 0x10 then	// OER
+		regs[unit].osr = regs[unit].osr | data;
+	    is 0x14 then	// ODR
+		regs[unit].osr = regs[unit].osr & ~data;
+	    is 0x20 then	// IFER
+		regs[unit].ifsr = regs[unit].ifsr | data;
+	    is 0x24 then	// IFDR
+		regs[unit].ifsr = regs[unit].ifsr & ~data;
+	    is 0x30 then	// SODR
+		regs[unit].odsr = regs[unit].odsr | data;
+	    is 0x34 then	// CODR
+		regs[unit].odsr = regs[unit].odsr & ~data;
+	    is 0x40 then	// IER
+		regs[unit].imr = regs[unit].imr | data;
+	    is 0x44 then
+		regs[unit].imr = regs[unit].imr & ~data;
+	    is 0x50 then	// MDER
+		regs[unit].mdsr = regs[unit].mdsr | data;
+	    is 0x54 then	// MDDR
+		regs[unit].mdsr = regs[unit].mdsr & ~data;
+	    is 0x60 then	// PUDR
+		regs[unit].pusr = regs[unit].pusr | data;
+	    is 0x64 then	// PUER
+		regs[unit].pusr = regs[unit].pusr & ~data;
+	    is 0x70 then	// ABCDSR1
+		regs[unit].abcd1 = data;
+	    is 0x74 then	// ABCDSR2
+		regs[unit].abcd2 = data;
+	    is 0x80 then	// IFSCDR
+		regs[unit].ifscsr = regs[unit].ifscsr | data;
+	    is 0x84 then	// IFSCER
+		regs[unit].ifscsr = regs[unit].ifscsr & ~data;
+	    is 0x90 then	// PPDDR
+		regs[unit].ppdsr = regs[unit].ppdsr | data;
+	    is 0x94 then	// PPDER
+		regs[unit].ppdsr = regs[unit].ppdsr & ~data;
+	    is 0xA0 then	// OWER
+		regs[unit].owsr = regs[unit].owsr | data;
+	    is 0xA4 then	// OWDR
+		regs[unit].owsr = regs[unit].owsr & ~data;
+	    is 0xB0 then	// AIMER
+		regs[unit].aimmr = regs[unit].aimmr | data;
+	    is 0xB4 then	// AIMDR
+		regs[unit].aimmr = regs[unit].aimmr & ~data;
+	    is 0xC0 then	// ESR
+		regs[unit].elsr = regs[unit].elsr | data;
+	    is 0xC4 then	// LSR
+		regs[unit].elsr = regs[unit].elsr & ~data;
+	    is 0xD0 then	// FELLSR
+		regs[unit].frlhsr = regs[unit].frlhsr | data;
+	    is 0xD4 then	// RELHSR
+		regs[unit].frlhsr = regs[unit].frlhsr & ~data;
+	    LogW(name[unit], addr, data, w);
+	}
+
+	proc SetISR(unit: _uint, mask: _uint32)
+	{   var pio: @Reg;
+
+	    pio = regs[unit];
+	    pio.isr = pio.isr | mask;
+fderr.str("SetPinIn unit=");  fderr.uint(unit);
+fderr.str(" isr=");  fderr.hex32(pio.isr);
+fderr.str(" imr=");  fderr.hex32(pio.imr);  fderr.nl();
+	    if pio.isr & pio.imr != 0 then
+		syscm3.NVIC.SetPend(vector[unit]);
+	}
+
+	proc SetPinIn(unit: _uint, bit: _uint, val: boolean)
+	{   var old, new, chg: _uint32;
+	    var mask: _uint32;
+	    var pio: @Reg;
+
+	    if unit > 4 && bit > 31 then return;
+fderr.str("SetPinIn unit=");  fderr.uint(unit);
+fderr.str(" bit=");  fderr.uint(bit);
+fderr.str(" val=");  fderr.uint8(_uint8(val));
+	    mask = (1 << bit);
+	    pio = regs[unit];
+	    old = pio.pdsr;
+	    if val then
+		new = old | mask;
+	    else
+		new = old & ~mask;
+	    pio.pdsr = new;
+	    chg = new ^ old;	// changed bit
+fderr.str(" chg=");  fderr.hex32(new);
+fderr.nl();
+	    if pio.elsr & mask == 0 then		// level
+	    {
+fderr.str("SetPinIn level intr not implemented\n");
+	    }
+	    else if chg != 0 then			// check edges
+	    {   if pio.aimmr & mask != 0 then		// one edge
+		{   if pio.frlhsr & mask != 0 then	// rising edge
+		    {	if new != 0 then
+			{
+fderr.str("SetPinIn rising edge intr\n");
+			    SetISR(unit, mask);
+			}
+		    }
+		    else				// falling edge
+		    {	if new == 0 then
+			{
+fderr.str("SetPinIn falling edge intr\n");
+			    SetISR(unit, mask);
+			}
+		    }
+		}
+		else
+		{				// both edges
+fderr.str("SetPinIn both edges intr\n");
+		    SetISR(unit, mask);
+		}
+	    }
+	}
+    }
+
+    package TC
+    {   const NTMRCHAN = 8;
+	type Reg:
+	{   ccr:  _uint32;
+	    cmr:  _uint32;
+	    cv:   _uint32;
+	    ra:   _uint32;
+	    rb:   _uint32;
+	    rc:   _uint32;
+	    sr:   _uint32;
+	    imr:  _uint32;
+	};
+	var regs: [NTMRCHAN]Reg;
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var unit, chan, offs: _uint;
+	    var rv: _uint32 = 0;
+
+	    unit = (addr >> 14) & 0b11;
+	    offs = addr & 0x3FF;
+	    if offs < 0xC0 then
+	    {   chan = (addr >> 6)  & 0b11;
+	        chan += unit * 3;
+	        offs = offs & 0x3F;
+	    }
+	    else
+		fderr.str("TC register not implemented\n");
+	    if offs
+	    is 0x04 then rv = regs[chan].cmr;
+	    is 0x10 then rv = regs[chan].cv;	// FIXME - how to fake?
+	    is 0x14 then rv = regs[chan].ra;
+	    is 0x18 then rv = regs[chan].rb;
+	    is 0x1C then rv = regs[chan].rc;
+	    is 0x20 then rv = regs[chan].sr;
+	    is 0x2C then rv = regs[chan].imr;
+	    LogR("TC", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var unit, chan, offs: _uint;
+
+	    LogW("TC", addr, data, w);
+	    unit = (addr >> 14) & 0b11;
+	    offs = addr & 0x3FF;
+	    if offs < 0xC0 then
+	    {   chan = (addr >> 6)  & 0b11;
+	        chan += unit * 3;
+	        offs = offs & 0x3F;
+	    }
+	    else
+		fderr.str("TC register not implemented\n");
+	    if offs
+	    is 0x00 then	// CCR
+	    {
+	    }
+	    is 0x04 then regs[chan].cmr = data;		// CMR
+	    is 0x14 then regs[chan].ra = data;
+	    is 0x18 then regs[chan].rb = data;
+	    is 0x1C then regs[chan].rc = data;
+	    is 0x20 then regs[chan].sr = data;	// RO, just for debug
+	    is 0x24 then regs[chan].imr = regs[chan].imr |  data; // IER
+	    is 0x28 then regs[chan].imr = regs[chan].imr & ~data; // IER
+	}
+    }
+
+    package SPI
+    {   var sr: _byte = 0;
+	var rdr: _byte;
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var offs: _uint32;
+	    var rv: _uint32 = 0;
+
+	    offs = addr & 0x1FF;
+	    if offs
+	    is 0x10 then	// sr
+		rv = sr;
+	    is 0x08 then	// rdr
+	    {	rv = rdr;
+		sr = sr & ~0x01;	// RDRF
+	    }
+	    LogR("SPI", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var offs: _uint32;
+
+	    LogW("SPI", addr, data, w);
+	    offs = addr & 0x1FF;
+	    if offs
+	    is 0x0C then	// tdr
+	    {	rdr = spislave.Data(_byte(data));
+		sr = sr | 0x01;		// RDRF
+	    }
+	}
+    }
+
+    package GMAC
+    {   type Reg:
+	{   ncr:    _uint32;	// 0x00 - network control reg
+	    ncfgr:  _uint32;	// 0x04 - network configuration reg
+	    man:    _uint32;	// 0x34 - PHY maintenance reg
+	};
+	var regs: Reg;
+
+	proc Phy(data: _uint32)
+	{   var preg: _uint;
+	    var op: 0..3;
+
+	    preg = (data >> 18) & 0x1F;
+	    op   = (data >> 28) & 0b11;
+	    if op
+	    is 0b01 then	// write
+		PHY.Write(preg, data&0xFFFF);
+	    is 0b10 then	// read
+	    {   data = data & ~0xFFFF;
+		data = data | PHY.Read(preg);
+	    }
+	    regs.man = data;
+	}
+
+	proc Read(addr: _uint32, w: cpu.Width): _uint32
+	{   var offs: _uint32;
+	    var rv: _uint32 = 0;
+
+	    offs = addr & 0x1FF;
+	    if offs
+	    is 0x00 then
+		rv = regs.ncr;
+	    is 0x04 then
+		rv = regs.ncfgr;
+	    is 0x08 then	// NSR
+		rv = 0x4;	// fake IDLE bit
+	    is 0x34 then	// MAN
+		rv = regs.man;
+	    LogR("GMAC", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: cpu.Width, data: _uint32)
+	{   var offs: _uint32;
+
+	    LogW("GMAC", addr, data, w);
+	    offs = addr & 0x1FF;
+	    if offs
+	    is 0x00 then
+		regs.ncr = data;
+	    is 0x04 then
+		regs.ncfgr = data;
+	    is 0x34 then	// MAN
+		Phy(data);
+	}
+    }
+
+    const ResetAddress = 0x00400000;
+    // some useful MemFlags
+    const N: armm.MemFlags = { .w=true };	// all the rest are false
+    const X: armm.MemFlags = { .x=true };
+    const F: armm.MemFlags = { .w=false };
+    const T: armm.MemFlags = { .x=true, .a=true, .l=true };
+    const D: armm.MemFlags = { .w=true, .a=true, .l=true };
+    const R: armm.MemFlags = { .w=false, .a=true, .l=true };
+    var MemTab: []armm.Mem =
+    {	//{ 0, 0x0000_0000, 0x0007_FFFF, X, 0, 0, 0 },	// boot
+	//{ 0, 0x0008_0000, 0x0017_FFFF, T, 0, 0, 0 },	// flash
+	{ 0, 0x0040_0000, 0x00FF_FFFF, T, 0, 0, 0 },
+	{ 0, 0x2000_0000, 0x200F_FFFF, D, 0, 0, 0 },	// 64KB RAM
+	{ 0, 0x4003_4000, 0x4003_47FF, N, GMAC.Read, GMAC.Write, 0},	// GMAC
+	{ 0, 0x4008_8000, 0x4008_87FF, N, SPI.Read, SPI.Write, 0},	// SPI
+	{ 0, 0x4009_0000, 0x4009_03FF, N, TC.Read, TC.Write, 0 },	// TC0
+	{ 0, 0x400A_0000, 0x400A_03FF, N, USART.Read, USART.Write, 0 }, // USART0
+//	{ 0, 0x400A_4000, 0x400A_07FF, N, usart.Read, usart.Write, 0 }, // USART1
+	{ 0, 0x400A_8000, 0x400A_BFFF, N, TWI.Read, TWI.Write, 0 }, // TWI0
+//	{ 0, 0x400A_C000, 0x400A_BFFF, N, twi.Read, twi.Write, 0 }, // TWI1
+	{ 0, 0x400E_0400, 0x400E_05FF, N, PMC.Read, PMC.Write, 0 },
+	{ 0, 0x400E_0A00, 0x400E_0BFF, N, EEFC.Read, EEFC.Write, 0 },
+	{ 0, 0x400E_0E00, 0x400E_0FFF, N, PIO.Read, PIO.Write, 0 },
+	{ 0, 0x400E_1000, 0x400E_11FF, N, PIO.Read, PIO.Write, 0 },
+	{ 0, 0x400E_1200, 0x400E_13FF, N, PIO.Read, PIO.Write, 0 },
+	{ 0, 0x400E_1400, 0x400E_15FF, N, PIO.Read, PIO.Write, 0 },
+	{ 0, 0x400E_1600, 0x400E_17FF, N, PIO.Read, PIO.Write, 0 },
+	{ 0, 0x400E_1850, 0x400E_185F, N, WDT.Read, WDT.Write, 0 },
+    	{ 0, 0xE000_E010, 0xE000_E01F, N, syscm3.Tick.Read, syscm3.Tick.Write, 0 },
+    	{ 0, 0xE000_E100, 0xE000_E7FF, N, syscm3.NVIC.Read, syscm3.NVIC.Write, 0 },
+    	{ 0, 0xE000_ED00, 0xE000_EFFF, N, syscm3.CB.Read, NoWrite, 0 }
+    };
+    const NSegs = MemTab?len;
+
+    const NELFSegs = 3;
+	
+    proc Init(argc: _uint, argv: @[]@[]_byte)
+    {   var i, j: _uint;
+
+	memory = pMemory(sys.malloc(Memory?size + NELFSegs*Segment?size));
+	j = 0;
+	for i from 0 to MemTab?len-1 do
+	{
+	    if MemTab[i].flg.a then	// allocate memory
+	    {   MemTab[i].adr = sys.malloc(MemTab[i].end - MemTab[i].beg + 1);
+	    }
+	    if MemTab[i].flg.l then	// ELF needs to load this
+	    {   if j < NELFSegs then
+	    	{   memory.seg[j].mem = MemTab[i].adr;
+	    	    memory.seg[j].beg = MemTab[i].beg;
+	    	    memory.seg[j].end = MemTab[i].end;
+	    	    memory.seg[j].typ = 0;
+	    	    j += 1;
+	    	}
+	    }
+	}
+	memory.nsegs = j;
+	armm.memtab = MemTab;
+	armm.nmem = MemTab?len;
+    }
+
+    /*
+     * Chip specific commands
+     */
+    proc SetPin(unit: _uint, bit: _uint, val: boolean)
+    {
+	PIO.SetPinIn(unit, bit, val);
+    }
+
+    proc DumpGPIO(narg: _uint, args: @[]@[]_byte)
+    {
+	fderr.str("Not yet implemented\n");
+    }
+}
+
+

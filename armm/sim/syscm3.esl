@@ -1,0 +1,239 @@
+package syscm3
+{
+    // SYSTICK 0xE000_E010 0xE000_E01F
+    // NVIC    0xE000_E100 0xE000_E7FF
+    // SYSCB   0xE000_ED00 0xE000_ED8F
+
+
+    package Tick
+    {   var regs: [4]_uint32;
+
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr - 0xE000_E010;
+	    rv = regs[offs>>2];
+	    LogR("Tick", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: armm.Width, data:_uint32)
+	{
+	    var offs: _uint32;
+
+	    offs = addr - 0xE000_E010;
+	    LogW("Tick", addr, data, w);
+	    regs[offs>>2] = data;
+	}
+    }
+
+
+    package NVIC
+    {   var enbl: [16]_uint32;
+	var pend: [16]_uint32;
+	var prio: [496]_uint8;
+
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+	    var hi: _uint;
+
+	    offs = addr - 0xE000_E100;
+	    rv = 0;		// default
+	    if offs < 0x300 then
+	    {	if w == WORD then
+	    	{   hi = (offs >> 2) & 0b1111;
+	    	    if offs >> 7
+	    	    is 0b000, 0b001 then rv = enbl[hi];
+	    	    is 0b010, 0b011 then rv = pend[hi];
+	    	    is 0b100 then rv = enbl[hi] & pend[hi];
+	    	    else
+			armm.Fault("Read fault", addr);
+	    	}
+	    	else
+		    armm.Fault("Read fault", addr);
+	    }
+	    else	// priority registers
+	    {	if w == BYTE then
+	    	    rv = prio[offs&0x7F];
+	    	else
+		    armm.Fault("Read fault", addr);
+	    }
+	    LogR("NVIC", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: armm.Width, data:_uint32)
+	{   var offs: _uint32;
+	    var hi: _uint;
+
+	    LogW("NVIC", addr, data, w);
+	    offs = addr - 0xE000_E100;
+	    if offs < 0x300 then
+	    {	if w == WORD then
+	    	{   hi = (offs >> 2) & 0b1111;
+	    	    if offs >> 7
+	    	    is 0b000 then enbl[hi] = enbl[hi] | data;
+	    	    is 0b001 then enbl[hi] = enbl[hi] & ~data;
+	    	    is 0b010 then pend[hi] = pend[hi] | data;
+	    	    is 0b011 then pend[hi] = pend[hi] & ~data;
+	    	    else
+			armm.Fault("Write fault", addr);
+	    	}
+	    	else
+		    armm.Fault("Write fault", addr);
+	    }
+	    else	// priority registers
+	    {	offs = offs&0x7F;
+	    	prio[offs] = _uint8(data);
+	    	if w >= HALF then
+	    	{   prio[offs+1] = _uint8(data >> 8);
+		    if w == WORD then
+		    {   prio[offs+2] = _uint8(data >> 16);
+		   	prio[offs+3] = _uint8(data >> 24);
+		    }
+	        }
+	    }
+	}
+
+	proc TryIntr()
+	{   var hi, bit: _uint;
+	    var mask: _uint32;
+	    var intr: _uint32;
+	    var pri, curpri: _int;
+
+	    // FIXME - does not use priorities
+
+	    hi = 0;
+	    do
+	    {	mask = enbl[hi] & pend[hi];
+	      exit mask != 0;
+		hi += 1;
+	    } while hi < 15;
+	    if mask != 0 then
+	    {   bit = (31 - _clz(mask));
+		intr = (hi * 32) + bit;
+		pri = 0;	// FIXME - lookup priority
+		curpri = cpu.GetPriority();
+		if log > 1 then
+		{
+		    fderr.str("NVIC TryIntr intr="); fderr.uint(intr);
+		    fderr.str(" pri="); fderr.int(pri);
+		    fderr.str(" curpri="); fderr.int(curpri); fderr.nl();
+		}
+		if pri < curpri then
+		{
+		    if log > 0 then
+		    {
+			fderr.str("NVIC TakeIntr intr="); fderr.uint(intr);
+			fderr.nl();
+		    }
+		    cpu.TakeException(intr + 16, pri);
+		    pend[hi] = pend[hi] &~(1 << bit);
+		}
+	    }
+	}
+
+	proc SetPend(intr: _uint)
+	{   var bit: _uint;
+	    var hi:  _uint;
+
+	    if log > 1 then
+	    {
+		fderr.str("NVIC SetPend "); fderr.uint(intr); fderr.nl();
+	    }
+	    bit = intr & 0x1F;
+	    hi  = intr >> 5;
+	    if hi < 16 then
+	    {	pend[hi] = pend[hi] | (1 << bit);
+		TryIntr();
+	    }
+	}
+
+	proc ClrPend(intr: _uint)
+	{   var bit: _uint;
+	    var hi:  _uint;
+
+	    if log > 1 then
+	    {
+		fderr.str("NVIC ClrPend "); fderr.uint(intr); fderr.nl();
+	    }
+	    bit = intr & 0x1F;
+	    hi  = intr >> 5;
+	    if hi < 16 then
+		pend[hi] = pend[hi] & ~(1 << bit);
+	}
+    }
+
+
+    package CB
+    {
+	var regs: [36]_uint32;
+
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr & 0xFF;
+	    rv = regs[offs>>2];
+	    if w
+	    is BYTE then rv = (rv >> (addr&3)) & 0xFF;
+	    is HALF then rv = (rv >> ((addr >> 1) & 1)) & 0xFFFF;
+	    LogR("sysCB", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: armm.Width, data:_uint32)
+	{   var offs: _uint32;
+	    var tmp: _uint32;
+
+	    LogW("sysCB", addr, data, w);
+	    offs = addr & 0xFF;
+	    if w
+	    is BYTE then
+	    {	tmp = regs[(addr&0x3F)>>2];
+	    }
+	    is HALF then
+	    {	tmp = regs[(addr&0x3F)>>2];
+	    	if (addr & 2) == 0 then
+	    	    data = (tmp & 0xFFFF0000) | (data & 0x0000FFFF);
+	    	else
+	    	    data = (tmp & 0x0000FFFF) | (data << 16);
+	    	    
+	    }
+	    regs[offs>>2] = data;
+	}
+    }
+
+    package DB	// Debug Support
+    {
+	var regs: [4]_uint32;
+
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr & 0xF;
+	    rv = 0;
+	    if w == WORD then rv = regs[offs>>2];
+	    LogR("sysDB", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: armm.Width, data:_uint32)
+	{   var offs: _uint32;
+	    var tmp: _uint32;
+
+	    LogW("sysDB", addr, data, w);
+	    offs = addr & 0xF;
+	    if w == WORD then regs[offs>>2] = data;
+	}
+    }
+
+    proc Init(resetaddr: _uint32)
+    {
+	CB.regs[0x08>>2] = resetaddr;	// initialize VTOR
+    }
+}
+

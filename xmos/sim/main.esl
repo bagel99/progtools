@@ -1,0 +1,154 @@
+import sys;
+import out;
+
+const fdout: out.OutFD = 1;
+const fderr: out.OutFD = 2;
+
+import elf;
+import elfload32;
+alias elfload.Memory32 as Memory;
+alias elfload.Segment32 as Segment;
+type pMemory: @Memory;
+
+import xs1;
+import xcore;
+
+// XMOS XE File Format (all little endian)
+// XMOS file header
+type xfhdr:
+{   magic: [4]_byte;
+    major: _byte;
+    minor: _byte;
+    zeros: [2]_byte;
+}: align(4);
+type pxfhdr: @xfhdr;
+
+type xmossecT:
+    (	Binary=1, ELF, SysConfig, NodeDesc, Goto, Call, XN=8,
+	Last=0x5555, Skip=0xFFFF
+    );
+// XMOS sector header
+type xshdr:
+{   type:   xmossecT;
+    zeros:  [2]_byte;
+    sizelo: _uint32;    // not 64-bit aligned, so use 32-bits pieces
+    sizehi: _uint32;
+};
+type pxshdr: @xshdr;
+
+type sechdr:
+{   pad:    _uint8;     // size of padding
+    _:      [3]_uint8;
+}: align(4);
+
+type xehdr(sechdr):		// XMOS ELF pre-header
+{   node:   _uint16;
+    core:   _uint16;
+    addr:   _uint64;
+};
+type pxehdr: @xehdr;
+
+type nodehdr(sechdr):
+{   node:   _uint16;
+    _:      _uint16;
+    jtagid: _uint32;
+    userid: _uint32;
+};
+
+var buffhdr: [xfhdr?size]_byte: align(4);
+var bufshdr: [xshdr?size]_byte: align(4);
+var bufehdr: [xehdr?size]_byte: align(4);
+
+const xmosmagic: [4]_byte: align(4) = { 'X', 'M', 'O', 'S' };
+
+
+proc main(argc: _uint, argv: @[]@[]_byte): _int
+{
+
+    var xf: pxfhdr;
+    var xs: pxshdr;
+    var xe: pxehdr;
+    var fd: sys.fildes;
+    var cpunum: _uint;
+    var i: _uint;
+    var here, next: sys.off_t;
+
+    i = 1;		// FIXME: parse flags
+
+    if i >= argc then
+	return 1;
+    fd = sys.open(argv[i]@, {RDONLY}, 0);
+    if fd < 0 then
+	return 1;
+
+    // Configure memory for each core
+    xs1.MemoryInit();
+
+    sys.read(fd, buffhdr, xfhdr?size);
+    xf = pxfhdr(buffhdr[0:xfhdr?size]);
+    if xf.magic == xmosmagic then
+    {
+fderr.str("XMOS header found: v");
+fderr.uint8(xf.major); fderr.chr('.'); fderr.uint8(xf.minor);
+fderr.nl();
+        xcore.SimInit();
+	cpunum = 0;
+	loop
+	{
+//here = sys.lseek(fd, 0, sys.SEEK_CUR);
+//fderr.str("Sector at=0x"); fderr.hex32(_uint32(here));
+//fderr.str(" readlen="); fderr.uint(xshdr?size);
+	  exit sys.read(fd, bufshdr, xshdr?size) != _int(xshdr?size);
+	    here = sys.lseek(fd, 0, CUR);
+	    next = here + xs.sizelo;
+	    xs = pxshdr(bufshdr[0:xshdr?size]);
+//fderr.str(" type=0x"); fderr.hex16(_uint16(xs.type));
+//fderr.str(" size="); fderr.uint32(xs.sizelo);
+//fderr.str(" starts=0x"); fderr.hex32(_uint32(here));
+//fderr.nl();
+	 exit xs.type == Last;
+	    if xs.type
+	    is Binary then
+	    {
+	    }
+	    is ELF then
+	    {   sys.read(fd, bufehdr, xehdr?size);
+		xe = pxehdr(bufehdr[0:xehdr?size]);
+		here = sys.lseek(fd, 0, CUR);
+//fderr.str("ELF header for core "); fderr.uint16(xe.core);
+//fderr.str(" at 0x"); fderr.hex32(_uint32(here)); fderr.nl();
+		if elfload.load(fd, XCORE, CPUMemory[xe.core], false) then
+		{
+		    xcore.CpuLoad(0, xe.core, CPUMemory[xe.core]);
+		    xcore.CpuReady(0, xe.core);
+		}
+		else
+		{   fderr.str("elfload failed\n");
+		    return 2;
+		}
+		cpunum += 1;
+	    }
+	    is SysConfig then
+	    {
+fderr.str("SysConfig"); fderr.nl();
+	    }
+	    is NodeDesc then
+	    {
+fderr.str("NodeDesc"); fderr.nl();
+	    }
+	    is Goto then
+	    {
+fderr.str("Goto"); fderr.nl();
+	    }
+	    is Call then
+	    {
+fderr.str("Call"); fderr.nl();
+	    }
+	    sys.lseek(fd, next, SET);
+	}
+	xcore.Sim(1000, true);
+    }
+    return 0;
+}
+// vim: ts=8 sw=4 noet nowrap
+

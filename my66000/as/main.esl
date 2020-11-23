@@ -1,0 +1,141 @@
+import sys;
+import out;
+const fdi: sys.fildes = 0;
+const fdo: out.OutFD = 1;
+const fde: out.OutFD = 2;
+import bufin;
+
+var lineno: _uint;
+var filename: @[]_byte;
+var Mitch: boolean = false;
+type OutFmt: (BIN, ELF);
+var outputformat: OutFmt;
+
+
+// FIXME - move someplace
+proc Syntax(msg: @[]_byte)
+{
+    fde.uint(lineno);
+    fde.str(": ");
+    fde.str(msg);
+    fde.nl();
+}
+
+proc Syntax2n(msg: @[]_byte, s: @[]_byte, n: _uint)
+{
+    fde.str(msg);
+    fde.strn(s, n);
+    fde.nl();
+}
+
+proc SyntaxX(msg: @[]_byte, n: _uint32)
+{
+    fde.str(msg);
+    fde.hex32(n);
+    fde.nl();
+}
+
+var debug:
+{   sb:  boolean;
+    cb:  boolean;
+    fb:  boolean;
+    sa:  boolean;
+    ca:  boolean;
+    fa:  boolean;
+    rel: boolean;
+}: packed;
+
+import exprdef;
+import segment;
+alias segment.SegmentT as expr.SegmentT;
+import symbol;
+alias symbol.SymbolT as segment.SymbolT;
+alias symbol.SymbolT as expr.SymbolT;
+import lex;
+import expr;
+import parse;
+import elfout;
+
+proc main(argc: _uint, argv: @[]@[]_byte): _int
+{
+    var i: _uint;
+    var listing: boolean = false;
+    var ofile: @[]_byte = 0;
+    var ofmt: (ELFREL, ELFABS, BIN) = ELFREL;
+
+    debug = {};
+    i = 1;
+    while i < argc && argv[i]@[0] == '-' do
+    {   if argv[i]@[1]
+    	is 'a' then
+    	{   if argv[i]@[2] == 'l' then listing = true;
+	    if argv[i]@[2] == 's' then debug.sa = true;	// symbol listing
+    	}
+	is 'b' then
+	    ofmt = BIN;
+	is 'e' then
+	    ofmt = ELFABS;
+	is 'D' then
+	{   if argv[i]@[2]
+	    is 'r' then debug.rel = true;
+	}
+    	is 'A' then
+    	{   if argv[i]@[2]
+	    is 's' then debug.sa = true;
+	    is 'c' then debug.ca = true;
+	    is 'f' then debug.fa = true;
+    	}
+    	is 'B' then
+    	{   if argv[i]@[2]
+	    is 's' then debug.sb = true;
+	    is 'c' then debug.cb = true;
+	    is 'f' then debug.fb = true;
+    	}
+	is 'o' then
+	    ofile = argv[i]@[2:];
+	is 'M' then
+	    Mitch = true;
+	i += 1;
+    }
+    if i > argc then
+	return 3;
+
+    symbol.Init();
+    segment.Init();
+    if i == argc then	// source is stdin
+    {   listing = false;
+	parse.Parse(0, listing);
+    }
+    else			// one or more explicit file names
+    {   while i < argc do
+	{   parse.Parse(argv[i], listing);
+	    i += 1;
+	}
+    }
+    segment.End();
+    if debug.sb then symbol.Dump(outputformat);
+    if debug.cb then segment.Dump();
+//    if debug.fb then segment.FixDump();
+    segment.Relax();
+    if debug.sa then symbol.Dump(outputformat);
+    if debug.ca then segment.Dump();
+//    if debug.fa then segment.FixDump();
+
+    if ofile != 0 then
+    {   var fd: sys.fildes;
+	fd = sys.open(ofile, {.ACCESS=WRONLY, .CREAT=true}, 0o644);
+	if fd >= 0 then
+	{   if ofmt == BIN then
+		segment.Output(fd);
+	    else
+		elfout.Output(fd, ofmt==ELFABS);
+	}
+	else
+	{   fde.str("Unable to open output file: ");
+	    fde.str(ofile);
+	    fde.nl();
+	}
+    }
+    return 0;
+}
+

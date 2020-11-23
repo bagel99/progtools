@@ -1,0 +1,152 @@
+package elfload
+{
+    if !_defined(db) then
+	const db = 0;
+    type Segment64:
+    {   mem:	_address;	// where the segment is in memory
+	beg:	elf.Addr64;	// address of first byte
+	end:	elf.Addr64;	// address of last byte
+	typ:	elf.Half;
+	flags:	elf.Half;
+    };
+    type Memory64:
+    {   entry:	elf.Addr64;	// initial program counter
+//	symtab: @symtab;	// FIXME: point to symbol table
+	error:	elf.Half;	// what should this be?
+	nsegs:	elf.Half;
+	seg:    []Segment64;
+    };
+
+    type phdr: @elf.filehdr64;
+    type pseg: @elf.proghdr64;
+    type psec: @elf.secthdr64;
+    const bufsize = _max(elf.filehdr64?size,
+    			 _max(elf.proghdr64?size,elf.secthdr64?size));
+    var buf: [bufsize]_byte;	// FIXME: read directly into record when we can
+
+    proc findseg(addr: elf.Addr64, memory: @Memory64): elf.Half
+    {   var i: elf.Half;
+        i = 0;
+if db > 1 then {
+fderr.str("elf.findseg addr="); fderr.hex64(addr); fderr.nl();
+}
+	while i < memory.nsegs do
+	{
+//fderr.str("\tseg["); fderr.uint16(i);
+//fderr.str("] beg="); fderr.hex64(memory.seg[i].beg);
+//fderr.str(" end="); fderr.hex64(memory.seg[i].end);
+//fderr.nl();
+	  exit memory.seg[i].beg <= addr && addr <= memory.seg[i].end;
+	    i += 1;
+	}
+	return i;
+    }
+
+    proc load(fd: sys.fildes, arch: elf.MachArchs, memory: @Memory64,
+    	      ignoreproghdr: boolean): boolean
+    {
+	var nphdr, nshdr, n: elf.Half;
+	var pfh: phdr;
+	var start, offs: elf.Addr64;
+        type pmemT: @[]_byte;
+	var pmem: pmemT;
+	var hdrsize: elf.Half;
+	var elfhdr: elf.filehdr64;
+	var prghdr: elf.proghdr64;
+	var sechdr: elf.secthdr64;
+	var pph: pseg;
+	var psh: psec;
+
+	start = sys.lseek(fd, 0, CUR);	// in case stuff in front of file
+	sys.read(fd, buf, elf.filehdr64?size);
+	pfh = phdr(buf[0:elf.filehdr64?size]);
+	if pfh@.magic[0] == elf.magic0 && pfh@.magic[1] == elf.magic1 &&
+	   pfh@.magic[2] == elf.magic2 && pfh@.magic[3] == elf.magic3 then
+	{   // we have an ELF file, do some more checks
+	    // convert endian if necessary
+if db > 2 then fderr.str("ELF: got magic\n");
+	    if pfh@.class == CLASS64 &&
+	       pfh@.data == LSB2 &&
+	       pfh@.machine == arch then
+	    {
+		memory.entry = pfh@.entry;
+		nphdr = pfh@.phnum;
+		nshdr = pfh@.shnum;
+if db > 2 then fderr.str("ELF: got machine\n");
+		if !ignoreproghdr && nphdr > 0 then	// have program sections
+		{
+if db > 2 then {fderr.str("nphdr="); fderr.uint32(nphdr); fderr.nl(); }
+		    offs = pfh@.phoff;
+		    hdrsize = pfh@.phentsize;
+		    n = 0;
+		    while nphdr > 0 do
+		    {   sys.lseek(fd, sys.off_t(start+offs), SET);
+			sys.read(fd, buf, elf.proghdr64?size);
+			offs += hdrsize;
+			pph = pseg(buf[0:elf.proghdr64?size]);
+if db > 2 then {
+fderr.str("vaddr="); fderr.hex64(pph.vaddr);
+fderr.str(" paddr="); fderr.hex64(pph.paddr); fderr.nl();
+fderr.str("fsize="); fderr.hex64(pph.fsize);
+fderr.str(" msize="); fderr.hex64(pph.msize); fderr.nl();
+fderr.str("type="); fderr.hex32(_uint32(pph.type));
+fderr.str(" offs="); fderr.hex64(pph.offset); fderr.nl();
+}
+			// convert endian if necessary
+			if pph@.type == LOAD && pph@.fsize > 0 then
+			{
+			    sys.lseek(fd, sys.off_t(start+pph@.offset), SET);
+			    n = findseg(pph.paddr, memory);
+			    if n >= memory.nsegs then
+			    {
+fderr.str("No segment for address ");  fderr.hex64(pph.vaddr);
+fderr.str(" size "); fderr.uint(pph@.fsize); fderr.nl();
+				return false;
+			    }
+			    sys.read(fd,
+				memory.seg[n].mem@[pph@.paddr - memory.seg[n].beg:],
+				pph@.fsize);
+			}
+			nphdr -= 1;
+		    }
+		}
+		else			// no program sections
+		{
+		    offs = pfh@.shoff;
+		    hdrsize = pfh@.shentsize;
+//fderr.str("shnum="); fderr.uint32(nshdr);
+//fderr.str(" mapsize="); fderr.uint32(pmap32?size + nshdr*smap32?size);
+//fderr.nl();
+		    while nshdr > 0 do
+		    {   sys.lseek(fd, sys.off_t(start+offs), SET);
+			sys.read(fd, buf, elf.secthdr64?size);
+			offs += hdrsize;
+			psh = psec(buf[0:elf.secthdr64?size]);
+			// convert endian if necessary
+		        if (psh@.type == PROGBITS || psh@.type == NOBITS) &&
+		           (psh@.flags.ALLOC) then
+			{   n = findseg(psh@.addr, memory);
+//fderr.str("shnum=");  fderr.uint32(nshdr);
+//fderr.str(" addr="); fderr.hex64(psh@.addr);
+//fderr.str(" segnum="); fderr.uint32(n);
+//fderr.nl();
+			    if n >= memory.nsegs then
+				return false;
+			    if psh@.addr + psh@.size - 1 > memory.seg[n].end then
+				return false;
+			    sys.lseek(fd, sys.off_t(start+psh@.offset), SET);
+			    if psh@.type == PROGBITS then
+				sys.read(fd,
+				  memory.seg[n].mem@[psh@.addr - memory.seg[n].beg:],
+				  psh@.size);
+			}
+			nshdr -= 1;
+		    }
+	    	}
+	    	return true;
+	    }
+	}
+	return false;
+    }
+}
+

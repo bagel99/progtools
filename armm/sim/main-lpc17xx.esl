@@ -1,0 +1,20 @@
+const CPU = "lpc17xx";
+
+import sys;
+import zstr;
+import out;
+
+const fdin: sys.fildes = 0;
+const fdout: out.OutFD = 1;
+const fderr: out.OutFD = 2;
+
+var db: _uint = 0;		// debug level
+var log: _uint = 2;		// logging level
+
+package lpc17xx
+{
+}
+alias lpc17xx as chip;
+
+import main;
+

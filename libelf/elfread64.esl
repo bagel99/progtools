@@ -1,0 +1,139 @@
+import elf;
+import sys;
+
+package elfread
+{
+    type Symbols:
+    {	num:	_uint;
+	sym:	[]elf.symbol64;
+    };
+    type pSymbols: @Symbols;
+
+    type Strings:
+    {	size:	_uint;
+	str:	[]_byte;
+    };
+    type pStrings: @Strings;
+
+    type Text:
+    {	size:	_uint;
+	addr:	elf.Addr64;
+	txt:	[]_byte;
+    };
+    type pText: @Text;
+
+    type File:
+    {	fd:	sys.fildes;
+	fh:	elf.filehdr64;
+	symbols:pSymbols;
+	strings:pStrings;
+    };
+    type pFile: @File;
+
+
+    type pSectHdr: @elf.secthdr64;
+    type pSymbolTable: @[]elf.symbol64;
+    type pStringTable: @[]_byte;
+
+    // returns 0 if not found, section_number+1 if found
+    proc (pf: pFile) FindSection(ps: pSectHdr, which: elf.SectTypes,
+				 start: _uint): _uint
+    {   var i: _uint;
+
+	i = start;
+	while i < pf.fh.shnum do
+	{   sys.lseek(pf.fd, pf.fh.shoff + (i * pf.fh.shentsize), SET);
+	    sys.read(pf.fd, ps, elf.secthdr64?size);
+	    if ps.type == which then
+		return i+1;
+	    i += 1;
+	}
+	return 0;
+    }
+/*
+    proc (pf: pFile) GetSection(which: elf.SectTypes, start: _uint): @[]_byte
+    {   var sectnum: _uint;
+	var secthdr: elf.secthdr64;
+
+	sectnum = pf.FindSection(secthdr, which, start);
+	if sectnum == 0 then
+	    return 0;
+
+    }
+*/
+    proc (pf: pFile) GetNextTextSection(n: _uint): pText, _uint
+    {   var sectnum: _uint;
+	var secthdr: elf.secthdr64;
+	var ptxt: pText;
+
+	loop
+	{
+	    sectnum = pf.FindSection(secthdr, PROGBITS, n);
+	    if sectnum == 0 then
+		return 0, 0;
+	  exit secthdr.flags.EXEC;
+	    n += sectnum;
+	}
+	ptxt = pText(_new(Text(secthdr.size)));
+	ptxt.size = secthdr.size;
+	ptxt.addr = secthdr.addr;
+	sys.lseek(pf.fd, secthdr.offset, SET);
+	sys.read(pf.fd, ptxt.txt, secthdr.size);
+	return ptxt, sectnum-1;
+    }
+
+    proc (pf: pFile) GetStringSection(): pStrings
+    {	var nstrtab: _uint;
+	var pstrtab: pStrings;
+	var secthdr: elf.secthdr64;
+
+	nstrtab = pf.FindSection(secthdr, STRTAB, 0);
+	if nstrtab == 0 then
+	    return 0;
+fde.str("StringTable size="); fde.uint(secthdr.size); fde.nl();
+	pstrtab = pStrings(_new(Strings(secthdr.size)));
+	pstrtab.size = secthdr.size;
+	sys.lseek(pf.fd, secthdr.offset, SET);
+	sys.read(pf.fd, pstrtab.str, secthdr.size);
+	return pstrtab;
+    }
+
+    proc (pf: pFile) GetSymbolSection(): pSymbols
+    {   var nsymtab: _uint;
+	var psymtab: pSymbols;
+	var nsymbol: _uint;
+	var secthdr: elf.secthdr64;
+
+	nsymtab = pf.FindSection(secthdr, SYMTAB, 0);
+	if nsymtab == 0 then
+	    return 0;
+	nsymbol = secthdr.size / secthdr.entsize;
+fde.str("SymbolTable nentries="); fde.uint(nsymbol); fde.nl();
+	psymtab = pSymbols(_new(Symbols(nsymbol)));
+	sys.lseek(pf.fd, secthdr.offset, SET);
+	sys.read(pf.fd, psymtab.sym, secthdr.size);
+	psymtab.num = nsymbol;
+	return psymtab;
+    }
+
+
+    proc Init(afd: sys.fildes, arch: elf.MachArchs): pFile
+    {	var pf: pFile;
+
+	pf = _new(File);
+	pf.fd = afd;
+	sys.read(afd, pf.fh, elf.filehdr64?size);
+	if pf.fh.magic == elf.magic then
+	{   // we have an ELF file, do some more checks
+	    if pf.fh.class == CLASS64 &&
+	       pf.fh.data == LSB2 &&
+	       pf.fh.machine == arch then
+	    {
+		return pf;
+	    }
+	}
+	_delete(pf);
+	return 0;
+    }
+
+}

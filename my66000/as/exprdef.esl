@@ -1,0 +1,16 @@
+package expr
+{
+    type Oper: (NONE, SYMADD, SYMSUB, SYMDIFF, ADD, SUB);
+    type ExprT:
+    {   op:   Oper;
+	offs: _int64;
+	sym1: @SymbolT;		// forward
+	sym2: @SymbolT;		// forward
+    };
+    type Expr: @ExprT;
+
+    proc Dump(fd: out.OutFD, e: Expr);			// forward
+    proc Fix(e: Expr): boolean, _uint, @SegmentT;	// forward
+
+}
+

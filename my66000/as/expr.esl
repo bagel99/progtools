@@ -1,0 +1,245 @@
+
+package expr
+{
+    alias symbol.Symbol as Symbol;
+    alias lex.SkipWS as SkipWS;
+
+    proc Dump(fd: out.OutFD, e: Expr)
+    {
+	if e.op
+	is NONE then
+	{   fd.str("0x"); fd.hex64(_uint64(e.offs));
+	}
+	is SYMADD then
+	{   fd.str(e.sym1.name);
+	    if e.offs != 0 then
+	    {   fd.str(" + 0x"); fd.hex64(_uint64(e.offs));
+	    }
+	}
+	is SYMSUB then
+	{   fd.str(e.sym1.name);
+	    fd.str(" - 0x");  fd.hex64(_uint64(e.offs));
+	}
+	is SYMDIFF then
+	{   fd.str(e.sym1.name);
+	    fd.str(" - "); fd.str(e.sym2.name);
+	}
+	else
+	{   fd.str("unknown op="); fd.hex8(_uint8(e.op));
+	}
+    }
+
+    proc Fix(e: Expr): boolean, _uint64, segment.Segment
+    {
+	if e == 0 then
+	    return true, 0, 0;
+	if e.op
+	is NONE then
+	    return true, e.offs, 0;
+	is SYMADD then
+	    if e.sym1.flags.def then
+		return true, e.sym1.Value() + e.offs, e.sym1.segm;
+	is SYMSUB then
+	    if e.sym1.flags.def then
+		return true, e.sym1.Value() - e.offs, e.sym1.segm;
+	is SYMDIFF then
+	    if e.sym1.flags.def && e.sym2.flags.def then
+	    	// FIXME - same segment?
+		return true, e.sym1.Value() - e.sym2.Value() + e.offs, 0;
+	return false, 0, 0;
+    }
+
+
+    proc Expr0(s: @[]_byte, left: Expr): @[]_byte;	// forward
+
+    proc Expr7(s: @[]_byte, val: Expr): @[]_byte
+    {   var i: _uint;
+	var n: _uint64;
+	var r: @[]_byte;
+
+	s = SkipWS(s);
+	if s[0]
+	is '0'..'9' then
+	{   if s[0] == '0' && (s[1] == 'x' || s[1] == 'X') then
+	    {	s, n = lex.Hex(s[2:]);
+		val.op = NONE;
+		val.offs = n;
+		val.sym1 = 0;
+		val.sym2 = 0;
+	    }
+	    elif s[1] == 'b' || s[1] == 'f' then
+	    {   val.op = SYMADD;
+	    	val.offs = 0;
+	    	val.sym2 = 0;
+		val.sym1 = symbol.LocalUse(s[0]-'0', s[1] == 'f');
+	    }
+	    else
+	    {	s, n = lex.Dec(s);
+		val.op = NONE;
+		val.offs = n;
+		val.sym1 = 0;
+		val.sym2 = 0;
+	    }
+	}
+	is '(' then
+	{   s = Expr0(s, val);
+	    s = SkipWS(s);
+	    if s[0] == ')' then
+	    	return s[1:];
+	    else
+		Syntax("missing ')'");
+	}
+	else
+	{   r = s;
+	    s, i = lex.Symbol(s);
+	    if i == 1 && r[0] == '.' then
+	    {   // dot, the anon symbol
+	    	val.sym1 = symbol.Anon();
+		val.offs = 0;
+		val.op = SYMADD;
+	    }
+	    else
+	    {   val.sym1 = symbol.Enter(r, i, false);
+		if val.sym1.flags.def && val.sym1.segm == 0 then
+		{   // absolute, treat like a number
+		    val.offs = val.sym1.offs;
+		    val.sym1 = 0;
+		    val.op = NONE;
+		}
+		else
+		{   // normal symbol
+		    val.offs = 0;
+		    val.op = SYMADD;
+		}
+	    }
+	}
+	return s;
+    }
+
+    proc Expr6(s: @[]_byte, val: Expr): @[]_byte
+    {
+	s = SkipWS(s);
+	if s[0]
+	is '-' then
+	{   s = Expr7(s[1:], val);
+	    val.offs = -val.offs;
+	}
+	is '~' then
+	{   s = Expr7(s[1:], val);
+	    val.offs = ~val.offs;
+	}
+	else
+	{   s = Expr7(s[0:], val);
+	}
+	return s;
+    }
+
+    proc Expr5(s: @[]_byte, left: Expr): @[]_byte
+    {   var right: ExprT;
+
+	s = Expr6(s, left);
+	s = SkipWS(s);
+	if s[0]
+	is '*' then
+	{   s = Expr6(s[1:], right);
+	    left.offs = left.offs * right.offs;
+	}
+	is '/' then
+	{   s = Expr6(s[1:], right);
+	    if right.offs != 0 then
+		left.offs = left.offs / right.offs;
+	}
+	is '%' then
+	{   s = Expr6(s[1:], right);
+	    left.offs = left.offs % right.offs;
+	}
+	return s;
+    }
+
+    proc Expr4(s: @[]_byte, left: Expr): @[]_byte
+    {   var right: ExprT;
+	var op: Oper;
+
+	s = Expr5(s, left);
+	loop
+	{
+	    s = SkipWS(s);
+	    if s[0] == '+' then
+	        op = ADD;
+	    elif s[0] == '-' then
+		op = SUB;
+	    else
+		return s;
+	    s = Expr5(s[1:], right);
+	    if op == ADD then
+	    	left.offs += right.offs;
+	    else
+		left.offs -= right.offs;
+	    if left.op <= SYMDIFF && right.op == NONE then
+	    	;	// OK, do nothing
+	    elif left.op == NONE && right.op <= SYMDIFF then
+	    {	left.op = right.op;
+	    	left.sym1 = right.sym1;
+	    }
+	    elif left.op == SYMADD && right.op == SYMADD && op == SUB then
+	    {	left.op = SYMDIFF;
+	   	left.sym2 = right.sym1;
+	   }
+	   else
+	   	Syntax("illegal expression");
+	}
+    }
+
+    proc Expr3(s: @[]_byte, left: Expr): @[]_byte
+    {   var right: ExprT;
+
+	s = Expr4(s, left);
+	s = SkipWS(s);
+	if s[0:2] == "<<" then
+	{   s = Expr4(s[2:], right);
+	    left.offs = left.offs << right.offs;
+	}
+	elif s[0:2] == ">>" then
+	{   s = Expr4(s[2:], right);
+	    left.offs = left.offs >> right.offs;
+	}
+	return s;
+    }
+
+    proc Expr2(s: @[]_byte, left: Expr): @[]_byte
+    {   var right: ExprT;
+
+	s = Expr3(s, left);
+	s = SkipWS(s);
+	if s[0] == '&' then
+	{   s = Expr3(s[1:], right);
+	    left.offs = left.offs & right.offs;
+	}
+	return s;
+    }
+
+    proc Expr1(s: @[]_byte, left: Expr): @[]_byte
+    {   var right: ExprT;
+
+	s = Expr2(s, left);
+	s = SkipWS(s);
+	if s[0] == '^' then
+	{   s = Expr2(s[1:], right);
+	    left.offs = left.offs ^ right.offs;
+	}
+	return s;
+    }
+
+    proc Expr0(s: @[]_byte, left: Expr): @[]_byte
+    {   var right: ExprT;
+
+	s = Expr1(s, left);
+	s = SkipWS(s);
+	if s[0] == '|' then
+	{   s = Expr1(s[1:], right);
+	    left.offs = left.offs | right.offs;
+	}
+	return s;
+    }
+}
+

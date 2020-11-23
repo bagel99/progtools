@@ -1,0 +1,737 @@
+package comd
+{
+    var userint: boolean = false;	// user interrupt
+
+    proc strtoud(s: @[]_byte): cpu.Word
+    {   var n: cpu.Word;
+	var i: _uint;
+
+	n = 0;
+	i = 0;
+	while s[i] != 0 do
+	{   if s[i] >= '0' && s[i] <= '9' then
+		n = n * 10 + (s[i] - '0');
+	    i += 1;
+	}
+	return n;
+    }
+
+    proc strtoux(s: @[]_byte): cpu.Word
+    {   var n: cpu.Word;
+	var i: _uint;
+
+	n = 0;
+	i = 0;
+	while s[i] != 0 do
+	{   if s[i]
+	    is '0' .. '9' then
+		n = n * 16 + (s[i] - '0');
+	    is 'A' .. 'Z' then
+		n = n * 16 + (s[i] - 'A' + 10);
+	    is 'a' .. 'z' then
+		n = n * 16 + (s[i] - 'a' + 10);
+	    i += 1;
+	}
+	return n;
+    }
+
+    proc GetValue(arg: @[]_byte): cpu.Word
+    {   var r: _uint;
+
+	if arg[0] == '$' then	// register contents
+	{   r = 0;
+	    while r < cpu.regname?len &&
+	          !zstr.eq(cpu.regname[r], arg[1:], 6) do
+		r += 1;
+	    if r < cpu.regname?len then
+	    	return cpu.reg[r];
+	    else
+	    {	fderr.str("Illegal register name\n");
+	    	return 0;
+	    }
+	}
+	else
+	    return strtoux(arg);
+    }
+
+    proc RegDisplay(narg: _uint, args: @[]@[]_byte)
+    {   var val: cpu.Word;
+
+	if narg >= 2 then
+	{   if args[1][0] == '$' then
+	    {   val = GetValue(args[1]);
+		if cpu.Word?bits == 64 then
+		    fderr.hex64(val);
+		else
+		    fderr.hex32(val);
+		fderr.nl();
+	    }
+	}
+	else
+	    cpu.Dump();
+    }
+
+    proc RegModify(narg: _uint, args: @[]@[]_byte)
+    {   var reg: _uint;
+	var val: cpu.Word;
+
+	if narg >= 3 then
+	{   reg = 0;
+	    while reg < cpu.regname?len &&
+	          !zstr.eq(cpu.regname[reg], args[1], 4) do
+	        reg += 1;
+	    if reg >= cpu.regname?len then
+	    {
+		return;
+	    }
+	    val = GetValue(args[2]);
+	    cpu.reg[reg] = val;
+	}
+    }
+
+    proc MemDumpB(addr: cpu.Addr,  n: _uint)
+    {   var b: _byte;
+	var c: [17]_byte;
+	var i: _uint;
+	var logsave: _uint;
+
+	logsave = log;
+	log = 0;
+	i = 0;
+	while n > 0 do
+	{   if i == 0 then
+	    {   if cpu.Addr?bits == 64 then
+		    fderr.hex64(addr);
+		else
+		    fderr.hex32(addr);
+		fderr.str(": ");
+	    }
+	    b = cpu.Read(addr, BYTE);
+	    fderr.hex8(b);
+	    fderr.chr(' ');
+	    if b < ' ' || b > '~' then b = '.';
+	    c[i] = b;
+	    i += 1;
+	    addr += 1;
+	    n -= 1;
+	    if (addr & 0xF) == 0 || n == 0 then
+	    {   c[i] = 0;
+		fderr.str("    ");
+		fderr.str(c);
+		fderr.nl();
+		i = 0;
+	    }
+	}
+	log = logsave;
+    }
+
+    proc MemDumpH(addr: cpu.Addr,  n: _uint)
+    {   var h: cpu.Half;
+	var i: _uint;
+	var logsave:  _uint;
+
+	logsave = log;
+	log = 0;
+	i = 0;
+	while n > 0 do
+	{   if i == 0 then
+	    {   if cpu.Addr?bits == 64 then
+		    fderr.hex64(addr);
+		else
+		    fderr.hex32(addr);
+		fderr.str(": ");
+	    }
+	    h = cpu.Read(addr, HALF);
+	    fderr.hex16(h);
+	    fderr.chr(' ');
+	    addr += 2;
+	    i += 1;
+	    if (addr & 0xF) == 0 then
+	    {   fderr.nl();
+		i = 0;
+	    }
+	    n -= 1;
+	}
+	if (addr & 0xF) != 0 then fderr.nl();
+	log = logsave;
+    }
+
+    proc MemDumpW(addr: cpu.Addr,  n: _uint)
+    {   var w: cpu.Word;
+	var i: _uint;
+	var logsave:  _uint;
+
+	logsave = log;
+	log = 0;
+	i = 0;
+	while n > 0 do
+	{   if i == 0 then
+	    {   if cpu.Addr?bits == 64 then
+		    fderr.hex64(addr);
+		else
+		    fderr.hex32(addr);
+		fderr.str(": ");
+	    }
+	    w = cpu.Read(addr, WORD);
+	    fderr.hex32(w);
+	    fderr.chr(' ');
+	    addr += 4;
+	    i += 1;
+	    if (addr & 0xF) == 0 then
+	    {   fderr.nl();
+		i = 0;
+	    }
+	    n -= 1;
+	}
+	if (addr & 0xF) != 0 then fderr.nl();
+	log = logsave;
+    }
+
+    proc MemDumpD(addr: cpu.Addr,  n: _uint)
+    {   var w: cpu.Word;
+	var i: _uint;
+	var logsave:  _uint;
+	if cpu.Word?bits == 64 then
+	{
+	    logsave = log;
+	    log = 0;
+	    i = 0;
+	    while n > 0 do
+	    {   if i == 0 then
+		{   if cpu.Addr?bits == 64 then
+			fderr.hex64(addr);
+		    else
+			fderr.hex32(addr);
+		    fderr.str(": ");
+		}
+		w = cpu.Read(addr, QUAD);
+		fderr.hex64(w);
+		fderr.chr(' ');
+		addr += 8;
+		i += 1;
+		if (addr & 0xF) == 0 then
+		{   fderr.nl();
+		    i = 0;
+		}
+		n -= 1;
+	    }
+	    if (addr & 0xF) != 0 then fderr.nl();
+	    log = logsave;
+	}
+	else	// cpu.Word?size != 64
+	    fderr.str("mdd not implemented\n");
+    }
+
+    proc MemDisplayB(narg: _uint, args: @[]@[]_byte)
+    {   var addr: cpu.Addr;
+	var n: _uint;
+
+	if narg >= 2 then
+	{   addr = GetValue(args[1]);
+	    n = 1;
+	    if narg >= 3 then
+		n = strtoud(args[2]);
+	    MemDumpB(addr, n);
+	}
+    }
+
+    proc MemDisplayH(narg: _uint, args: @[]@[]_byte)
+    {   var addr: cpu.Addr;
+	var n: _uint;
+
+	if narg >= 2 then
+	{   addr = GetValue(args[1]);
+	    n = 1;
+	    if narg >= 3 then
+		n = strtoud(args[2]);
+	    MemDumpH(addr, n);
+	}
+    }
+
+    proc MemDisplayW(narg: _uint, args: @[]@[]_byte)
+    {   var addr: cpu.Addr;
+	var n: _uint;
+
+	if narg >= 2 then
+	{   addr = GetValue(args[1]);
+	    n = 1;
+	    if narg >= 3 then
+		n = strtoud(args[2]);
+	    MemDumpW(addr, n);
+	}
+    }
+
+    proc MemDisplayD(narg: _uint, args: @[]@[]_byte)
+    {   var addr: cpu.Addr;
+	var n: _uint64;
+
+	if narg >= 2 then
+	{   addr = GetValue(args[1]);
+	    n = 1;
+	    if narg >= 3 then
+		n = strtoud(args[2]);
+	    MemDumpD(addr, n);
+	}
+    }
+
+    proc MemModifyB(narg: _uint, args: @[]@[]_byte)
+    {   var addr: cpu.Addr;
+	var n: _uint8;
+
+	if narg >= 3 then
+	{   addr = GetValue(args[1]);
+	    n = GetValue(args[2]);
+	    cpu.Write(addr, BYTE, n);
+	}
+    }
+
+    proc MemModifyH(narg: _uint, args: @[]@[]_byte)
+    {   var addr: cpu.Addr;
+	var n: _uint16;
+
+	if narg >= 3 then
+	{   addr = GetValue(args[1]);
+	    n = GetValue(args[2]);
+	    cpu.Write(addr, HALF, n);
+	}
+    }
+
+    proc MemModifyW(narg: _uint, args: @[]@[]_byte)
+    {   var addr: cpu.Addr;
+	var n: _uint32;
+
+	if narg >= 3 then
+	{   addr = GetValue(args[1]);
+	    n = GetValue(args[2]);
+	    cpu.Write(addr, WORD, n);
+	}
+    }
+
+    proc MemModifyD(narg: _uint, args: @[]@[]_byte)
+    {   var addr: cpu.Addr;
+	var n: _uint64;
+
+	if cpu.Word?bits == 64 then
+	{
+	    if narg >= 3 then
+	    {   addr = GetValue(args[1]);
+		n = GetValue(args[2]);
+		cpu.Write(addr, QUAD, n);
+	    }
+	}
+	else	// cpu.Word?size != 64
+	    fderr.str("mmd not implemented\n");
+    }
+
+    const NumBP = 8;
+    type Breakpoint:
+    {	addr:   cpu.Addr;
+	inst:   cpu.Inst;
+	active: boolean;
+	temp:   boolean;	// temporary, remove when hit
+    };
+    var bptab: [NumBP]Breakpoint;
+    var atbp: boolean;
+
+    proc AddBreakpoint(addr: cpu.Addr, temp: boolean): boolean
+    {   var i: _uint;
+
+	addr = addr & ~1;	// remove low bit
+	i = 0;
+	while i < NumBP && bptab[i].active do
+	    i += 1;
+	if i < NumBP then
+	{   bptab[i].inst = cpu.SetBreakpoint(addr, i);
+	    bptab[i].addr = addr;
+	    bptab[i].active = true;
+	    bptab[i].temp = temp;
+	    return true;
+	}
+	return false;
+    }
+
+    proc ShowBreakpoints(narg: _uint, args: @[]@[]_byte)
+    {   var i: _uint;
+
+	for i from 0 to NumBP-1 do
+	{   if bptab[i].active then
+	    {
+		fderr.uint(i);  fderr.str(": ");
+		fderr.hex32(bptab[i].addr);  fderr.nl();
+	    }
+	}
+    }
+
+    proc SetBreakpoint(narg: _uint, args: @[]@[]_byte)
+    {   var i: _uint;
+	var addr: cpu.Addr;
+
+	if narg >= 2 then
+	    addr = GetValue(args[1]);
+	else
+	    addr = cpu.reg[cpu.PC];
+	if !AddBreakpoint(addr, false) then
+	    fderr.str("No breakpoints available\n");
+    }
+
+    proc SetTempBreakpoint(narg: _uint, args: @[]@[]_byte)
+    {
+	if narg < 2 then
+        {   fderr.str("Missing argument\n");
+	    return;
+	}
+	if !AddBreakpoint(GetValue(args[1]), true) then
+	    fderr.str("No breakpoints available\n");
+    }
+
+    proc FinishBreakpoint(narg: _uint, args: @[]@[]_byte) // args unused
+    {
+	if !AddBreakpoint(cpu.reg[cpu.LR], true) then
+	    fderr.str("No breakpoints available\n");
+    }
+
+    proc DelBreakpoint(narg: _uint, args: @[]@[]_byte)
+    {   var n: _uint;
+
+	if narg >= 2 then
+	{   n = strtoud(args[1]);
+	    if n < NumBP then
+	    {   cpu.ClrBreakpoint(bptab[n].addr, bptab[n].inst); // restore instruction
+	        bptab[n].active = false;
+	    }
+	}
+    }
+
+    proc StepOverBreakpoint()
+    {   var addr: cpu.Addr;
+        var i: _uint;
+
+	addr = cpu.instpc;
+	i = 0;
+	while i < NumBP && bptab[i].addr != addr do
+	    i += 1;
+	if i < NumBP then
+	{   if bptab[i].active then	// maybe already removed
+		cpu.ClrBreakpoint(addr, bptab[i].inst);
+	    cpu.reg[cpu.PC] = addr;	// backup PC
+	    cpu.Run();
+	    if bptab[i].active then
+	    {	if bptab[i].temp then
+		    bptab[i].active = false;	// remove BP
+		else
+		    cpu.SetBreakpoint(addr, i);	// reinstall BP
+	    }
+	}
+	else
+	{   fderr.str("Breakpoint at ");
+	    fderr.hex32(addr);
+	    fderr.str(" not found\n");
+	}
+    }
+
+    proc Continue(narg: _uint, args: @[]@[]_byte) // args unused
+    {
+	// FIXME - check that there is at least one breakpoint
+	if atbp then
+	{   StepOverBreakpoint();
+	    atbp = false;
+	}
+	while !userint && cpu.Run() do {}
+	if userint then userint = false;
+//	cpu.Dump();
+	if cpu.fault
+	is BKPT then
+	{
+	    fderr.str("At breakpoint\n");
+	    atbp = true;
+	}
+	is SVC then
+	{
+	    fderr.str("At SVC\n");
+	}
+    }
+
+    proc Step(narg: _uint, args: @[]@[]_byte)
+    {   var i, n: _uint;
+
+	n = 1;		// default
+	if narg >= 2 then
+	   n = strtoud(args[1]);
+	if n == 0 then return;
+	if atbp then
+	{   StepOverBreakpoint();
+	    n -= 1;
+	    atbp = false;
+	}
+	i = 0;
+	while i < n do
+	{
+	    i += 1;
+    	  exit !cpu.Run();
+	}
+//	cpu.Dump();
+	if cpu.fault == BKPT then
+	{
+	    fderr.str("At breakpoint\n");
+	    atbp = true;
+	}
+    }
+
+    proc BackTrace(narg: _uint, args: @[]@[]_byte)
+    {
+	if _defined(cpu.BackTrace) then
+	    cpu.BackTrace();
+	else
+	    fderr.str("Backtrace not implemented\n");
+    }
+
+    proc SetDebug(narg: _uint, args: @[]@[]_byte)
+    {   var n: _uint;
+
+	if narg >= 2 then
+	{   n = strtoud(args[1]);
+	    db = n;
+	}
+    }
+
+    proc SetLog(narg: _uint, args: @[]@[]_byte)
+    {   var n: _uint;
+
+	if narg >= 2 then
+	{   n = strtoud(args[1]);
+	    log = n;
+	}
+    }
+
+    proc IsChar(c: _byte): boolean
+    {
+	return (c >= ' ' && c <= '~') ||
+		c == '\n' || c == '\r';
+    }
+
+    proc PrintChar(c: _byte)
+    {
+	if c
+	is '\n' then fderr.str("\\n");
+	is '\r' then fderr.str("\\r");
+	is '\t' then fderr.str("\\t");
+	is '\\' then fderr.str("\\\\");
+	is '"'  then fderr.str("\"");
+	else fderr.chr(c);
+    }
+
+    proc Strings(narg: _uint, args: @[]@[]_byte)
+    {   var beg, end: _uint32;
+	var min, align: _uint;
+	var n, i: _uint;
+	var b: _byte;
+
+	min = 4;
+	align = 4;
+        if narg < 3 then
+        {   fderr.str("Missing arguments\n");
+            return;
+        }
+        beg = GetValue(args[1]);
+        end = GetValue(args[2]);
+        if narg > 3 then
+        {   min = GetValue(args[3]);
+	    if narg > 4 then
+		align = GetValue(args[4]);
+	}
+	loop
+	{   n = beg % align;
+	    if n != 0 then
+	    	beg += align - n;
+	  exit beg >= end;
+	    n = 0;
+	    loop
+	    {   b = cpu.Read(beg+n, BYTE);
+	      exit !IsChar(b);
+	        n += 1;
+	    }
+	    if n >= min && b == 0 then
+	    {   fderr.hex32(beg);
+		fderr.str(": \"");
+		for i from 0 to n do
+		    PrintChar(_byte(cpu.Read(beg+i, BYTE)));
+		fderr.str("\"\n");
+	    }
+	    beg += n+1;
+	}
+    }
+
+    proc Interrupt(narg: _uint, args: @[]@[]_byte)
+    {   var n: _uint;
+
+	if narg < 2 then return;
+	n = strtoud(args[1]);
+	cpu.Interrupt(n);
+	cpu.Dump();
+    }
+
+    /*
+     * commands implemented partially in the chip simulation
+     */
+    proc SetPin(narg: _uint, args: @[]@[]_byte)
+    {   var unit, pin: _uint;
+	var val: boolean;
+
+	if narg < 3 then return;
+	unit = strtoud(args[1]);
+	pin  = strtoud(args[2]);
+	val  = strtoud(args[3]) != 0;
+	if _defined(chip.SetPin) then
+	    chip.SetPin(unit, pin, val);
+	else
+	    fderr.str("Command not implemented\n");
+    }
+
+    proc DumpGPIO(narg: _uint, args: @[]@[]_byte)
+    {	var fm, to: _uint;
+
+	if narg < 1 then return;
+	fm = strtoud(args[1]);
+	to = fm;
+	if narg > 1 then
+	    to = strtoud(args[2]);
+//	if _defined(chip.DumpGPIO) then
+//	    chip.DumpGPIO(fm, to);
+//	else
+	    fderr.str("Command not implemented\n");
+    }
+
+    proc Help(narg: _uint, args: @[]@[]_byte);	// forward
+
+    type Command:
+    {   name:  @[]_byte;
+	proc:  @_(narg: _uint, args: @[]@[]_byte);
+	help:  @[]_byte;
+    };
+
+    const cmdtab: []Command =
+    {   {   "rd",	RegDisplay,	"Display registers"  },
+	{   "rm",	RegModify,	"Modify register" },
+	{   "mdb",	MemDisplayB,	"Display memory as bytes" },
+	{   "mdh",	MemDisplayH,	"Display memory as halfs" },
+	{   "mdw",	MemDisplayW,	"Display memory as words" },
+	{   "mdd",	MemDisplayD,	"Display memory as doublewords" },
+	{   "mmb",	MemModifyB,	"Modify memory byte" },
+	{   "mmh",	MemModifyH,	"Modify memory half" },
+	{   "mmw",	MemModifyW,	"Modify memory word" },
+	{   "mmd",	MemModifyD,	"Modify memory doubleword" },
+	{   "s",	Step,		"Step instruction(s)" },
+	{   "c",	Continue,	"Continue until next breakpoint" },
+	{   "br",	SetBreakpoint,	"Set breakpoint" },
+	{   "tbr",	SetTempBreakpoint,
+			"Set temporary breakpoint" },
+	{   "rbr",	DelBreakpoint,	"Remove breakpoint" },
+	{   "sbr",	ShowBreakpoints,"Show breakpoints" },
+	{   "fi",	FinishBreakpoint,
+			"Set temporary breakpoint at subroutine return" },
+	{   "bt",	BackTrace,	"Stack backtrace" },
+	{   "db",	SetDebug,	"Set debug level" },
+	{   "log",	SetLog,		"Set log level" },
+	{   "strings",  Strings,	"Display strings" },
+	{   "intr",	Interrupt,	"Cause interrupt" },
+	{   "setpin",   SetPin,		"Set or Clr a GPIO pin" },
+	{   "gpio",	DumpGPIO,  	"Dump GPIO registers" },
+	{   "q",	0,		"Quit" },
+	{   "h",	Help,		"Help" }
+    };
+
+    proc Help(narg: _uint, args: @[]@[]_byte)
+    {   var i: _uint;
+
+	for i from 0 to cmdtab?len-1 do
+	{   fderr.str(cmdtab[i].name);
+	    fderr.chr('\t');
+	    fderr.str(cmdtab[i].help);
+	    fderr.nl();
+	}
+    }
+
+    const ArgMax =  4;
+
+    var buf:  [256]_byte;
+    var last: [256]_byte;
+
+    proc skipws(s: @[]_byte, n: _uint): _uint, boolean
+    {   var i: _uint;
+
+	i = 0;
+	while i < n do
+	{   if s[i]
+    	    is '\n' then return i, true;
+    	    is ' ', '\t' then ;
+    	    else return i, false;
+    	    i += 1;
+	}
+	return i, false;
+    }
+
+    proc skiptows(s: @[]_byte, n: _uint): _uint, boolean
+    {   var i: _uint;
+
+	i = 0;
+	while i < n do
+	{   if s[i]
+    	    is '\n' then return i, true;
+    	    is ' ', '\t' then return i, false;
+    	    i += 1;
+	}
+	return i, false;
+    }
+
+
+    proc command()
+    {   var rv: _int;
+	var i, k, n: _uint;
+	var s, e: _uint;
+	var eol: boolean;
+	var args: [ArgMax]@[]_byte;
+
+
+	last[0] = '\n';
+	loop
+	{
+	    fderr.str("> ");
+	    rv = sys.read(fdin, buf, buf?len);
+	  exit rv <= 0;
+	    k = rv;
+	    if k == 1 && buf[0] == '\n' then
+	    {   k = _zlen(last);
+	    	buf[0:k] = last[0:k];	// FIXME - use pointer to bufs and ping-pong
+	    }
+	    else
+	    	last[0:k] = buf[0:k];
+	    s = 0;
+	    n = 0;
+	    do
+	    {
+		i, eol = skipws(buf[s:k-s], k-s);
+		s += i;
+		i, eol = skiptows(buf[s:k-s], k-s);
+		e = s + i;
+		buf[e] = 0;		// null terminate
+		args[n] = buf[s:e-s];
+		if n < ArgMax-1 then
+	            n += 1;
+		s = e+1;
+	    } while !eol && s < k;
+	    i = 0;
+	    while i < cmdtab?len && !zstr.eq(args[0], cmdtab[i].name, 16) do
+		i += 1;
+	    if i < cmdtab?len then
+	    {   if cmdtab[i].proc != 0 then
+	    	    cmdtab[i].proc@(n, args);
+	    	else
+	    	    return;
+	    }
+	    else
+	    	fderr.str("Illegal command, use \"h\" for help.\n");
+	}
+
+    }
+}
+

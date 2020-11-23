@@ -1,0 +1,172 @@
+import sys;
+import zstr;
+import out;
+
+const fdi: sys.fildes = 0;
+const fdo: out.OutFD = 1;
+const fde: out.OutFD = 2;
+
+import elfread64;
+
+import my66000def;
+
+type  Width: (BYTE, HALF, WORD, QUAD);
+
+    // Sign extend from a bit, leave as unsigned
+    proc Sext(bit: _uint, x: Word): Word: inline
+    {   var tmp: SWord;
+
+	tmp = SWord(x);
+	tmp = tmp << (Word?bits-1 - bit);
+	tmp = tmp >> (Word?bits-1 - bit);
+	return Word(tmp);
+    }
+
+// This is only going to access the current text section
+var curtxt: elfread.pText;
+proc Read(addr: Addr, w: Width): Word
+{   var offs: _uint;
+    var rv: Word;
+
+    offs = addr - curtxt.addr;
+    if offs >= curtxt.size then
+    {	// FIXME - error
+	return 0;
+    }
+    if w
+    is BYTE then rv = curtxt.txt[offs];
+    is HALF then rv = _unpkle(curtxt.txt[offs:2]);
+    is WORD then rv = _unpkle(curtxt.txt[offs:4]);
+    is QUAD then rv = _unpkle(curtxt.txt[offs:8]);
+    return rv;
+}
+
+var pstr: elfread.pStrings;
+var psym: elfread.pSymbols;
+
+proc NextSym(start: Addr)(addr: Addr, name:  @[]_byte)
+{   var i: _uint;
+    var sinx: _uint;
+
+    addr = addr?max;
+    name = 0;
+    i = 0;
+    while i < psym.num do
+    {
+	if psym.sym[i].value >= start then
+	{   addr = psym.sym[i].value;
+	    sinx = psym.sym[i].name;
+	    name = pstr.str[sinx:];
+	    return;
+	}
+	i += 1;
+    }
+}
+
+proc GetSym(addr: Addr): @[]_byte
+{   var i: _uint;
+    var sinx: _uint;
+
+    i = 0;
+    while i < psym.num do
+    {
+	if psym.sym[i].value == addr then
+	{   sinx = psym.sym[i].name;
+	    return pstr.str[sinx:];
+	}
+	i += 1;
+    }
+    return 0;
+}
+
+
+import disinst;
+
+proc DisSection(ptxt: elfread.pText)
+{   var i: _uint;
+    var addr, end, symaddr: Addr;
+    var symname: @[]_byte;
+    var inst: Inst;
+    var newsym: boolean = true;
+
+    curtxt = ptxt;
+    addr = ptxt.addr;
+    end = addr + ptxt.size;
+    while addr < end do
+    {	if newsym then
+	{   symaddr, symname = NextSym(addr);
+	    newsym = false;
+	}
+	if addr == symaddr then
+	{   fde.str(symname); fde.str(":\n");
+	    newsym = true;
+	}
+	fde.hex32(_uint32(addr));
+	fde.chr(' ');
+	inst = Read(addr, WORD);
+	addr += disInst(addr);
+	if (inst & 0xFC00_0000) == 0x6C00_0000 then
+	{   var op: OPTT = OPTT(inst);
+	    var j, n: _uint;
+	    n = op.imm;
+	    if op.sz
+	    is 0 then {}	// FIXME
+	    is 1 then
+	    {	for j from 0 to n-1 do
+		{   if (j & 7) == 0 then
+			fde.str("\n\t\t\t.jt16\t");
+		    else
+			fde.chr(',');
+		    fde.int16(_int16(Read(addr, HALF)));
+		    addr += 2;
+		}
+	    }
+	    is 2 then {}	// FIXME
+	    is 3 then {}	// FIXME
+	    addr = (addr + 3) & ~3;	// round end of table up
+	}
+	fde.nl();
+    }
+}
+
+proc main(argc:_uint, argv:@[]@[]_byte):_int //[[global]]
+{
+    var fd: sys.fildes;
+    var i: _uint;
+
+    i = 1;
+    if i >= argc then
+	return 1;
+    fd = sys.open(argv[i]@, {RDONLY}, 0);
+    if fd < 0 then
+    {   fde.str("Unable to open ");
+	fde.str(argv[i]@);
+	fde.nl();
+	return 1;
+    }
+    var pf: elfread.pFile;
+    var ptxt: elfread.pText;
+    var nshdr: _uint;
+
+    pf = elfread.Init(fd, MY66000);
+    if pf == 0 then
+    {   fde.str("Unable to process\n");
+	return 2;
+    }
+    nshdr = pf.fh.shnum;
+fde.str("nshdr="); fde.uint(nshdr); fde.nl();
+    psym = pf.GetSymbolSection();
+    pstr = pf.GetStringSection();
+
+    i = 0;
+    loop
+    { exit i >= nshdr;
+	ptxt, i = pf.GetNextTextSection(i);
+      exit ptxt == 0;
+	DisSection(ptxt);
+	i += 1;
+    }
+
+    return 0;
+}
+

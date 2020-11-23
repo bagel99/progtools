@@ -1,0 +1,243 @@
+import elf;
+import sys;
+
+package elfwrite
+{
+    type File:
+    {	fd:	sys.fildes;
+	fh:	elf.filehdr64;
+	shead:	@Section;
+	stail:	@Section;
+	phead:  @Program;
+	ptail:  @Program;
+    };
+    type pFile: @File;
+    type Section:
+    {	next:	@Section;
+	file:	pFile;
+	name:	@[]_byte;
+	num:    _uint16;
+	sh:	elf.secthdr64;
+    };
+    type pSection: @Section;
+    type Program:
+    {	next:	@Program;
+	file:	pFile;
+	ph:	elf.proghdr64;
+    };
+    type pProgram: @Program;
+
+    proc (pf: pFile) GetOffset(): _uint64
+    {
+	return sys.lseek(pf.fd, 0, CUR);
+    }
+
+    proc (pf: pFile) SetOffset(off: _uint64)
+    {
+	sys.lseek(pf.fd, off, SET);
+    }
+
+
+    // ****
+    // SECTION HEADER
+    // ****
+
+    proc (pf: pFile) StartSection(name: @[]_byte, type: elf.SectTypes,
+		flags: elf.SectFlags64): pSection
+    {   var ps: pSection;
+
+	ps = _new(Section);
+	_zero(ps@);
+	ps.file = pf;
+	ps.name = name;
+	ps.num = pf.fh.shnum;
+	ps.sh.type = type;
+	ps.sh.flags = flags;
+	if type
+	is SYMTAB then ps.sh.entsize = elf.symbol64?size;
+	ps.sh.offset = pf.GetOffset();
+	if pf.shead == 0 then
+	    pf.shead = ps;
+	else
+	    pf.stail.next = ps;
+	pf.stail = ps;
+	pf.fh.shnum += 1;
+	return ps;
+    }
+
+    proc (ps: pSection) GetOffset(): _uint64
+    {
+	return ps.sh.offset;
+    }
+
+    proc (ps: pSection) SetAddr(addr: _uint64)
+    {
+	ps.sh.addr = addr;
+    }
+
+    proc (ps: pSection) SetSize(size: _uint64)
+    {
+	ps.sh.size = size;
+    }
+
+    proc (ps: pSection) SetAlign(align: _uint64)
+    {
+	ps.sh.align = align;
+    }
+
+    proc (ps: pSection) SetEntrySize(size: _uint)
+    {
+	ps.sh.entsize = size;
+    }
+
+    proc (ps: pSection) SetLink(link: _uint)
+    {
+	ps.sh.link = link;
+    }
+
+    proc (ps: pSection) SetInfo(info: _uint)
+    {
+	ps.sh.info = info;
+    }
+
+    proc (ps: pSection) Write(data: _address, size: _uint)
+    {
+	sys.write(ps.file.fd, data, size);
+    }
+
+    proc (ps: pSection) FinishSection()
+    {	var off: sys.off_t;
+
+	off = ps.file.GetOffset();
+	ps.sh.size = _uint64(off) - ps.sh.offset;
+	off = (off+7) & ~7;
+	ps.file.SetOffset(off);
+    }
+
+    // ****
+    // PROGRAM HEADER
+    // ****
+
+    proc (pf: pFile) StartProgram(type: elf.ProgTypes,
+	    flags: elf.ProgFlags): pProgram
+    {   var pp: pProgram;
+
+	pp = _new(Program);
+	_zero(pp@);
+	pp.file = pf;
+	pp.ph.type = type;
+	pp.ph.flags = flags;
+	if pf.phead == 0 then
+	    pf.phead = pp;
+	else
+	    pf.ptail.next = pp;
+	pf.ptail = pp;
+	pf.fh.phnum += 1;
+	return pp;
+    }
+
+    proc (pp: pProgram) SetVAddr(addr: _uint64)
+    {
+	pp.ph.vaddr = addr;
+    }
+
+    proc (pp: pProgram) SetPAddr(addr: _uint64)
+    {
+	pp.ph.paddr = addr;
+    }
+
+    proc (pp: pProgram) SetMSize(size: _uint64)
+    {
+	pp.ph.msize = size;
+    }
+
+    proc (pp: pProgram) SetAlign(align: _uint64)
+    {
+	pp.ph.align = align;
+    }
+
+    proc (pp: pProgram) FinishProgram(offs: _uint64, size: _uint64)
+    {
+	pp.ph.offset = offs;
+	pp.ph.fsize = size;
+    }
+
+    // ****
+    // FILE HEADER
+    // ****
+
+    proc Init(afd: sys.fildes, arch: elf.MachArchs, class: elf.Classes,
+    		data: elf.DataFmts, form: elf.FileTypes): pFile
+    {	var pf: pFile;
+
+	pf = _new(File);
+	_zero(pf@);
+    	pf.fd = afd;
+    	pf.fh.magic = '\x7FELF';
+    	pf.fh.class = class;
+    	pf.fh.data = data;
+    	pf.fh.filevers = 1;
+	pf.fh.type = form;
+    	pf.fh.machine = arch;
+	pf.fh.version = 1;
+	pf.fh.shnum = 1;	// at least one (the null) section
+	pf.fh.ehsize = elf.filehdr64?size;
+	pf.fh.shentsize = elf.secthdr64?size;
+	pf.fh.phentsize = elf.proghdr64?size;
+	// skip over where the file header will be
+	pf.SetOffset(elf.filehdr64?size);
+	return pf;
+    }
+
+    proc (pf: pFile) Finish()
+    {   var ps, pstr: pSection;
+	var pp: pProgram;
+	var n, k: _uint;
+	var sectionzero: elf.secthdr64;
+	var nul: [1]_byte;
+
+	// Write the program headers, if any
+	if pf.fh.phnum > 0 then
+	{   pf.fh.phoff = pf.GetOffset();
+	    pp = pf.phead;
+	    while pp != 0 do
+	    {	sys.write(pf.fd, pp.ph, elf.proghdr64?size);
+		pp = pp.next;
+	    }
+	}
+	// Add the section for section header strings
+	pstr = pf.StartSection(".shstrtab", STRTAB, {});
+	// Write the section header string section
+	nul[0] = 0; sys.write(pf.fd, nul, 1);	// the zero string
+	ps = pf.shead;
+	n = 1;
+	while ps != 0 do
+	{   ps.sh.name = n;
+	    k = _zlen(ps.name@)+1;
+	    sys.write(pf.fd, ps.name, k);
+	    n += k;
+	    ps = ps.next;
+	}
+	pstr.FinishSection();
+
+	// Note the offset of section header table in the program header
+	pf.fh.shoff = pf.GetOffset();
+	// Then write the section header table, noting its offset
+	_zero(sectionzero);
+	sys.write(pf.fd, sectionzero, sectionzero?size);
+	// Write the remaining section header entries
+	ps = pf.shead;
+	while ps != 0 do
+	{   sys.write(pf.fd, ps.sh, elf.secthdr64?size);
+	    ps = ps.next;
+	}
+
+	// update ELF header info about sections
+	pf.fh.shstrndx = pf.fh.shnum - 1;
+	// now go back and write the ELF header
+	pf.SetOffset(0);
+	sys.write(pf.fd, pf.fh, pf.fh?size);
+	_delete(pf);
+    }
+}
+

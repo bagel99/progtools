@@ -1,0 +1,595 @@
+package cc2538
+{
+    const name = "cc2538";
+    const debugout: boolean = true;
+
+    package ROM
+    {
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    rv = 0;	// FIXME
+	    LogR("ROM", addr, rv, w);
+	    return rv;
+	}
+    }
+
+    package IB
+    {
+        const mem: [0x50]_byte =	// stored as 32-bit words little endian
+        { 0xAA, 0x55, 0xAA, 0x55,	// 00 - magic valid values
+	  0xFF, 0xFF, 0xFF, 0xFF,
+	  0x01, 0x02, 0x03, 0x04,	// 08 - not sure what this is
+	  0x05, 0x06, 0x07, 0x08,
+	  0x04, 0x00, 0x00, 0x00,
+	  0x02, 0x00, 0x00, 0x00,
+	  0x03, 0x00, 0x00, 0x00,
+	  0xAC, 0x00, 0x00, 0x00,
+	  0x00, 0x00, 0x00, 0x00,
+	  0x01, 0x00, 0x00, 0x00,
+	  0x00, 0x4B, 0x12, 0x00,	// 28 - TI OUI is 00:12:4B  
+	  0xBE, 0xBA, 0xFE, 0xCA,	// arbitrary address
+	};
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr & 0xFF;
+	    if w
+	    is BYTE then rv = mem[offs];
+	    is HALF then rv = (mem[offs+1]<< 8) | mem[offs];
+	    is WORD then
+	    	rv = (mem[offs+3]<<24) | (mem[offs+2]<<16) |
+	    	     (mem[offs+1]<< 8) | mem[offs];
+	    LogR("INFO", addr, rv, w);
+	    return rv;
+	}
+    }
+
+    package SCTL
+    {
+	var regs: [46]_uint32;	// there are unused gaps
+
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr & 0xFF;
+	    rv = regs[offs>>2];
+	    if offs
+	    is 0x04 then	// clock status
+	    {	rv = regs[0] | 0x000C_0000;
+	    }
+	    LogR("SCTL", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: armm.Width, data:_uint32)
+	{
+	    var offs: _uint32;
+
+	    LogW("SCTL", addr, data, w);
+	    offs = addr & 0xFF;
+	    regs[offs>>2] = data;
+	}
+
+	proc Init()
+	{
+	    _zero(regs);
+	    regs[0x00>>2] = 0x0103_0109;
+	    regs[0x74>>2] = 0x0000_0004;
+	    regs[0x80>>2] = 0x0000_0100;
+	    regs[0x94>>2] = 0x0000_003F;
+	    regs[0xB4>>2] = 0x0000_00FF;
+	}
+    }
+
+    package GPIO
+    {   var regs: [4][18]_uint32;
+
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+	    var unit, r: _uint;
+	    var mask: _uint32;
+
+	    rv = 0;	// FIXME
+	    unit = ((addr >> 12) & 0xF) - 0x9;
+	    offs = addr & 0xFFF;
+	    if offs < 0x400 then
+	    {   mask = (offs >> 2) & 0xFF;
+	    	rv = regs[unit][0] & mask;
+	    }
+	    else
+	    {   r = 0;
+	    	if offs < 0x424 then
+		    r = ((offs-0x400) >> 2) + 1;
+		elif offs >= 0x520 && offs <= 0x528 then
+		    r = ((offs-0x520) >> 2) + 10;   
+		elif offs >= 0x700 && offs <= 0x724 then
+		    r = ((offs-0x700) >> 2) + 12;
+		if r != 0 then
+		{   if r
+		    is 7 then rv = regs[unit][6] & regs[unit][5];	// mis
+		    is 8 then rv = 0;
+		    else rv = regs[unit][r];
+		}
+		rv = regs[unit][r];
+	    }  
+	    LogR("GPIO", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: armm.Width, data:_uint32)
+	{
+	    var offs: _uint32;
+	    var unit, r: _uint;
+	    var mask: _uint32;
+
+	    LogW("GPIO", addr, data, w);
+	    unit = ((addr >> 12) & 0xF) - 0x9;
+	    offs = addr & 0xFFF;
+	    if offs < 0x400 then
+	    {   mask = (offs >> 2) & 0xFF;
+	    	regs[unit][0] = (regs[unit][0] & ~mask) | (data & mask);
+	    }
+	    else
+	    {   r = 0;
+	    	if offs < 0x424 then
+		    r = ((offs-0x400) >> 2) + 1;
+		elif offs >= 0x520 && offs <= 0x528 then
+		    r = ((offs-0x520) >> 2) + 10;   
+		elif offs >= 0x700 && offs <= 0x724 then
+		    r = ((offs-0x700) >> 2) + 12;
+		if r != 0 then 
+		{   if r
+		    is 6,7 then {}	// ris,mis readonly
+		    is 8 then regs[unit][6] = regs[unit][6] & ~data;
+		    else regs[unit][r] = data;
+		}
+	    }  
+	}
+    }
+
+    package UART
+    {   type REG:
+    	(   dr,   rsr,  fr,   ilpr, ibrd, fbrd, lcrh, ctl, ifls,
+    	    ienb, rsts, msts, iclr, dma,
+    	    lctl, lss,  ltim, b9ad, b9ak,
+    	    pp,   cc,
+    	    none
+    	);
+    	var regs: [2][REG]_uint32;
+	// map sparse register addresses to something denser, 0=>not implemented
+	const map: []REG =
+	// 0x0  0x4  0x8  0xc  0x0  0x4  0x8  0xc
+	{   dr, rsr,none,none,none,none,  fr,none,	// 00x 01x
+	  ilpr,ibrd,fbrd,lcrh, ctl,ifls,ienb,rsts,	// 02x 03x
+	  msts,iclr, dma,none,none,none,none,none,	// 04x 05x
+	  none,none,none,none,none,none,none,none,	// 06x 07x
+	  none,none,none,none,lctl, lss,ltim,none,	// 08x 09x
+	  none,b9ad,b9ak
+	};
+	
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+	    var u: _uint;
+	    var r: REG;
+
+	    u = ((addr >> 12) & 0xF) - 0xC;
+	    offs = addr & 0xFFF;
+	    if offs < 0x0AC then r = map[offs>>2];
+	    elif offs == 0xFC0 then r = pp;
+	    elif offs == 0xFC8 then r = cc;
+	    else r = none;
+	    rv = regs[u][r];
+	    if r == fr then
+	    	rv = rv | 0x10;		// rxfe - no input data
+	    LogR("UART", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: armm.Width, data:_uint32)
+	{
+	    var offs: _uint32;
+	    var u: _uint;
+	    var r: REG;
+
+	    LogW("UART", addr, data, w);
+	    u = ((addr >> 12) & 0xF) - 0xC;
+	    offs = addr & 0xFFF;
+	    offs = addr & 0xFFF;
+	    if offs < 0x0AC then r = map[offs>>2];
+	    elif offs == 0xFC0 then r = pp;
+	    elif offs == 0xFC8 then r = cc;
+	    else r = none;
+	    regs[u][r] = data;
+	    if debugout && u == 0 && r == dr then
+	    	fdout.chr(_uint8(data));
+	}
+    }
+
+    package SSI
+    {   var regs: [2][11]_uint32;
+
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+	    var u: _uint;
+
+	    rv = 0;	// FIXME
+	    u = (addr >> 12) & 1;
+	    offs = addr & 0xFFF;
+	    if offs == 0xFC8 then offs = 0x028;		// map weird address
+	    rv = regs[u][offs>>2];
+	    if offs
+	    is 0x0C then rv = rv | 0b11;	// allow xmits to proceed
+	    LogR("SSI", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: armm.Width, data:_uint32)
+	{
+	    var offs: _uint32;
+	    var u: _uint;
+
+	    LogW("SSI", addr, data, w);
+	    u = (addr >> 12) & 1;
+	    offs = addr & 0xFFF;
+	    if offs == 0xFC8 then offs = 0x028;		// map weird address
+	    regs[u][offs>>2] = data;
+	}
+    }
+
+    package IOM
+    {
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    rv = 0;	// FIXME
+	    offs = addr & 0xFFF;
+	    LogR("IOM", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: armm.Width, data:_uint32)
+	{
+	    var offs: _uint32;
+
+	    LogW("IOM", addr, data, w);
+	    offs = addr & 0xFFF;
+	}
+    }
+
+    package ADC
+    {
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    rv = 0;	// FIXME
+	    offs = addr & 0xFFF;
+	    LogR("ADC", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: armm.Width, data:_uint32)
+	{
+	    var offs: _uint32;
+
+	    LogW("ADC", addr, data, w);
+	    offs = addr & 0xFFF;
+	}
+    }
+
+    package ANA
+    {
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    rv = 0;	// FIXME
+	    offs = addr & 0xFFF;
+	    LogR("ANA", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: armm.Width, data:_uint32)
+	{
+	    var offs: _uint32;
+
+	    LogW("ANA", addr, data, w);
+	    offs = addr & 0xFFF;
+	}
+    }
+
+    package RF
+    {
+	var rnd: _uint8;
+
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    rv = 0;	// FIXME
+	    offs = addr & 0xFFF;
+	    if offs
+	    is 0x664 then rv = 1;	// RSSI valid
+	    is 0x69C then { rnd = rnd ^ 0b11; rv = rnd; } // FIXME - not random!
+	    LogR("RF", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: armm.Width, data:_uint32)
+	{
+	    var offs: _uint32;
+
+	    LogW("RF", addr, data, w);
+	    offs = addr & 0xFFF;
+	}
+    }
+
+    package uDMA
+    {
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    rv = 0;	// FIXME
+	    offs = addr & 0xFFF;
+	    LogR("uDMA", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: armm.Width, data:_uint32)
+	{
+	    var offs: _uint32;
+
+	    LogW("uDMA", addr, data, w);
+	    offs = addr & 0xFFF;
+	}
+    }
+
+    package AES
+    {   var aesctl: _uint32;
+
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    rv = 0;	// FIXME
+	    offs = addr & 0xFFF;
+	    if offs
+	    is 0x404 then	// fake key 0 valid
+	    	rv = 0x1;
+	    is 0x550 then	// aesctl
+	    	rv = aesctl;
+	    is 0x790 then	// fake DMA complete
+	    	rv = 0x3;
+	    LogR("AES", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: armm.Width, data:_uint32)
+	{
+	    var offs: _uint32;
+
+	    LogW("AES", addr, data, w);
+	    offs = addr & 0xFFF;
+	    if offs
+	    is 0x550 then	// aesctl
+	    {   data = data & 0x61FF_81E7;	// clear invalid or ro bits
+	    	if data & 0x2000_0000 != 0 then	// save context?
+	    	    data = data | 0x4000_0000;	// saved context ready
+		aesctl = data;
+	    }	    
+	}
+    }
+
+    package WDT
+    {
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    rv = 0;	// FIXME
+	    offs = addr & 0xFFF;
+	    LogR("WDT", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: armm.Width, data:_uint32)
+	{
+	    var offs: _uint32;
+
+	    LogW("WDT", addr, data, w);
+	    offs = addr & 0xFFF;
+	}
+    }
+
+    package STMR
+    {   var regs: [0x60>>2] _uint32;
+
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+
+	    offs = addr & 0xFFF;
+	    rv = 0;	// FIXME
+	    if offs
+	    is 0x050 then rv = 1;
+	    LogR("STMR", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: armm.Width, data:_uint32)
+	{
+	    var offs: _uint32;
+
+	    LogW("STMR", addr, data, w);
+	    offs = addr & 0xFFF;
+	}
+
+	proc Init()
+	{
+	    _zero(regs);
+	    regs[0x054>>2] = 0x0000_0038;
+	}
+    }
+
+    package TMR
+    {   var regs: [4][28] _uint32;
+
+	proc Read(addr: _uint32, w: armm.Width): _uint32
+	{   var rv: _uint32;
+	    var offs: _uint32;
+	    var tmr: _uint32;
+
+	    tmr = (addr >> 12) & 0x3;
+	    offs = addr & 0xFFF;
+	    if offs > 0x06C then offs = 0x06c;
+	    rv = regs[tmr][offs>>2];
+	    LogR("TMR", addr, rv, w);
+	    return rv;
+	}
+
+	proc Write(addr: _uint32, w: armm.Width, data:_uint32)
+	{
+	    var offs: _uint32;
+	    var tmr: _uint32;
+
+	    LogW("TMR", addr, data, w);
+	    tmr = (addr >> 12) & 0x3;
+	    offs = addr & 0xFFF;
+	    if offs > 0x06C then offs = 0x06c;
+	    regs[tmr][offs>>2] = data;
+	}
+    }
+
+    proc NoRead(addr: _uint32, w: armm.Width): _uint32
+    {
+	LogR("*UNDEF*", addr, 0, w);
+	armm.Fault("NoRead", addr);
+	return 0;
+    }
+
+    proc NoWrite(addr: _uint32, w: armm.Width, data: _uint32)
+    {
+	LogW("*UNDEF*", addr, data, w);
+    }
+
+    const ResetAddress = 0x0020_0000;
+    const NSegs = 29;
+    // some useful MemFlags
+    const N: armm.MemFlags = { .w=true };	// all the rest are false
+    const X: armm.MemFlags = { .x=true };
+    const F: armm.MemFlags = { .w=false };
+    const T: armm.MemFlags = { .x=true, .a=true, .l=true };
+    const D: armm.MemFlags = { .w=true, .a=true, .l=true };
+    const R: armm.MemFlags = { .w=false, .a=true, .l=true };
+    var MemTab: [NSegs]armm.Mem =
+    {
+	{ 0, 0x0000_0000, 0x0001_FFFF, F, NoRead, NoWrite, 0 },    // ROM
+	{ 0, 0x0020_0000, 0x0027_FFFF, T, 0, 0, 0 },		     // FLASH
+    	{ 0, 0x0028_0000, 0x0028_004F, N, IB.Read, NoWrite, 0 },     // InfoBlock
+    	{ 0, 0x2000_0000, 0x2000_3FFF, D, 0, 0, 0 },		     // RAM1	
+    	{ 0, 0x2000_4000, 0x2000_7FFF, D, 0, 0, 0 },		     // RAM2
+    	{ 0, 0x4000_8000, 0x4000_8FFF, N, SSI.Read, SSI.Write, 0},   // SSI0
+    	{ 0, 0x4000_9000, 0x4000_9FFF, N, SSI.Read, SSI.Write, 0},   // SSI1
+    	{ 0, 0x4000_C000, 0x4000_CFFF, N, UART.Read, UART.Write, 0}, // UART0
+    	{ 0, 0x4000_D000, 0x4000_DFFF, N, UART.Read, UART.Write, 0}, // UART1
+    	{ 0, 0x4003_0000, 0x4003_0FFF, N, TMR.Read, TMR.Write, 0},   // TMR0
+    	{ 0, 0x4003_1000, 0x4003_1FFF, N, TMR.Read, TMR.Write, 0},   // TMR0
+    	{ 0, 0x4003_2000, 0x4003_2FFF, N, TMR.Read, TMR.Write, 0},   // TMR0
+    	{ 0, 0x4003_3000, 0x4003_3FFF, N, TMR.Read, TMR.Write, 0},   // TMR0
+    	{ 0, 0x4008_8000, 0x4008_8FFF, N, RF.Read, RF.Write, 0},     // RF core
+    	{ 0, 0x4008_B000, 0x4008_BFFF, N, AES.Read, AES.Write, 0},   // AES
+    	{ 0, 0x400D_2000, 0x400D_2FFF, N, SCTL.Read, SCTL.Write, 0}, // SYSCTL
+    	{ 0, 0x400D_4000, 0x400D_4FFF, N, IOM.Read, IOM.Write, 0},   // IO MUX
+    	{ 0, 0x400D_5000, 0x400D_503F, N, WDT.Read, WDT.Write, 0},   // WDT
+    	{ 0, 0x400D_5040, 0x400D_5FFF, N, STMR.Read, STMR.Write, 0}, // Sleep TMR
+    	{ 0, 0x400D_6000, 0x400D_6FFF, N, ANA.Read, ANA.Write, 0},   // Analog
+    	{ 0, 0x400D_7000, 0x400D_7FFF, N, ADC.Read, ADC.Write, 0},   // ADC
+    	{ 0, 0x400D_9000, 0x400D_9FFF, N, GPIO.Read, GPIO.Write, 0}, // GPIOA
+    	{ 0, 0x400D_A000, 0x400D_AFFF, N, GPIO.Read, GPIO.Write, 0}, // GPIOB
+    	{ 0, 0x400D_B000, 0x400D_BFFF, N, GPIO.Read, GPIO.Write, 0}, // GPIOC
+    	{ 0, 0x400D_C000, 0x400D_CFFF, N, GPIO.Read, GPIO.Write, 0}, // GPIOD
+    	{ 0, 0x400F_F000, 0x400F_FFFF, N, uDMA.Read, uDMA.Write, 0}, // uDMA
+    	{ 0, 0xE000_E010, 0xE000_E01F, N, syscm3.Tick.Read, syscm3.Tick.Write, 0 },
+    	{ 0, 0xE000_E100, 0xE000_E7FF, N, syscm3.NVIC.Read, syscm3.NVIC.Write, 0 },
+    	{ 0, 0xE000_ED00, 0xE000_EFFF, N, syscm3.CB.Read, syscm3.CB.Write, 0 },
+    };
+
+    const NELFSegs = 3;
+
+    proc Init(argc: _uint, argv: @[]@[]_byte)
+    {   var i, j: _uint;
+
+	memory = pMemory(sys.malloc(Memory?size + NELFSegs*Segment?size));
+	j = 0;
+	for i from 0 to MemTab?len-1 do
+	{
+	    if MemTab[i].flg.a then	// allocate memory
+	    {   MemTab[i].adr = sys.malloc(MemTab[i].end - MemTab[i].beg + 1);
+	    }
+	    if MemTab[i].flg.l then	// ELF needs to load this
+	    {   if j < NELFSegs then
+	    	{   memory.seg[j].mem = MemTab[i].adr;
+	    	    memory.seg[j].beg = MemTab[i].beg;
+	    	    memory.seg[j].end = MemTab[i].end;
+	    	    memory.seg[j].typ = 0;
+	    	    j += 1;
+	    	}
+	    }
+	}
+	memory.nsegs = j;
+	armm.memtab = MemTab;
+	armm.nmem = MemTab?len;
+	SCTL.Init();
+	STMR.Init();
+    }
+
+    /*
+     * Chip specific commands
+     */
+    proc DumpGPIO(narg: _uint, args: @[]@[]_byte)
+    {   var i, j: _uint;
+	var logsave: _uint;
+	var port: _byte;
+	const addr: [4]_uint32 =
+	    {0x400D_9000, 0x400D_A000, 0x400D_B000, 0x400D_C000};
+	type Reg: { name: @[]_byte; offs: _uint32; term: _byte;};
+	const regs: []Reg =
+	{   { "data",	0x3FC, '\n' },
+	    { "dir",    0x400, '\t' },
+	    { "is",     0x404, '\t' },
+	    { "ibe",    0x408, '\t' },
+	    { "iev",    0x40C, '\n' },
+	    { "ie",	0x410, '\t' },
+	    { "ris",	0x414, '\t' },
+	    { "mis",	0x418, '\t' },
+	    { "ic",	0x41C, '\n' },
+	    { "af",	0x420, '\n' },
+	};
+
+	logsave = log;
+	log = 0;
+	port = 'A';
+	for i from 0 to 3 do
+	{   fderr.str("Port "); fderr.chr(port); fderr.nl();
+	    for j from 0 to regs?len-1 do
+	    {
+		fderr.hex32(GPIO.Read(addr[i]+regs[j].offs, WORD));
+		fderr.chr(' ');
+	        fderr.str(regs[j].name);
+		fderr.chr(regs[j].term);
+	    }
+	    port += 1;
+	}
+	log = logsave;
+    }
+}	
+

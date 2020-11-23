@@ -1,0 +1,1240 @@
+
+package riscv
+{
+    const WByte = WSize/8;
+    type  Inst: _uint32;	// size of an instruction
+    type  SInst: _int32;	// for sign extension
+    type  InstC: _uint16;	// compressed instruction
+    type  Width: (BYTE, HALF, WORD, QUAD);
+    if WSize == 64 then
+    {	type  Addr: _uint64;	// size of an address
+	type  Word: _uint64;	// size of a register
+	type  SWord: _int64;
+	type  DWord: _uint128;
+	type  SDWord: _int128;
+	const WWidth:Width = QUAD;
+    }
+    else
+    {	type  Addr: _uint32;	// size of an address
+	type  Word: _uint32;	// size of a register
+	type  SWord: _int32;
+	type  DWord: _uint64;
+	type  SDWord: _int64;
+	const WWidth:Width = WORD;
+    }
+    type  Half: _uint16;
+    type  UImm:  _uint32;	// unsigned immediate values
+    type  SImm:  _int32;	// signed immediate values
+    const SMask = (WSize-1);	// shift count mask
+    type  Faults: (NONE, BKPT, SVC, OTHER);
+    type  PrivMode: (M, H, S, U);
+
+    type MemFlags:
+    {   x:	boolean;	// executable
+        w:	boolean;	// writeable
+        a:	boolean;	// allocate memory
+        l:	boolean;	// load from object file
+    }: packed, bits(32);
+
+    type Mem:
+    {	adr:   _address;
+	beg:   Addr;
+	end:   Addr;
+	flg:   MemFlags;
+	read:  @_(adr: Addr, w: Width): Word;
+	write: @_(adr: Addr, w: Width, data: Word);
+	init:  @_();
+    };
+
+    var memtab: @[]Mem;
+    var nmem: _uint;
+
+    const regname: [33]@[]_byte =
+    {	"zr",	"ra",	"sp",	"gp",	"tp",	"t0",	"t1",	"t2",
+	"s0",	"s1",	"a0",	"a1",	"a2",	"a3",	"a4",	"a5",
+	"a6",	"a7",	"s2",	"s3",	"s4",	"s5",	"s6",	"s7",
+	"s8",	"s9",	"s10",	"s11",	"t3",	"t4",	"t5",	"t6",
+	"pc"
+    };
+    proc PRegName(reg: _uint)
+    {	if reg < 33 then
+	    fderr.str(regname[reg]);
+	else
+	{   fderr.uint(reg);
+	    fderr.str("?!?");
+	}
+    }
+
+    const Widths: [Width]_byte = {'1', '2', '4', '8'};
+    const breakpoint32: Inst  = 0x0010_0073;
+    const breakpoint16: InstC = 0x9002;
+    const LR = 1;
+    const SP = 2;
+    const PC = 32;	// not a general register
+
+    type Op:
+    (	ILL,   NOP,
+	AUIPC, LUI,
+	ADDI,         SLLI,  SRLI,  SRAI,  XORI,  ORI,   ANDI,
+	ADD,   SUB,   SLL,   SRL,   SRA,   XOR,   OR,    AND,
+	SLTI,  SLTIU,
+	SLT,   SLTU,
+	ADDIW,        SLLIW, SRLIW, SRAIW,
+	ADDW,  SUBW,  SLLW,  SRLW,  SRAW,
+	JAL,   JALR,
+	BEQ,   BNE,    BLT,   BGE,  BLTU,  BGEU,
+	LB,    LH,     LW,    LD,   LBU,   LHU,
+	SB,    SH,     SW,    SD,
+	// supervisor
+	ECALL, EBREAK,
+	SRET,  HRET,  MRET,  DRET,  WFI,
+	SFENCE,SFENCEVM,
+	CSRRW, CSRRS, CSRRC, CSRRWI,CSRRSI,CSRRCI,
+	// mul/div
+	MUL,   MULH,  MULHSU,MULHU, DIV,   DIVU,   REM,   REMU,
+	MULW,                       DIVW,  DIVUW,  REMW,  REMUW,
+	// floating point single
+	FLW,   FSW,
+	// floating point double
+	FLD,   FSD,
+	// compressed opcodes that get remapped
+	ADDI16SP,MV,   JR,   LI,
+    );
+    const OpName: [Op]@[]_byte =
+    {	[ILL]=	"illegal",	[NOP] = "nop",
+	[AUIPC]="auipc", 	[LUI] = "lui",
+	[ADDI] = "addi",
+	[SLLI] = "slli",  [SRLI] = "srli",  [SRAI] = "srai",
+	[XORI] = "xori",  [ORI] = "ori",    [ANDI] = "andi",
+	[ADD] = "add",    [SUB] = "sub",
+	[SLL] = "sll",    [SRL] = "srl",   [SRA] = "sra",
+	[XOR] = "xor",    [OR] = "or",    [AND] = "and",
+	[SLTI] = "slti",  [SLTIU] = "sltiu",
+	[SLT] = "slt",    [SLTU] = "sltu",
+	[ADDIW]= "addiw", [SLLIW]= "slliw", [SRLIW]="srliw", [SRAIW]="sraiw",
+	[ADDW] = "addw",  [SUBW] = "subw",
+	[SLLW] = "sllw",  [SRLW] = "srlw",  [SRAW] = "sraw",
+	[JAL] = "jal",    [JALR] = "jalr",
+	[BEQ] = "beq",    [BNE] = "bne",
+	[BLT] = "blt",    [BGE] = "bge",  [BLTU] = "bltu",  [BGEU] = "bteu",
+	[LB] = "lb",      [LH] = "lh",     [LW] = "lw",    [LD] = "ld",
+	[LBU] = "lbu",    [LHU] = "lhu",
+	[SB] = "sb",      [SH] = "sh",     [SW] = "sw",    [SD] = "sd",
+	// supervisor
+	[ECALL] = "ecall", [EBREAK] = "ebreak",
+	[SRET] = "sret",  [HRET] = "hret",  [MRET] = "mret",  [DRET] = "dret",
+	[WFI] = "wfi",
+	[SFENCE] = "sfence",[SFENCEVM] = "sfence.vm",
+	[CSRRW] = "csrrw",  [CSRRS] = "csrrs",  [CSRRC] = "csrrc",
+	[CSRRWI] = "csrewi",[CSRRSI] = "csrrsi",[CSRRCI] = "csrrce",
+	// mul/div
+	[MUL] =   "mul",   [MULH] =  "mulh",  [MULHSU]="mulhsu",[MULHU]= "mulhu",
+	[DIV] =   "div",   [DIVU] = "divu",   [REM] = "rem",    [REMU] = "remu",
+	[MULW] = "mulw",
+	[DIVW] = "divw",   [DIVUW]= "divuw",  [REMW] = "remw",  [REMUW]= "remuw",
+	// floating point
+	[FLW] = "flw",     [FSW] = "fsw",
+	[FLD] = "fld",     [FSD] = "fsd",
+	[LI] = "?LI"
+    };
+    if WSize == 64 then
+    {	const decodeLD: [8] Op =
+	{   LB,    LH,    LW,    LD,   LBU,   LHU,   ILL,   ILL };
+	const decodeST: [8] Op =
+	{   SB,    SH,    SW,    SD,   ILL,   ILL,   ILL,   ILL };
+	const decodeC0: [8] Op =
+	{   ADDI,  FLD,  LW,    LD,   ILL,    FSD,   SW,   SD  };
+	const decodeC1: [8] Op =
+	{   ADDI,ADDIW,  LI,    LUI,   SRLI,ADDIW,   BEQ,  BNE };
+	const decodeC2: [16] Op =
+	{   SLLI,  SLLI,  FLD,   FLD,   LW,    LW,    LD,    LD,
+	    JR,    JALR,  FSD,   FSD,   SW,    SW,    SD,    SD };
+    }
+    else
+    {	const decodeLD: [8] Op =
+	{   LB,    LH,    LW,   ILL,   LBU,   LHU,   ILL,   ILL };
+	const decodeST: [8] Op =
+	{   SB,    SH,    SW,   ILL,   ILL,   ILL,   ILL,   ILL };
+	const decodeC0: [8] Op =
+	{   ADDI,  FLD,  LW,    FLW,   ILL,    FSD,   SW,   FSW  };
+	const decodeC1: [8] Op =
+	{   ADDI,  JAL,   LI,    LUI,   SRLI,  JAL,   BEQ,  BNE };
+	const decodeC2: [16] Op =
+	{   SLLI,  SLLI,  FLD,   FLD,   LW,    LW,    FLW,   FLW,
+	    JR,    JALR,  FSD,   FSD,   SW,    SW,    FSW,   FSW };
+    }
+    const decodeS: [8] Op =
+    {   ECALL, CSRRW, CSRRS, CSRRC,  ILL, CSRRWI, CSRRSI, CSRRCI };
+    const decodeI: [8] Op =
+    {   ADDI,  SLLI,  SLTI, SLTIU,  XORI,  SRLI,  ORI,  ANDI };
+    const decodeIW: [8] Op =
+    {   ADDIW,  SLLIW,   ILL,  ILL,  ILL,  SRLIW,  ILL,  ILL };
+    const decodeR0: [16] Op =
+    {   ADD,  SLL,  SLT, SLTU,  XOR,  SRL,   OR,  AND };
+    const decodeR2: [16] Op =
+    {   SUB,  ILL,  ILL,  ILL,  ILL,  SRA,  ILL,  ILL };
+    const decodeR1: [8] Op =
+    {   MUL,  MULH, MULHSU,MULHU,DIV, DIVU,  REM,  REMU };
+    const decodeRW: [16] Op =
+    {   ADDW, SLLW, ILL,  ILL,  ILL, SRLW,   ILL,  ILL,
+	SUBW, ILL,  ILL,  ILL,  ILL, SRAW,  ILL,  ILL };
+    const decodeJ: [8] Op =
+    {   JALR,  ILL,  ILL,  ILL,  ILL,  ILL,  ILL,  ILL };
+    const decodeSB: [8] Op =
+    {   BEQ,  BNE,  ILL,  ILL,  BLT,  BGE, BLTU, BGEU };
+
+    type Reg: _uint8;
+    type Info:	// taken from cracked instruction
+    {   op:   Op;
+	rd:   Reg;
+	rs1:  Reg;
+	rs2:  Reg;
+	imm:  Word;
+    };
+    // State
+    var   reg:    [33]Word;	// integer registers, includes PC
+    var   instpc: Addr;		// value of PC for this instruction
+    var   freg:   [32]_uint64;	// floating point registers
+    var   fault:  Faults = NONE;
+    var   faultarg: UImm;
+    var   rlast: _uint = 0;
+    var   cycles: _uint = 0;
+
+
+    proc Fault(s:@[]_byte, info: Word)
+    {
+	fderr.str("\nFault cycle ");
+	fderr.uint(cycles);
+	fderr.str(" at ");
+	fderr.addr(instpc);
+	fderr.str(" : ");
+	fderr.str(s);
+	fderr.str(" : ");
+	fderr.word(info);
+	fderr.nl();
+	fault = OTHER;
+    }
+
+    proc Map(addr: Addr): boolean, _address
+    {   var i: _uint;
+
+	for i from 0 to nmem-1 do
+	{   if addr >= memtab[i].beg && addr <= memtab[i].end then
+	    {	addr -= memtab[i].beg;
+		return true, memtab[i].adr@[addr-];
+	    }
+	}
+	return false, 0;
+    }
+
+    proc LoadBytes(addr: Word, data: @[]_byte, len: _uint): boolean
+    {   var i: _uint;
+
+        i = 0;
+        while !(addr >= memtab[i].beg && addr+len <= memtab[i].end) do
+	{  i += 1;
+	   exit i >= nmem with return false;
+	}
+	addr -= memtab[i].beg;
+	memtab[i].adr@[addr:len] = data[0:len];
+	return true;
+    }
+
+    proc SysCall()
+    {   var n: _uint;
+	var ok: boolean;
+	var addr: _address;
+	var rv: _int;
+
+	n = _uint(reg[17]);	// a7
+	if n
+	is 0 then	// exit
+	{   sys.exit(0);
+	}
+	is 1 then	// open
+	{   ok, addr = Map(reg[10]);
+	    if ok then
+	    {
+		rv = sys.open(addr, _uint(reg[11]), _uint(reg[12]));
+		reg[10] = SWord(rv);
+	    }
+	}
+	is 2, 57 then	// close
+	{   sys.close(_int(reg[10]));
+	    reg[10] = 0;	// FIXME sys.close
+	}
+	is 3, 63 then	// read
+	{   ok, addr = Map(reg[11]);
+	    if ok then
+	    {
+		rv = sys.read(_int(reg[10]), addr, _uint(reg[12]));
+		if rv < 0 then
+		{
+fderr.str("read error "); fderr.int(rv); fderr.nl();
+		}
+		reg[10] = SWord(rv);
+	    }
+	}
+	is 4, 64 then	// write
+	{   ok, addr = Map(reg[11]);
+	    if ok then
+	    {
+		rv = sys.write(_int(reg[10]), addr, _uint(reg[12]));
+		if rv < 0 then
+		{
+fderr.str("write error "); fderr.int(rv); fderr.nl();
+		}
+		reg[10] = SWord(rv);
+	    }
+	}
+	else
+	{
+fderr.str("** Unimplemented system call\n");
+	}
+    }
+
+    proc Read(addr: Addr, w: Width): Word
+    {   var i: _uint;
+	var rv: Word;
+
+if db > 1 then {
+fderr.str("Read  "); fderr.chr(Widths[w]);
+fderr.str(" ["); fderr.addr(addr);
+fderr.str("] = "); }
+        i = rlast;
+        while !(addr >= memtab[i].beg && addr <= memtab[i].end) do
+	{   i += 1;
+	    if i >= nmem then i = 0;
+	   exit i == rlast with
+	    {
+		Fault("Read violation", addr);
+		return 0;
+	    }
+	}
+	rlast = i;
+	if memtab[i].read == 0 then	// ordinary memory
+	{   addr -= memtab[i].beg;
+	    if w
+            is BYTE then
+		rv = memtab[i].adr@[addr];
+	    is HALF then
+		rv = _unpkle(memtab[i].adr@[addr:2]);
+	    is WORD then
+		rv = _unpkle(memtab[i].adr@[addr:4]);
+	    else
+		rv = _unpkle(memtab[i].adr@[addr:8]);
+	}
+	else
+	    rv = memtab[i].read@(addr, w);
+if db > 1 then {
+fderr.word(rv);
+fderr.nl(); }
+	return rv;
+    }
+
+    proc Write(addr: Addr, w: Width, v: Word)
+    {   var i: _uint;
+
+if db > 1 then {
+fderr.str("Write  "); fderr.chr(Widths[w]);
+fderr.str(" ["); fderr.addr(addr);
+fderr.str("] = "); fderr.word(v);
+fderr.nl(); }
+        i = rlast;
+        while !(addr >= memtab[i].beg && addr <= memtab[i].end) do
+	{   i += 1;
+	    if i >= nmem then i = 0;
+	   exit i == rlast with
+	    {
+		Fault("Write violation", addr);
+		return;
+	    }
+	}
+	rlast = i;
+	if memtab[i].write == 0 then	// ordinary memory
+	{   addr -= memtab[i].beg;
+	    memtab[i].adr@[addr] = v;
+	    if w
+	    is BYTE then
+		memtab[i].adr@[addr] = v;
+	    is HALF then
+	    	_packle(memtab[i].adr@[addr:2], _uint16(v));
+	    is WORD then
+	    	_packle(memtab[i].adr@[addr:4], _uint32(v));
+	    else
+	    	_packle(memtab[i].adr@[addr:8], v);
+	}
+	else
+	    memtab[i].write@(addr, w, v);
+    }
+
+    proc SetBreakpoint(addr: Addr, n: _uint): Inst: inline
+    {   var old: Inst;
+
+	old = Read(addr, HALF);
+	Write(addr, HALF, breakpoint16);
+	return old;
+    }
+
+    proc ClrBreakpoint(addr: Addr, inst: Inst):: inline
+    {
+	Write(addr, HALF, inst);
+    }
+
+    // Fake an interrupt
+    proc Interrupt(vec: _uint)
+    {
+    }
+
+    type CSRRegT:
+    (   USTATUS=0x000,	FFLAGS=0x001,	FRM=0x002,	FCSR=0x003,
+	USCRATCH=0x040,	UEPC=0x041,	UCAUSE=0x042,	UBADADDR=0x043,
+	UIP=0x044,
+	CYCLE=0xc00,	TIME=0xc01,	INSTRET=0xc02,	HPMCTR3=0xc03,
+	CYCLEH=0xc80,	TIMEH=0xc81,	INSTRETH=0xc82,	HPMCTR3H=0xc83,
+	// supervisor
+	SSTATUS=0x100,			SEDELEG=0x102,	SIDELEG=0x103,
+	SIE=0x104,	STVEC=0x105,
+	SSCRATCH=0x140,	SEPC=0x141,	SCAUSE=0x142,	SBADADDR=0x143,
+	SIP=0x144,
+	// hypervisor
+	HSTATUS=0x200,			HEDELEG=0x202,	HIDELEG=0x203,
+	HIE=0x204,	HTVEC=0x205,
+	HSCRATCH=0x240,	HEPC=0x241,	HCAUSE=0x242,	HBADADDR=0x243,
+	HIP=0x244,
+	// machine
+	MSTATUS=0x300,	MISA=0x301,	MEDELEG=0x302,	MIDELEG=0x303,
+	MIE=0x304,	MTVEC=0x305,
+	MSCRATCH=0x340,	MEPC=0x341,	MCAUSE=0x342,	MBADADDR=0x343,
+	MIP=0x344,
+	MBASE=0x380,	MBOUND=0x381,	MIBASE=0x382,	MIBOUND=0x383,
+	MDBASE=0x384,	MDBOUNT=0x385,
+	MVENDORID=0xf11,MARCHID=0xf12,	MIPMID=0xf13,	MHARTID=0xf14,
+    );
+    if WSize == 64 then
+    {	type CSRISA:
+	{   ext:  ['A'..'Z'] boolean: packed, lsb;
+	    zero: 0..0xFFFFF;	// padding
+    	    len:  (_,W32,W64,W128);
+	}: packed, lsb, bits(WSize);
+	const isa: CSRISA = {
+    	    .ext={ ['I']= true,['M']=true,['S']=true,['U']=true },
+	    .len=W64
+	};
+    }
+    else
+    {	type CSRISA:
+	{   ext:  ['A'..'Z'] boolean: packed, lsb;
+    	    zero: 0..0b1111;	// padding
+    	    len:  (_,W32,W64,W128);
+	}: packed, lsb, bits(WSize);;
+    const isa: CSRISA = {
+    	.ext={ ['I']= true,['M']=true,['S']=true,['U']=true },
+	.len=W32
+	};
+    }
+
+    var csrreg:
+    {
+	s:	// supervisor CSRs
+	{
+	    csr: Word;	// FIXME
+	    tvec: Word;
+	    ip:   Word;
+	    ie:   Word;
+	    scratch: Word;
+	    epc:  Word;
+	    cause:
+	    {   code: 0..0x7FFF_FFFF: bits(31);
+		intr: boolean;
+	    }: packed, lsb;
+	    badaddr: Word;
+	};
+    };
+
+    proc ReadCSR(csr: _uint): Word
+    {
+
+if db > 1 then {
+fderr.str("ReadCSR csr="); fderr.word(csr); fderr.nl(); }
+	if CSRRegT(csr)
+	is MISA then return Word(isa);
+	is MHARTID then return 0;
+	return 0;
+    }
+
+    proc WriteCSR(csr: _uint, val: Word)
+    {
+if db > 1 then {
+fderr.str("WriteCSR csr="); fderr.word(csr);
+fderr.str(" val="); fderr.word(val); fderr.nl(); }
+	if (csr >> 10) == 0b11 then	// read-only
+	{
+	    return;
+	}
+    }
+
+    proc ReadFloat(addr: Addr): _uint64
+    {   var tmp: _uint32;
+
+	tmp = _uint32(Read(addr, WORD));
+	return _uint64(tmp);
+    }
+
+    proc WriteFloat(addr: Addr, data: _uint64)
+    {   var tmp: _uint32;
+
+	tmp = _uint32(data);
+	Write(addr, WORD, tmp);
+    }
+
+    proc ReadDouble(addr: Addr): _uint64
+    {
+	return Read(addr, QUAD);
+    }
+
+    proc WriteDouble(addr: Addr, data: _uint64)
+    {
+	Write(addr, QUAD, data);
+    }
+
+    proc SextByte(x: Word): Word: inline
+    {
+	if x & 0x80 != 0 then x |= ~0xFF;
+	return x;
+    }
+
+    proc SextHalf(x: Word): Word: inline
+    {
+	if x & 0x8000 != 0 then x |= ~0xFFFF;
+	return x;
+    }
+
+    proc SextWord(x: Word): Word: inline
+    {
+	if x & 0x8000_0000 != 0 then x |= ~0xFFFF_FFFF;
+	return x;
+    }
+
+    proc SextImm(x: UImm, where: _uint): UImm
+    {	var si: SImm;
+
+	si = SImm(x);
+	si = si << (SImm?bits-1 - where);
+	si = si >> (SImm?bits-1 - where);
+	return UImm(si);
+    }
+
+    proc Loads(op: _uint8, inst: Inst, info: @Info)
+    {
+	info.rd = (inst >> 7) & 0x1F;
+	if info.rd == 0 then
+	{   info.op = NOP;
+	    return;
+	}
+	info.rs1 = (inst >> 15) & 0x1F;
+	info.rs2 = 0;	// not used
+	info.imm = Word(SWord((SInst(inst) >> 20)));	// bits 11..0 (sign)
+	info.op = decodeLD[(inst >> 12) & 0b111];
+    }
+
+    proc Stores(op: _uint8, inst: Inst, info: @Info)
+    {
+	var ui: Word;
+
+	info.rs1 = (inst >> 15) & 0x1F;
+	info.rs2 = (inst >> 20) & 0x1F;
+	info.rd  = 0;	// not used
+	ui  = (inst >> 7) & 0x001F;			// bits 4..0;
+	ui |= Word(SWord(SInst(inst) >> 20)) & ~0x001F;	// bits 11..5 (sign)
+	info.imm = ui;
+	info.op = decodeST[(inst >> 12) & 0b111];
+    }
+
+    proc TypeS(op: _uint8, inst: Inst, info: @Info)
+    {   var tmp, csr: Word;
+
+	info.rd = (inst >> 7) & 0x1F;
+	info.rs1 = (inst >> 15) & 0x1F;
+	csr = (inst >> 20);
+if db > 1 then {
+fderr.str("typeS op="); fderr.uint((inst >> 12) & 0x7);
+fderr.str(" csr="); fderr.hex32(csr);
+fderr.str(" rs1="); fderr.uint(info.rs1);
+fderr.nl(); }
+	info.op = decodeS[(inst >> 12) & 0x7];
+	// additional decode
+	if info.op == ECALL then // ECALL..WFI
+	{   if (inst >> 20) & 0b11111
+	    is 0b00000 then {}	// ECALL
+	    is 0b00001 then info.op = EBREAK;
+	    is 0b00010 then
+	    {	if (inst >> 25)
+		is 0b0001000 then info.op = SRET;
+		is 0b0010000 then info.op = HRET;
+		is 0b0011000 then info.op = MRET;
+		else info.op = ILL;
+	    }
+	    is 0b00100 then info.op = SFENCEVM;
+	    is 0b00101 then info.op = WFI;
+	    is 0b10010 then info.op = DRET;
+	    else info.op = ILL;
+	}
+    }
+
+    proc TypeI(op: _uint8, inst: Inst, info: @Info)
+    {   var ui: Word;	// unsigned immediate
+	var rs1: _uint;
+
+	info.rd = (inst >> 7) & 0x1F;
+	if info.rd == 0 then		// no writes to r0
+	{   info.op = NOP;
+	    return;
+	}
+	info.rs1 = (inst >> 15) & 0x1F;
+	info.op = decodeI[(inst >> 12) & 0x7];
+	// additional decode
+	if info.op == SRLI && (inst & 0x4000_0000) != 0 then info.op = SRAI;
+	info.imm = SextImm(inst >> 20, 11);
+    }
+
+    proc TypeIW(op: _uint8, inst: Inst, info: @Info)
+    {   var ui: Word;	// unsigned immediate
+	var rs1: _uint;
+
+	info.rd = (inst >> 7) & 0x1F;
+	if info.rd == 0 then		// no writes to r0
+	{   info.op = NOP;
+	    return;
+	}
+	info.rs1 = (inst >> 15) & 0x1F;
+	info.imm = Word(SWord(SInst(inst) >> 20));
+	info.op = decodeIW[(inst >> 12) & 0x7];
+	// additional decode
+	if info.op == SRLIW && (inst & 0x4000_0000) != 0 then info.op = SRAIW;
+    }
+
+    proc TypeR(op: _uint8, inst: Inst, info: @Info)
+    {
+	info.rd = (inst >> 7) & 0x1F;
+	if info.rd == 0 then		// no writes to r0
+	{   info.op = NOP;
+	    return;
+	}
+	info.rs1 = (inst >> 15) & 0x1F;
+	info.rs2 = (inst >> 20) & 0x1F;
+	if inst >> 25	// high 7 bits
+	is 0b0000_000 then info.op = decodeR0[((inst >> 12) & 0b0111)];
+	is 0b0100_000 then info.op = decodeR2[((inst >> 12) & 0b0111)];
+	is 0b0000_001 then info.op = decodeR1[((inst >> 12) & 0b0111)];
+	else info.op = ILL;
+    }
+
+    proc TypeRW(op: _uint8, inst: Inst, info: @Info)
+    {
+	if (inst & 0xBE00_0000) != 0 then
+	{   info.op = ILL;
+	    return;
+	}
+	info.rd = (inst >> 7) & 0x1F;
+	if info.rd == 0 then		// no writes to r0
+	{   info.op = NOP;
+	    return;
+	}
+	info.rs1 = (inst >> 15) & 0x1F;
+	info.rs2 = (inst >> 20) & 0x1F;
+	// use bit 30 to double the number of opcodes
+	info.op = decodeRW[((inst >> 12) & 0b0111) | ((inst >> 27) & 0b1000)];
+    }
+
+    proc TypeU(op: _uint8, inst: Inst, info: @Info)
+    {
+	info.rd = (inst >> 7) & 0x1F;
+	if info.rd == 0 then
+	{   info.op = NOP;
+	    return;
+	}
+	info.imm = Word(SInst(inst & 0xFFFF_F000));
+	if op
+	is 0x05 then info.op = AUIPC;
+	is 0x0D then info.op = LUI;
+    }
+
+    proc TypeUJ(op: _uint8, inst: Inst, info: @Info)
+    {   var si: SWord;		// signed immediate
+	var ui: Word;	// unsigned immediate
+
+	info.rd = (inst >> 7) & 0x1F;
+	ui =  (inst >> 20) & 0x0000_07FE;	// bits 10..1,0
+	ui |= (inst >> 9)  & 0x0000_0800;	// bit 11
+	ui |= inst         & 0x000F_F000;	// bits 19..12
+	si = SWord(SInst(inst) >> 11);		// bit 20 (sign)
+	ui |= Word(si)  & ~0x000F_FFFF;
+	info.imm = ui;
+	info.rd = (inst >> 7) & 0x1F;
+	info.op = JAL;
+    }
+
+    proc Jalr(op: _uint8, inst: Inst, info: @Info)
+    {
+	info.rd = (inst >> 7) & 0x1F;
+	info.rs1 = (inst >> 15) & 0x1F;
+	info.imm = Word(SWord((SInst(inst) >> 20)));
+	info.op = decodeJ[(inst >> 12) & 0x7];
+    }
+
+    proc TypeSB(op: _uint8, inst: Inst, info: @Info)
+    {   var take: boolean;
+	var si: SWord;		// signed immediate
+	var ui: Word;		// unsigned immediate
+
+	info.rs1 = (inst >> 15) & 0x1F;
+	info.rs2 = (inst >> 20) & 0x1F;
+	ui =  (inst >> 7)  & 0x001E;			// bits 4..1,0
+	ui |= (inst >> 20) & 0x07E0;			// bits 10..5
+	ui |= (inst << 4)  & 0x0800;			// bit 11
+	si = SWord(SInst(inst) >> 19);			// bit 12 (sign)
+	ui |= Word(si) & ~0x0FFF;
+	info.imm = ui;
+	info.op = decodeSB[(inst >> 12) & 0b111];
+    }
+
+    proc TypeC0(inst: Half, info: @Info)
+    {
+	info.op = decodeC0[(inst >> 13) & 0x7];
+	info.rd = ((inst >> 2) & 0b111) + 8;		// compressed register
+	info.rs1 = ((inst >> 7) & 0b111) + 8;
+	info.rs2 = info.rd;
+	if info.op
+	is ADDI then
+	{    if inst == 0 then
+		info.op = ILL;		// all zeros inst is illegal
+	     else
+	     {	info.rs1 = SP;
+		// weird immediate field
+		info.imm = (inst >> 4) & 0b0000000100 |	// bit 2
+			   (inst >> 2) & 0b0000001000 |	// bit 3
+			   (inst >> 7) & 0b0000110000 |	// bits 5..4
+			   (inst >> 1) & 0b1111000000;	// bits 9..6
+	     }
+	}
+	is LW, SW, FLW, FSW then
+	{    info.imm = ((inst >> 4) & 0b0000100) |	// bit 2
+			((inst >> 7) & 0b0111000) |	// bits 5..3
+			((inst << 1) & 0b1000000);	// bit 6
+	}
+	is LD, SD, FLD, FSD then
+	{    info.imm = ((inst >> 7) & 0b00111000) |	// bits 5..3
+			((inst << 1) & 0b11000000);	// bits 7..6
+	}
+    }
+
+    proc TypeC1(inst: Half, info: @Info)
+    {
+	const decode2: [8] Op =
+	{   SRLI, SRAI, ANDI, SUB,  SRLI, SRAI, ANDI, SUBW };
+	const decode3: [4] Op = {   SUB,  XOR,  OR,   AND };
+	const decode4: [4] Op = {   SUBW, ADDW, ILL , ILL };
+	var op: Op;
+
+	info.rs1 = 0;	// zero register
+	info.rs2 = 0;	// zero register
+	op = decodeC1[(inst >> 13) & 0x7];
+	// Additional decoding
+	if op
+	is ADDI then
+	{   info.rd = (inst >> 7) & 0x1F;	// full set of registers
+	    info.rs1 = info.rd;
+	    if info.rd == 0 then
+	    {	if inst == 0x0001 then op = NOP; else op = ILL;
+	    }
+	    info.imm = ((inst >> 2) & 0b011111) |
+		       ((inst >> 7) & 0b100000);
+	    info.imm = SextImm(info.imm, 5);
+	}
+	is ADDIW then	// 64-bit only
+	{   info.rd = (inst >> 7) & 0x1F;	// full set of registers
+	    info.rs1 = info.rd;
+	    if info.rd == 0 then op = ILL;
+	    info.imm = (inst >> 2) & 0b11111;
+	    if (inst & 0x1000) != 0 then
+		info.imm |= ~0b11111;		// smear sign bit
+	}
+	is LI then
+	{   info.rd = (inst >> 7) & 0x1F;	// full set of registers
+	    if info.rd == 0 then op = ILL; else op = ADDI;
+	    info.imm = (inst >> 2) & 0b11111;
+	    if (inst & 0x1000) != 0 then
+		info.imm |= ~0b11111;		// smear sign bit
+	}
+	is LUI then
+	{   info.rd = (inst >> 7) & 0x1F;	// full set of registers
+	    info.rs1 = info.rd;
+	    if info.rd == SP then	// addi sp,sp,imm
+	    {   op = ADDI;
+		info.imm = ((inst >> 2) & 0b00_00010000) | // bit 4
+			   ((inst << 3) & 0b00_00100000) | // bit 5
+			   ((inst << 1) & 0b00_01000000) | // bit 6
+			   ((inst << 4) & 0b01_10000000) | // bit 8..7
+			   ((inst >> 3) & 0b10_00000000);  // bit 9
+		info.imm = SextImm(info.imm, 9);
+	    }
+	    else
+	    {	if info.rd == 0 then op = ILL;
+		info.imm = ((inst << 10) & 0x1F000);	// bits 16..12
+		if (inst & 0x1000) != 0 then
+		    info.imm |= ~0x1FFFF;		// smear sign bit
+	    }
+	}
+	is SRLI then
+	{   info.rs1 = ((inst >> 7) & 0b111) + 8; // subset of registers
+	    info.rd = info.rs1;
+	    info.rs2 = ((inst >> 2)) & 0b111 + 8;
+	    /* Further decode */
+	    op = decode2[(inst >> 10) & 0x7];
+	    if op
+	    is SUB then  op = decode3[(inst >> 5) & 0b11];
+	    is SUBW then op = decode4[(inst >> 5) & 0b11];
+	    else
+	    {	info.imm = ((inst >> 2) & 0b011111) |	// bits 4..0
+		           ((inst >> 7) & 0b100000);	// bit 5
+		if op == ANDI then
+		    info.imm = SextImm(info.imm, 5);
+	    }
+	}
+	is JAL then
+	{   info.rd = ((inst >> 15) & 0b1) ^ 1;	// link register
+	    info.imm = ((inst >> 1) & 0b101101000000) |	// bits 11,9..8,6
+		       ((inst << 2) & 0b010000000000) | // bit 10
+		       ((inst << 1) & 0b000010000000) |	// bit 7
+		       ((inst << 3) & 0b000000100000) | // bit 5
+		       ((inst >> 7) & 0b000000010000) |	// bit 4
+		       ((inst >> 2) & 0b000000001110);	// bits 3..1
+	    info.imm = SextImm(info.imm, 11);
+	}
+	is BEQ, BNE then
+	{   info.rs1 = ((inst >> 7) & 0b111) + 8;
+	    info.imm = ((inst >> 2) & 0b000000110) |	// bits 2..1
+		       ((inst >> 7) & 0b000011000) |	// bits 4..3
+		       ((inst << 3) & 0b000100000) |	// bit 5
+		       ((inst << 1) & 0b011000000) |	// bit 7..6
+		       ((inst >> 4) & 0b100000000);	// bit 8
+	    info.imm = SextImm(info.imm, 8);
+	}
+	info.op = op;
+    }
+
+    proc TypeC2(inst: Half, info: @Info)
+    {
+	var ui: Word;		// unsigned immediate
+	var op: Op;
+
+	info.rs1 = (inst >> 7) & 0b11111;
+	info.rs2 = (inst >> 2) & 0b11111;
+	info.rd = info.rs1;
+	ui = (inst >> 7) & 0b100000;		// bit 5 of immediate
+	op = decodeC2[(inst >> 12) & 0b1111];
+	if op
+	is SLLI then
+	{   ui |= info.rs2;
+	    info.rd = info.rs1;
+	}
+	is JR then
+	{   if info.rs2 != 0 then
+	    {	info.rs1 = 0;	// zero register
+		op = ADD;	// C.MV
+	    }
+	    else
+	    {   info.rd = 0;	// zero register
+		op = JALR;	// C.JR
+	    }
+	}
+	is JALR then
+	{   if info.rs2 == 0 then
+	    { 	if info.rd == 0 then op = EBREAK;
+	    }
+	    else
+	    {	if info.rd != 0 then op = ADD;
+	    }
+	}
+	is LW, FLW then
+	{   ui |= ((inst >> 2) & 0b000011100) |    // bits 4..2
+		  ((inst << 4) & 0b011000000);     // bits 7..6
+	    info.rs1 = SP;
+	}
+	is LD, FLD then
+	{   ui |= ((inst >> 2) & 0b000011000) |    // bits 4..3
+		  ((inst << 4) & 0b111000000);     // bits 8..6
+	    info.rs1 = SP;
+	}
+	is SW, FSW then
+	{   ui |= ((inst >> 7) & 0b000011100) |    // bits 4..2
+		  ((inst >> 1) & 0b011000000);     // bits 7..6
+	    info.rs1 = SP;
+	}
+	is SD, FSD then
+	{   ui |= ((inst >> 7) & 0b000011000) |    // bits 4..3
+		  ((inst >> 1) & 0b111000000);     // bits 8..6
+	    info.rs1 = SP;
+	}
+	info.op = op;
+	info.imm = ui;
+    }
+
+    // run a single instruction
+    proc Run(): boolean
+    {
+	var inst: Inst;
+	var info: Info;
+	var opc: _uint8;
+	var tmp: Word;
+
+	cycles += 1;
+	fault = NONE;
+	instpc = reg[PC];
+	inst = Read(instpc, WORD);
+	reg[PC] += 2;		// assume compressed instruction
+	if inst & 0x3
+	is 0 then
+	    TypeC0(Half(inst), info);
+	is 1 then
+	    TypeC1(Half(inst), info);
+	is 2 then
+	    TypeC2(Half(inst), info);
+	is 3 then	// 32-bit instruction
+	{   reg[PC] += 2;	// not compressed, adjust
+	    info.op = ILL;	// catch undecoded instructions
+	    opc = (inst >> 2) & 0x1F;
+	    if opc
+	    is 0x00 then Loads(opc, inst, info);
+	    is 0x04 then TypeI(opc, inst, info);
+	    is 0x05 then TypeU(opc, inst, info);
+	    is 0x06 then TypeIW(opc, inst, info);
+	    is 0x08 then Stores(opc, inst, info);
+	    is 0x0C then TypeR(opc, inst, info);
+	    is 0x0D then TypeU(opc, inst, info);
+	    is 0x0E then TypeRW(opc, inst, info);
+	    is 0x18 then TypeSB(opc, inst, info);
+	    is 0x19 then Jalr(opc, inst, info);
+	    is 0x1B then TypeUJ(opc, inst, info);
+	    is 0x1C then TypeS(opc, inst, info);
+	}
+if db > 0 then {
+fderr.str("\nPC="); fderr.addr(instpc);
+if reg[PC] - instpc == 2 then
+{  fderr.str("     "); fderr.hex16(Half(inst)); }
+else
+{  fderr.chr(' '); fderr.hex32(inst); }
+fderr.chr(' ');  fderr.str(OpName[info.op]);
+//fderr.str(" op="); fderr.uint8(_uint8(info.op));
+fderr.str(" rd="); PRegName(info.rd);
+fderr.str(" rs1="); PRegName(info.rs1);
+fderr.str(" rs2="); PRegName(info.rs2);
+fderr.str(" imm="); fderr.word(info.imm);
+fderr.nl(); }
+	if info.op
+	is NOP then {}
+	is AUIPC then reg[info.rd] = instpc + info.imm;
+	is LUI  then reg[info.rd] = info.imm;
+	is ADDI then reg[info.rd] = reg[info.rs1] + info.imm;
+	is SLLI then reg[info.rd] = reg[info.rs1] << (info.imm & SMask);
+	is SLTI then reg[info.rd] = Word(SWord(reg[info.rs1]) < SWord(info.imm));
+	is SLTIU then reg[info.rd] = Word(reg[info.rs1] < info.imm);
+	is XORI then reg[info.rd] = reg[info.rs1] ^ info.imm;
+	is SRLI then reg[info.rd] = reg[info.rs1] >> (info.imm & SMask);
+	is SRAI then reg[info.rd] = Word(SWord(reg[info.rs1]) >> (info.imm & SMask));
+	is ORI  then reg[info.rd] = reg[info.rs1] | info.imm;
+	is ANDI then reg[info.rd] = reg[info.rs1] & info.imm;
+	is ADD  then reg[info.rd] = reg[info.rs1] + reg[info.rs2];
+	is SUB  then reg[info.rd] = reg[info.rs1] - reg[info.rs2];
+	is SLT  then
+	    reg[info.rd] = Word(SWord(reg[info.rs1]) < SWord(reg[info.rs2]));
+	is SLTU then reg[info.rd] = Word(reg[info.rs1] < reg[info.rs2]);
+	is XOR  then reg[info.rd] = reg[info.rs1] ^ reg[info.rs2];
+	is SLL  then
+	    reg[info.rd] = reg[info.rs1] << (reg[info.rs2] & SMask);
+	is SRL  then
+	    reg[info.rd] = reg[info.rs1] >> (reg[info.rs2] & SMask);
+	is SRA  then
+	    reg[info.rd] = SWord(reg[info.rs1]) >> (reg[info.rs2] & SMask);
+	is OR   then reg[info.rd] = reg[info.rs1] | reg[info.rs2];
+	is AND  then reg[info.rd] = reg[info.rs1] & reg[info.rs2];
+	is LB   then reg[info.rd] = SextByte(Read(reg[info.rs1]+info.imm, BYTE));
+	is LBU  then reg[info.rd] = Read(reg[info.rs1]+info.imm, BYTE);
+	is LH   then reg[info.rd] = SextHalf(Read(reg[info.rs1]+info.imm, HALF));
+	is LHU  then reg[info.rd] = Read(reg[info.rs1]+info.imm, HALF);
+	is LW   then reg[info.rd] = Read(reg[info.rs1]+info.imm, WORD);
+	is LD   then reg[info.rd] = Read(reg[info.rs1]+info.imm, QUAD);
+	is SB   then Write(reg[info.rs1]+info.imm, BYTE, reg[info.rs2]);
+	is SH   then Write(reg[info.rs1]+info.imm, HALF, reg[info.rs2]);
+	is SW   then Write(reg[info.rs1]+info.imm, WORD, reg[info.rs2]);
+	is SD   then Write(reg[info.rs1]+info.imm, QUAD, reg[info.rs2]);
+	is FLW  then freg[info.rd] = ReadFloat(reg[info.rs1]+info.imm);
+	is FSW  then WriteFloat(reg[info.rs1]+info.imm, freg[info.rs2]);
+	is FLD  then freg[info.rd] = ReadDouble(reg[info.rs1]+info.imm);
+	is FSD  then WriteDouble(reg[info.rs1]+info.imm, freg[info.rs2]);
+	is BEQ then
+	{   if reg[info.rs1] == reg[info.rs2] then
+		reg[PC] = instpc + info.imm;
+	}
+	is BNE then	// BNE
+	{   if reg[info.rs1] != reg[info.rs2] then
+		reg[PC] = instpc + info.imm;
+	}
+	is BLT then	// BLT
+	{   if SWord(reg[info.rs1]) < SWord(reg[info.rs2]) then
+		reg[PC] = instpc + info.imm;
+	}
+	is BGE then	// BGE
+	{   if SWord(reg[info.rs1]) >= SWord(reg[info.rs2]) then
+		reg[PC] = instpc + info.imm;
+	}
+	is BLTU then	// BLTU
+	{   if reg[info.rs1] < reg[info.rs2] then
+		reg[PC] = instpc + info.imm;
+	}
+	is BGEU then	// BGEU
+	{   if reg[info.rs1] >= reg[info.rs2] then
+		reg[PC] = instpc + info.imm;
+	}
+	is JAL then
+	{   if info.rd != 0 then reg[info.rd] = reg[PC];
+	    reg[PC] = instpc + info.imm;
+	}
+	is JALR then
+	{   if info.rd != 0 then reg[info.rd] = reg[PC];
+	    reg[PC] = (reg[info.rs1] + info.imm) & ~1;
+	}
+	is ECALL then SysCall();
+	is EBREAK then fault = BKPT;
+	is MUL then reg[info.rd] = reg[info.rs1] * reg[info.rs2];
+	is MULHU then
+	{   var tmphu: DWord;
+	    // mul with double-sized result
+	    tmphu = reg[info.rs1] * reg[info.rs2];
+	    reg[info.rd] = tmphu >> Word?bits;
+	}
+	is DIVU then
+	{   if reg[info.rs2] == 0 then
+		reg[info.rd] = Word?max;
+	    else
+		reg[info.rd] = reg[info.rs1] / reg[info.rs2];
+	}
+	is REMU then
+	{   if reg[info.rs2] == 0 then
+		reg[info.rd] = reg[info.rs1];
+	    else
+		reg[info.rd] = reg[info.rs1] % reg[info.rs2];
+	}
+	is CSRRW then
+	{   if info.rd != 0 then
+		reg[info.rd] = ReadCSR(info.imm);
+	    WriteCSR(info.imm, reg[info.rs1]);
+	}
+	is CSRRWI then
+	{   if info.rd != 0 then
+		reg[info.rd] = ReadCSR(info.imm);
+	    WriteCSR(info.imm, info.rs1);
+	}
+	is CSRRS then
+	{   tmp = ReadCSR(info.imm);
+	    if info.rs1 != 0 then
+		WriteCSR(info.imm, tmp | reg[info.rs1]);
+	    if info.rd != 0 then
+		reg[info.rd] = tmp;
+	}
+	is CSRRSI then
+	{   tmp = ReadCSR(info.imm);
+	    if info.rs1 != 0 then
+		WriteCSR(info.imm, tmp | info.rs1);
+	    if info.rd != 0 then
+		reg[info.rd] = tmp;
+	}
+	is CSRRC then
+	{   tmp = ReadCSR(info.imm);
+	    if info.rs1 != 0 then
+		WriteCSR(info.imm, tmp & ~reg[info.rs1]);
+	    if info.rd != 0 then
+		reg[info.rd] = tmp;
+	}
+	is CSRRCI then
+	{   tmp = ReadCSR(info.imm);
+	    if info.rs1 != 0 then
+		WriteCSR(info.imm, tmp & ~info.rs1);
+	    if info.rd != 0 then
+		reg[info.rd] = tmp;
+	}
+	is ADDIW then reg[info.rd] = SextWord(reg[info.rs1] + info.imm);
+	is ADDW  then reg[info.rd] = SextWord(reg[info.rs1] + reg[info.rs2]);
+	is SUBW  then reg[info.rd] = SextWord(reg[info.rs1] - reg[info.rs2]);
+	is SLLIW then reg[info.rd] = SextWord(reg[info.rs1] << (info.imm & SMask));
+	is SRAIW then
+	    reg[info.rd] = SextWord(Word(SWord(reg[info.rs1]) >> (info.imm & SMask)));
+	is ILL then
+	    Fault("illegal instruction", inst);
+	else
+	    Fault("unimplemented instruction", inst);
+
+	return fault == NONE;
+    }
+
+    // ****
+    // initialize state using ELF segments
+    // ****
+    proc Load()
+    {
+    }
+
+    // ****
+    // chip reset
+    // ****
+    proc Reset(addr: Addr)
+    {
+	reg[PC] = addr;
+	reg[0] = 0;		// always zero
+	reg[SP] = memtab[1].beg;	// FIXME
+	reg[10] = Read(memtab[1].beg, WWidth);
+	if WSize == 64 then
+	    reg[11] = memtab[1].beg + 8;
+	else
+	    reg[11] = memtab[1].beg + 4;
+    }
+
+    // ****
+    // display current register state
+    // ****
+    proc Dump()
+    {   var n: 0..33;
+
+	n = 0;
+	fderr.str("zr ra sp gp");
+	while n < 4 do
+	{   fderr.str("  "); fderr.word(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\ntp t0 t1 t2");
+	while n < 8 do
+	{   fderr.str("  "); fderr.word(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\ns0 s1 a0 a1");
+	while n < 12 do
+	{   fderr.str("  "); fderr.word(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\na2 a3 a4 a5");
+	while n < 16 do
+	{   fderr.str("  "); fderr.word(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\na6 a7 s2 s3");
+	while n < 20 do
+	{   fderr.str("  "); fderr.word(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\ns4 s5 s6 s7");
+	while n < 24 do
+	{   fderr.str("  "); fderr.word(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\ns8 s9 sA sB");
+	while n < 28 do
+	{   fderr.str("  "); fderr.word(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\nt3 t4 t5 t6");
+	while n < 32 do
+	{   fderr.str("  "); fderr.word(reg[n]);
+	    n += 1;
+	}
+	fderr.str("\npc           ");
+	fderr.addr(reg[PC]);
+	fderr.str("    cycles ");
+	fderr.uint(cycles);
+	fderr.nl();
+    }
+
+
+    proc BackTrace()
+    {   var fp, ra: Word;
+
+	fp = reg[29];
+	while fp > reg[SP] do
+	{
+	    ra = Read(fp+8, WWidth);
+	    fderr.str("fp="); fderr.addr(fp);
+	    fderr.str(" ra="); fderr.addr(ra);
+	    fderr.nl();
+	    fp = Read(fp, WWidth);
+	}
+    }
+}
+
+package chip
+{   alias riscv as cpu;
+    const name = "generic";
+    const ResetAddress = 0x0001_0000;	// FIXME
+
+    const D: cpu.MemFlags = { .x=true, .w=true, .a=true, .l=true };
+    var MemTab: []cpu.Mem =
+    {
+	{ 0, 0x0000_0000, 0x00FE_FFFF, D, 0, 0, 0 },		// RAM
+	{ 0, 0x00FF_0000, 0x00FF_FFFF, D, 0, 0, 0 },		// ARGS
+    };
+    const NSegs = MemTab?len;
+    const NELFSegs = 3;
+
+    proc Init(argc: _uint, argv: @[]@[]_byte)
+    {   var i, j, k, n: _uint;
+
+	memory = pMemory(sys.malloc(Memory?size + NELFSegs*Segment?size));
+	j = 0;
+	for i from 0 to MemTab?len-1 do
+	{
+	    if MemTab[i].flg.a then	// allocate memory
+	    {
+var size: _uint;
+var addr: _address;
+size = MemTab[i].end - MemTab[i].beg + 1;
+addr = sys.malloc(size);
+fderr.str("size="); fderr.uint(size);
+fderr.str(" addr="); fderr.hex(_uint(addr));  fderr.nl();
+MemTab[i].adr = addr;
+//	        MemTab[i].adr = sys.malloc(MemTab[i].end - MemTab[i].beg + 1);
+	    }
+	    if MemTab[i].flg.l then	// ELF needs to load this
+	    {   if j < NELFSegs then
+	    	{   memory.seg[j].mem = MemTab[i].adr;
+	    	    memory.seg[j].beg = MemTab[i].beg;
+	    	    memory.seg[j].end = MemTab[i].end;
+	    	    memory.seg[j].typ = 0;
+	    	    j += 1;
+	    	}
+	    }
+	}
+	memory.nsegs = j;
+	cpu.memtab = MemTab;
+	cpu.nmem = MemTab?len;
+	// generate argument list
+	cpu.Write(cpu.memtab[1].beg, cpu.WWidth, argc);
+	j = cpu.WByte;		// really size of argc
+	k = j + cpu.WByte * (argc+1);
+	for n from 0 to argc-1 do
+	{
+fderr.str("argv["); fderr.uint(n);
+fderr.str("]="); fderr.str(argv[n]@); fderr.nl();
+	    cpu.Write(cpu.memtab[1].beg+j, cpu.WWidth, cpu.memtab[1].beg+k);
+	    i = 0;
+	    loop
+	    {   cpu.Write(cpu.memtab[1].beg+k+i, BYTE, argv[n]@[i]);
+	      exit argv[n]@[i] == 0;
+		i += 1;
+	    }
+	    k += i+1;
+	    j += cpu.WByte;
+	}
+	// null terminate argv
+	cpu.Write(cpu.memtab[1].beg+j, cpu.WWidth, 0);
+    }
+}
+

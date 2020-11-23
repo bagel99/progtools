@@ -1,0 +1,212 @@
+    type  Inst: _uint32;	// size of an instruction
+    type  Addr: _uint64;	// size of an address
+    type  Word: _uint64;	// size of a register
+    type  SWord: _int64;
+    type REG: 0..31;
+
+    type OP2:
+    {	major:	0..0b111111;	// 31..26
+	rd:	REG;		// 25..21
+	rs1:	REG;		// 20..16
+	I:	0..1;		// 15
+	s1:	0..1;		// 14
+	s2:	0..1;		// 13
+	S:	0..1;		// 12
+	D:	0..1;		// 11
+	minor:	0..0b111111;	// 10..5
+	rs2:	REG;		// 4..0
+    }: packed, msb, bits(32);
+
+    type OP3:
+    {	major:	0..0b111111;	// 31..26
+	rd:	REG;		// 25..21
+	rs1:	REG;		// 20..16
+	I:	0..1;		// 15
+	s1:	0..1;		// 14
+	s2:	0..1;		// 13
+	rs3:	REG;		// 12..8
+	minor:	0..0b111;	// 7..5
+	rs2:	REG;		// 4..0
+    }: packed, msb, bits(32);
+
+    type OP1a:
+    {	major:	0..0b111111;	// 31..26
+	rd:	REG;		// 25..21
+	rs1:	REG;		// 20..16
+	z1:     0..1;		// 15
+	w:      0..1;		// 14
+	r:      0..1;		// 13
+	z2:	0..0b11;	// 12..11
+	minor:	0..0b111111;	// 10..5
+	func:	0..0b11111;	// 4..0
+    }: packed, msb, bits(32);
+
+    type OP1b:
+    {	major:	0..0b111111;	// 31..26
+	rd:	REG;		// 25..21
+	rs1:	REG;		// 20..16
+	z1:     0..1;		// 15
+	s1:     0..1;		// 14
+	sd:     0..1;		// 13
+	s:      0..1;		// 12
+	z2:	0..1;		// 11
+	minor:	0..0b111111;	// 10..5
+	func:	0..0b11111;	// 4..0
+    }: packed, msb, bits(32);
+
+    type OPCARRY:
+    {	major:	0..0b111111;	// 31..26
+	rd:	REG;		// 25..21
+	rs1:	REG;		// 20..16 UNUSED?
+	imm:	_int16;		// 15..0
+    }: packed, msb, bits(32);
+
+    type OPVEC:
+    {	major:	0..0b111111;	// 31..26
+	rd:	REG;		// 25..21
+	imm:    0..0x1FFFFF;	// 20..0
+    }: packed, msb, bits(32);
+
+    type OPSHF:
+    {	major:	0..0b111111;	// 31..26
+	rd:	REG;		// 25..21
+	rs1:	REG;		// 20..16
+	minor:	0..0b1111;	// 15..12 low is S bit
+	w:	0..0b111111;	// 11..6;
+	o:	0..0b111111;	// 5..0
+    }: packed, msb, bits(32);
+
+    type OPMEM:
+    {	major:	0..0b111111;	// 31..26
+	rd:	REG;		// 25..21
+	rb:	REG;		// 20..16
+	I:	0..1;		// 15
+	sc:	0..2;		// 14..13
+	L:	0..1;		// 12
+	D:	0..1;		// 11
+	minor:	0..0b111111;	// 10..5
+	ri:	REG;		// 4..0
+    }: packed, msb, bits(32);
+
+    type OPIMM:
+    {	major:	0..0b111111;	// 31..26
+	rd:	REG;		// 25..21
+	rs1:	REG;		// 20..16
+	imm:   _int16;		// 15..0
+    }: packed, msb, bits(32);
+
+    type OPMEMIMM:
+    {	major:	0..0b111111;	// 31..26
+	rd:	REG;		// 25..21
+	rb:	REG;		// 20..16
+	imm:	_int16;		// 15..0
+    }: packed, msb, bits(32);
+
+    type OPBR:
+    {	major:	0..0b111111;	// 31..26
+	offset: 0..0x3FFFFF;	// 25..0 - sign extend << 2
+    }: packed, msb, bits(32);
+
+    type OPBC:
+    {	major:	0..0b111111;	// 31..26
+	cond:	0..31;		// 25..21
+	rs1:	REG;		// 20..16
+	imm:   _int16;		// 15..0 - sign extend << 2
+    }: packed, msb, bits(32);
+
+    type OPBB:
+    {	major:	0..0b11111;	// 31..27
+	bit:	0..63;		// 26..21 - extends into major
+	rs1:	REG;		// 20..16
+	offset: _int16;		// 15..0 - sign extend << 2
+    }: packed, msb, bits(32);
+
+    type OPPC:
+    {	major:	0..0b111111;	// 31..26
+	cond:	0..31;		// 25..21
+	rs1:	REG;		// 20..16
+	minor:	0..0b1111;	// 15..12
+	I:	0..1;		// 11     - invert
+	ml:	0..7;		// 10..8  - length-1
+	shadow: 0..0b11111111;	// 7..0
+    }: packed, msb, bits(32);
+
+    type OPPB:
+    {	major:	0..0b11111;	// 31..27
+	bit:	0..63;		// 26..21 - extends into major
+	rs1:	REG;		// 20..16
+	minor:	0..0b1111;	// 15..12
+	I:	0..1;		// 11     - invert
+	ml:	0..7;		// 10..8  - length-1
+	shadow: 0..0b11111111;	// 7..0
+    }: packed, msb, bits(32);
+
+    type OPTT:
+    {	major:	0..0b11111;	// 31..27
+	unused: 0..0b11;	// 26..25
+	remote: boolean;	// 24
+	call:   boolean;	// 23
+	sz:	0..3;		// 22..21
+	rs1:	REG;		// 20..16
+	imm:	_uint16;	// 15..0
+    }: packed, msb, bits(32);
+
+
+    type Conditions:	// for BCND
+    (	NM,  NN,  EQ0, NE0, GE0, GT0, LE0, LT0,		// integer
+	FCM, FUN, FEQ, FNE, FGE, FLT, FLE, FGT,		// double
+	FDE, _,   FIF, _,   FNA, _,   FNEG,_,		// double
+	IN,  EXIT,_,   _,   _,   _,   RFE, AL
+    );
+    const CondNames: [Conditions][5]_byte =
+    {	"nm",  "nn",  "eq0", "ne0", "ge0", "gt0", "le0", "lt0",
+	"fcm", "fun", "feq", "fne", "fge", "flt", "fle", "fgt",
+	"fde", "",    "fif", "",    "fna", "",    "fneg", "",
+	"in",  "exit","",    "",    "",    "",    "rfe", "al"
+    };
+    type CBits:		// result of CMP
+    (	NE=0, EQ,
+	GT=2, GE, LT, LE,		// signed
+	_, _,				// duplicates of NE, EQ
+	HI=10, HS, LO, LS,		// unsigned
+	SIN=16, FIN, CIN, RIN,		// range
+	NM=34, _, N, _, Z, P, SM, UM,	// number line
+	_=63
+    );
+    const CBitNames: [CBits][4]_byte =
+    {   "ne", "eq", "gt", "ge", "lt", "le", "??", "??",	// 0-7
+	"ne", "eq", "hi", "hs", "lo", "ls", "??", "??",	// 8-15
+	"sin","fin","cin","rin","??", "??", "??", "??",	// 16-23
+	"??", "??", "??", "??", "??", "??", "??", "??",	// 23-31
+	"??", "??", "nm", "??", "n",  "??", "z",  "p",	// 32-39
+	"sm", "um", "??", "??", "??", "??", "??", "??",	// 40-47
+	"??", "??", "??", "??", "??", "??", "??", "??",	// 48-55
+	"??", "??", "??", "??", "??", "??", "??", "??"	// 56-63
+    };
+    type FCBits:	// result of FCMP
+    (	NE=0, EQ, GT, GE, LT, LE,
+	OR=6, UN,
+	NNE=8, NEQ, NGT, NGE, NLT, NLE,
+	SIN=16, FIN, CIN, RIN,
+	F1S=32, F1Q,
+	F1PI=34, F1PN, F1PD, F1PZ, F1NZ, F1ND, F1NN, F1NI,
+	_=63
+    );
+    const FCBitNames: [FCBits][5]_byte =
+    {   "ne",  "eq",  "gt",  "ge",  "lt",  "le",  "or",  "un",	// 0-7
+	"nne", "neq", "ngt", "nge", "nlt", "nle", "??",  "??",	// 8-15
+	"sin", "fin", "cin", "rin", "??",  "??",  "??",  "??",	// 16-23
+	"??",  "??",  "??",  "??",  "??",  "??",  "??",  "??",	// 23-31
+	"f1s", "f1q", "f1pi","f1pn","f1pd","f1pz","f1nz","f1nd",// 32-39
+	"f1nn","f1ni","??",  "??",  "??",  "??",  "??",  "??",	// 40-47
+	"??",  "??",  "??",  "??",  "??",  "??",  "??",  "??",	// 48-55
+	"??",  "??",  "??",  "??",  "??",  "??",  "??",  "??"	// 56-63
+    };
+
+    const regname: [33]@[]_byte =
+    {	"r0",	"r1",	"r2",	"r3",	"r4",	"r5",	"r6",	"r7",
+	"r8",	"r9",	"r10",	"r11",	"r12",	"r13",	"r14",	"r15",
+	"r16",	"r17",	"r18",	"r19",	"r20",	"r21",	"r22",	"r23",
+	"r24",	"r25",	"r26",	"r27",	"r28",	"r29",	"r30",	"sp",
+	"ip"
+    };

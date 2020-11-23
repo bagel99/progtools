@@ -1,0 +1,100 @@
+/* Per CPU (aka core) resources */
+const NSYNC =		7;		// 7 synchronizers per cpu
+const NTHREAD =		8;		// 8 threads per cpu
+const NCHAN =		32;		// 32 channel ends per cpu
+const NTIMER =		10;		// 10 timers per cpu
+const NCLOCK =		6;		// 6 clock blocks per cpu
+const NLOCK =		4;		// 4 locks per cpu
+const NLINK =		4;		// 4 links per cpu
+const NMEMSEGS =	3;		// 64KB RAM, 8KB OTP (+1) per cpu
+const CORE_RAM_BASE =	0x00010000;
+const CORE_RAM_SIZE =	0x00010000; 
+/* Per chip resources */
+const NCPU =		4;		// 4 cpus per chip
+const NXLINK =		16;		// 16 external links per chip
+
+const XCORE1_PFIX =	0xF000;
+const XCORE1_EOPR =	0xF800;
+
+const BPW =		32;		// bits per word
+
+/* Normal registers */
+type Register:
+(
+    R0,  R1,  R2,  R3, R4,  R5,  R6,  R7,
+    R8,  R9,  R10, R11,CP,  DP,  SP,  LR,
+    PC,  SR,  SPC, SSR,ET,  ED,  SED, KEP, 
+    KSP,
+    NONE
+);
+
+type Resources:
+(
+   PORT,  TIMER, CHANEND, SYNC, THREAD, LOCK, CLKBLK,
+   PS=11, CONFIG
+);
+
+/* Bits in Status Register */
+const SR_EEBLE: _uint32 = 0b0000_0001;
+const SR_IEBLE: _uint32 = 0b0000_0010;
+
+/* Processor State (PS) registers */
+type PSRegs:
+(   PS_RAM_BASE=0,    PS_VECTOR_BASE,   PS_XCORE_CTRL0,   PS_BOOT_CONFIG,
+    PS_BOOT_STATUS,   PS_SECURITY_CONFIG,
+    PS_DBG_SSR=16,    PS_DBG_SPC,       PS_DBG_SSP,       PS_DBG_T_NUM,
+    PS_DBG_T_REG,     PS_DBG_TYPE,      PS_DBG_DATA,
+    PS_DBG_RUN_CTRL=24,
+    PS_DBG_SCRATCH_0, PS_DBG_SCRATCH_1, PS_DBG_SCRATCH_2, PS_DBG_SCRATCH_3,
+    PS_DBG_SCRATCH_4, PS_DBG_SCRATCH_5, PS_DBG_SCRATCH_6, PS_DBG_SCRATCH_7,
+    PS_DBG_IBREAK_ADDR_0=48,
+      PS_DBG_IBREAK_ADDR_1, PS_DBG_IBREAK_ADDR_2, PS_DBG_IBREAK_ADDR_3,
+    PS_DBG_IBREAK_CTRL_0=64,
+      PS_DBG_IBREAK_CTRL_1, PS_DBG_IBREAK_CTRL_2, PS_DBG_IBREAK_CTRL_3,
+    PS_DBG_DWATCH_ADDR1_0=80,
+      PS_DBG_DWATCH_ADDR1_1, PS_DBG_DWATCH_ADDR1_2, PS_DBG_DWATCH_ADDR1_3,
+    PS_DBG_DWATCH_ADDR2_0=96,
+      PS_DBG_DWATCH_ADDR2_1, PS_DBG_DWATCH_ADDR2_2, PS_DBG_DWATCH_ADDR2_3
+    /* more to come */
+);
+
+type Exceptions:
+(   NONE=0,
+    LINK_ERROR=1,		    // ed = resource ID
+    ILLEGAL_PC=2,		    // ed = PC of instruction that generated it
+    ILLEGAL_INSTRUCTION=3,	// ed = 0
+    ILLEGAL_RESOURCE=4,	    // ed = resource ID
+    LOAD_STORE=5,		    // ed = data address
+    ILLEGAL_PS=6,		    // ed = PS ID
+    ARITHMETIC=7,		    // ed = 0
+    ECALL=8,			        // ed = 0
+    RESOURCE_DEP=9,		    // ed = resource ID */
+    KCALL=15
+);
+
+var CPUMemory: [NCPU]pMemory;
+
+package xs1
+{
+    proc MemoryInit()
+    {   var cpu: 0..NCPU;
+
+	    cpu = 0;
+	    while cpu < NCPU do
+	    {   CPUMemory[cpu] = pMemory(sys.malloc(Memory?size + NMEMSEGS*Segment?size));
+	        CPUMemory[cpu].seg[0].mem = sys.malloc(CORE_RAM_SIZE);
+	        CPUMemory[cpu].seg[0].beg = CORE_RAM_BASE;
+	        CPUMemory[cpu].seg[0].end = CORE_RAM_BASE+(CORE_RAM_SIZE-1);
+	        CPUMemory[cpu].seg[1].mem = 0;
+	        CPUMemory[cpu].seg[1].beg = 0;
+	        CPUMemory[cpu].seg[1].end = 0;
+	        CPUMemory[cpu].seg[2].mem = 0;
+	        CPUMemory[cpu].seg[2].beg = 0;
+	        CPUMemory[cpu].seg[2].end = 0;
+	        CPUMemory[cpu].nsegs = NMEMSEGS;
+	        cpu += 1;
+	    }
+    }
+}
+    
+
