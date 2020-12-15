@@ -1113,10 +1113,11 @@ fde.nl(); }
 	    Write(adr, QUAD, tmp);
     }
 
+if _defined(ABI_BGL) then {
     // WARNING
     // DoExit and DoEnter do not follow Mitch's definition
     // 1. The order of saving is different
-    // 2. The can save just one register but not all 32
+    // 2. It can save just one register but not all 32
     // 3. If the frame pointer is saved then the new frame pointer
     //    points to the old frame pointer.
     proc DoExit(start:_uint, stop:_uint, disp:_uint)
@@ -1147,6 +1148,43 @@ fde.nl(); }
 	}
 	reg[SP] = addr - (disp & 0x7FFF);
     }
+} else {
+    // WARNING
+    // DoExit and DoEnter do not follow Mitch's definition
+    // 1. The can save one register but not all 32
+    //    Mitch's spec can't save just one register
+    // 2. Frame pointer and bit F not yet implemented
+    proc DoExit(start:_uint, stop:_uint, disp:_uint)
+    {   var addr: Addr;
+
+	addr = reg[SP] + (disp & 0x7FFF);
+	loop
+	{   if start == LR then
+		reg[PC] = Read(addr, QUAD);
+	    else
+		reg[start] = Read(addr, QUAD);
+//fde.str("read reg "); fde.uint(start); fde.str(" from "); fde.hex64(addr); fde.nl();
+	    addr += 8;
+	  exit stop == start;
+	    start = (start+1) & 31;
+	}
+	reg[SP] = addr;
+    }
+
+    proc DoEnter(start:_uint, stop:_uint, disp:_uint)
+    {   var addr: Addr;
+
+	addr = reg[SP];
+	loop
+	{   addr -= 8;
+//fde.str("write reg "); fde.uint(stop); fde.str(" at "); fde.hex64(addr); fde.nl();
+	    Write(addr, QUAD, reg[stop]);
+	  exit stop == start;
+	    stop = (stop-1) & 31;
+	}
+	reg[SP] = addr - (disp & 0x7FFF);
+    }
+}
 
     proc OpMemImm(inst: Inst)
     {   var op: OPMEMIMM = OPMEMIMM(inst);

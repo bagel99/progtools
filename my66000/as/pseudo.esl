@@ -250,6 +250,7 @@
 	{ "internal",  8,10, 1 },
 	{ "hidden",    6,10, 2 },
 	{ "protected", 9,10, 3 },
+	{ "ident",     5, 0, 0 },
     };
 
     proc PseudoOp(s: @[]_byte, n: _uint)

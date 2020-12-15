@@ -304,17 +304,27 @@
 	  "cvt", "cvt", "???", "???", "rnd", "???", "???", "???",
 	  "???", "???", "???", "???", "???", "???", "???", "???"
 	};
-	const Cvt0Sfx: [64]@[]_byte =
+	const Cvt0Sfx: [32]@[]_byte =
 	{ "du", "su", "??", "??", "du", "du", "du", "du",
 	  "fu", "??", "??", "??", "su", "su", "su", "su",
 	  "ud", "fd", "??", "??", "ud", "ud", "ud", "ud",
 	  "sd", "??", "??", "??", "sd", "sd", "sd", "sd"
 	};
-	const Cvt1Sfx: [64]@[]_byte =
+	const Cvt1Sfx: [32]@[]_byte =
 	{ "ds", "??", "us", "??", "ds", "ds", "ds", "ds",
 	  "fs", "??", "??", "??", "fs", "fs", "fs", "fs",
 	  "uf", "df", "df", "df", "uf", "uf", "uf", "uf",
 	  "sf", "??", "df", "df", "sf", "sf", "sf", "sf"
+	};
+	const TransName: [32]@[]_byte =
+	{ "fln2",   "fln",  "flog",      "???",
+	  "fexp2",  "fexp", "fexp10",    "???",
+	  "frcp",   "???",   "???",      "???",
+	  "frsqrt", "fsqrt", "???",      "???",
+	  "fln2p1", "flnp1", "flogp1",   "???",
+	  "fexp2m1","fexpm1","fexp10m1", "???",
+	  "fsin",   "fcos",  "ftan",     "???",
+	  "fasin",  "facos", "fatan",    "???"
 	};
 
 	if opa.minor == 0b000000 then	// HR
@@ -344,8 +354,14 @@
 	    is 0b10001 then		// CVT
 	    {   fde.str("cvt"); fde.str(Cvt1Sfx[opb.func]);
 	    }
-	    else
+	    is 0b00110..0b01001	then	// EXPON..FF1
 		fde.str(OpName[opb.minor]);
+	    is 0b10100 then		// RND
+	    {
+		fde.str("rnd??");
+	    }
+	    is 0b11000 then		// TRANS
+		fde.str(TransName[opb.func]);
 	    fde.chr('\t');
 	    PReg(opb.rd); fde.chr(',');
 	    PReg(opb.rs1);
