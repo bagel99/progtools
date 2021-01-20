@@ -3,7 +3,7 @@ import sys;
 package bufin
 {
 
-    var buf: [4096]_byte;
+    var buf: [8192]_byte;
 
     var fdi: sys.fildes;
     var beg, len: _uint;	// current beginning and length of valid data

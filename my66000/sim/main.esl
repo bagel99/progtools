@@ -142,7 +142,7 @@ proc SegmentCheck(): boolean
 	    }
 	}
     }
-    if db > 0 then
+    if db != 0 then
     {   fde.str("NSegs="); fde.uint(chip.NSegs); fde.nl();
 	for i from 0 to chip.NSegs-1 do
 	{   fde.str("\t["); fde.uint(i); fde.str("] ");
@@ -247,7 +247,7 @@ proc main(argc:_uint, argv:@[]@[]_byte):_int //[[global]]
 	while i < n do
 	{
 	    i += 1;
-if db > 0 then {fde.uint(i); fde.chr('\t'); }
+if db&1 != 0 then {fde.uint(i); fde.chr('\t'); }
 	  exit !cpu.Run();
 	}
 	if cpu.fault == EXIT then

@@ -156,7 +156,7 @@ fde.str("write error "); fde.int(rv); fde.nl();
 	}
 	else
 	{
-fde.str("** Unimplemented system call\n");
+fde.str("** Unimplemented system call "); fde.uint(n); fde.nl();
 	}
     }
 
@@ -488,7 +488,7 @@ import float;
 
     proc Convert(src: Word, func: _uint): Word
     {
-if db > 2 then {
+if db&4 != 0 then {
 fde.str("cvt "); fde.hex8(_uint8(func));
 fde.str(" src="); fde.hex64(src); fde.nl(); }
 	if func >> 4
@@ -669,7 +669,7 @@ fde.str(" src="); fde.hex64(src); fde.nl(); }
     {   var op: OPVEC = OPVEC(inst);
 
 	vreg = op.rd;
-fde.str("vreg="); fde.uint8(vreg); fde.nl();
+if db&16 != 0 then { fde.str("vreg="); fde.uint8(vreg); fde.nl(); }
 	reg[op.rd] = reg[PC];
 	vmode = true;
     }
@@ -722,16 +722,15 @@ fde.str("vreg="); fde.uint8(vreg); fde.nl();
 	var what: What;
 
 	loop = reg[op.rs1];
-fde.str("loop=R"); fde.uint(op.rs1);
-fde.str("=0x"); fde.hex32(loop);
-fde.str(" fmt="); fde.uint((inst >> 13)&7);
-fde.str(" cnd="); fde.hex8(op.rd);
-fde.str(" cmp=");
+if db&16 != 0 then {
+fde.str("loop=R"); fde.uint(op.rs1); fde.str("=0x"); fde.hex32(loop);
+fde.str(" fmt="); fde.uint((inst >> 13)&7); fde.str(" cnd="); fde.hex8(op.rd);
+fde.str(" cmp="); }
 	fmt = (inst >> 13) & 7;
 	if fmt
 	is 0b000, 0b001, 0b101 then
 	{   cmp = reg[op.rs2];
-fde.chr('R'); fde.uint(op.rs2); fde.chr('=');
+if db&16 != 0 then { fde.chr('R'); fde.uint(op.rs2); fde.chr('='); }
 	}
 	is 0b010 then
 	{   cmp = op.rs2;
@@ -747,13 +746,12 @@ fde.chr('R'); fde.uint(op.rs2); fde.chr('=');
 	}
 	else
 	    Fault("Illegal loop option", inst);
-fde.str("0x"); fde.hex32(cmp);
-fde.str(" inc=");
+if db&16 != 0 then { fde.str("0x"); fde.hex32(cmp); fde.str(" inc="); }
 
 	if fmt
 	is 0b000, 0b100 then
 	{   inc = reg[op.rs3];
-fde.chr('R'); fde.uint(op.rs3); fde.chr('=');
+if db&16 != 0 then { fde.chr('R'); fde.uint(op.rs3); fde.chr('='); }
 	}
 	is 0b001, 0b010 then
 	{   inc = op.rs3;
@@ -768,8 +766,7 @@ fde.chr('R'); fde.uint(op.rs3); fde.chr('=');
 	}
 	what = WhatTab[op.rd];
 	if what.increg then add = inc; else add = 1;
-fde.str("0x"); fde.hex32(add);
-fde.nl();
+if db&16 != 0 then { fde.str("0x"); fde.hex32(add); fde.nl(); }
 	var continue: boolean = true;
 	var result: CondCode;
 	if what.comp2 != Z then
@@ -779,7 +776,7 @@ fde.nl();
 	    {   result = CondCode(DoCompare(inc, cmp));
 		continue = result[what.comp2];
 	    }
-if !continue then fde.str("condition terminates\n");
+if db&16 != 0 && !continue then { fde.str("condition terminates\n"); }
 	}
 	if continue then
 	{   loop += add;
@@ -787,7 +784,7 @@ if !continue then fde.str("condition terminates\n");
 	    if what.comp1 != Z then
 	    {   result = CondCode(DoCompare(loop, cmp));
 		continue = result[what.comp1];
-if !continue then fde.str("loop counter terminates\n");
+if db&16 != 0 && !continue then { fde.str("loop counter terminates\n"); }
 	    }
 	}
 	vmode = continue;
@@ -932,11 +929,29 @@ if !continue then fde.str("loop counter terminates\n");
 		    reg[opb.rd] = _clznz(src);
 	    }
 	}
+	is 0b001100 then			// SWAP
+	{   reg[opb.rd] = (_ror(_uint16(src), 8) << 48) |
+			  (_ror(_uint16(src >> 16), 8) << 32) |
+			  (_ror(_uint16(src >> 32), 8) << 16) |
+			  (_ror(_uint16(src >> 48), 8));
+	}
+	is 0b001101 then			// SWAP32
+	{   var tmp32: _uint32;
+	    tmp32 = (_ror(_uint16(src), 8) << 16) |
+		     _ror(_uint16(src >> 16), 8);
+	    reg[opb.rd] = tmp32;
+	}
+	is 0b001110 then			// SWAP16
+	{   var tmp16: _uint16;
+	    tmp16 = _ror(_uint16(src), 8);
+	    reg[opb.rd] = tmp16;
+	}
 	is 0b010000 then reg[opb.rd] = Convert(src, opb.func);
 	is 0b010001 then reg[opb.rd] = Convert(src, opb.func+0b100000);
 	else
 	    Fault("Unimplemented instruction1", inst);
     }
+
     proc UpdateShadow(take: boolean, inst: Inst)
     {	var op: OPPC = OPPC(inst);	// or OPPB
 	var mask: _uint8;
@@ -945,7 +960,7 @@ if !continue then fde.str("loop counter terminates\n");
 
 	cnt  = op.ml+1;
 	mask = 0xFF >> (8 - cnt);
-if db > 2 then {
+if db&4 != 0 then {
 fde.str("\tUpdateShadow: ip="); fde.hex32(_uint32(reg[PC]));
 fde.str(" take="); fde.uint8(_uint8(take));
 fde.str(" cnt="); fde.uint8(cnt);
@@ -965,11 +980,11 @@ fde.str(" at ip="); fde.hex32(_uint32(reg[PC])); fde.nl();
 		return;
 	    }
 	}
-if db > 2 then {
+if db&4 != 0 then {
 fde.str(" old="); fde.hex8(shadow);
 fde.str(" this="); fde.hex8(new); }
 	shadow = new | (shadow & ~mask);
-if db > 2 then {
+if db&4 != 0 then {
 fde.str(" new="); fde.hex8(shadow); fde.nl(); }
     }
 
@@ -1067,7 +1082,7 @@ fde.str(" new="); fde.hex8(shadow); fde.nl(); }
 		adr += inx;
 	    }
 	}
-if db > 2 then {
+if db&4 != 0 then {
 fde.str("\nadr="); fde.hex64(adr);
 fde.nl(); }
 	if op.minor
@@ -1295,7 +1310,7 @@ if _defined(ABI_BGL) then {
 	{   end = reg[PC] + (op.imm * (1 << op.sz));
 	    end = (end + 3) & ~3;
 	    addr = reg[op.rs1];
-if db > 2 then {
+if db&4 != 0 then {
 fde.str("OpJt end="); fde.hex32(end);
 fde.str(" addr="); fde.hex32(addr); }
 	    addr = reg[PC] + (addr << op.sz);
@@ -1308,11 +1323,11 @@ fde.str(" addr="); fde.hex32(addr); }
 	    is 1 then offs = Sext(15,Read(addr, HALF));
 	    is 2 then offs = Sext(31,Read(addr, WORD));
 	    is 3 then offs = Read(addr, QUAD);
-if db > 2 then {
+if db&4 != 0 then {
 fde.str(" offs="); fde.int64(offs); }
 	    newpc = (addr & ~3) + (offs << 2);
 	}
-if db > 2 then {
+if db&4 != 0 then {
 fde.str(" newpc="); fde.hex32(_uint32(newpc)); fde.nl(); }
 	if op.call then
 	    reg[0] = end;
@@ -1333,7 +1348,7 @@ fde.str(" newpc="); fde.hex32(_uint32(newpc)); fde.nl(); }
 
 	creg = op.rd;
 	cbits = op.imm;
-if db > 1 then {
+if db&4 != 0then {
 fde.str("creg="); fde.uint8(creg);
 fde.str(" cbits=0x"); fde.hex16(cbits); fde.nl();
 }
@@ -1357,7 +1372,7 @@ fde.str(" cbits=0x"); fde.hex16(cbits); fde.nl();
 		    xlength += 1;
 	    }
 	}
-if db > 1 then {
+if db&4 != 0 then {
 fde.str("ExtraLen="); fde.uint(xlength); fde.nl();
 }
 	return xlength * 4;	// words to bytes
@@ -1383,11 +1398,11 @@ fde.str("ExtraLen="); fde.uint(xlength); fde.nl();
 	skip = 0;
 	if pcnt > 0 then
 	{   skip = shadow & 1;
-if db > 2 then { fde.hex8(shadow); fde.chr(' '); }
+if db&4 != 0 then { fde.hex8(shadow); fde.chr(' '); }
 	    shadow = shadow >> 1;
 	    pcnt -= 1;
 	}
-if db > 0 then {
+if db&1 != 0 then {
 fde.hex32(_uint32(instpc));
 if skip != 0 then fde.chr('!'); else fde.chr(':');
 disInst(instpc);
