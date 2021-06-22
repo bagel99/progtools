@@ -57,28 +57,20 @@ package segment
         prev:  Segment;		// previous active segment
     };
     var curseg, tsegm, dsegm, bsegm, rsegm, usegm: Segment;
-
-    const tsegmname = ".text";
-    const dsegmname = ".data";
-    const bsegmname = ".bss";
-    const rsegmname = ".rodata";
-    const usegmname = ".undef";
-
+    var nxtsecno: _uint16 = 0;
     /*
      * Relocation fixups
      */
     type RKind:
     (	NONE,
 	ABS64, ABS32, ABS16, ABS8,
-	REL64, REL32,
-	REL26, REL16,
+	REL64, REL32, REL26, REL16,
 	JT8, JT16, JT32, JT64
     );
     const KindName: [RKind]@[]_byte =
     { "NONE",
       "ABS64", "ABS32", "ABS16", "ABS8",
-      "REL64", "REL32",
-      "REL26", "REL16",
+      "REL64", "REL32", "REL26", "REL16",
       "JT8", "JT16", "JT32", "JT64"
     };
 
@@ -225,7 +217,7 @@ package segment
     }
 
     // Create a new segment
-    proc New(name: @[]_byte, flags: SegmentFlags, secno: _uint): Segment
+    proc New(name: @[]_byte, flags: SegmentFlags): Segment
     {   var ps: Segment;
 
 	ps = _new(SegmentT);
@@ -236,7 +228,8 @@ package segment
 	ps.nbloks = 0;
 	ps.flags = flags;
 	ps.align =  0;
-	ps.secnum = secno;
+	ps.secnum = nxtsecno;
+	nxtsecno += 1;
 	if list.head == 0 then
 	    list.head = ps;
 	else
@@ -255,6 +248,30 @@ package segment
 	}
     }
 
+    // Find segment by name
+    proc ChangeToName(s: @[]_byte, len: _uint, flags: SegmentFlags)
+    {   var seg: Segment;
+	var n: _uint;
+
+	seg = list.head;
+	while seg != 0 do
+	{   n = _zlen(seg.name@);
+	    if n == len && seg.name[0:n] == s[0:n] then
+	    {   Change(seg);
+		return;
+	    }
+	    seg = seg.next;
+	}
+	// Not an existing segment, start a new one and change to it
+	type String: []_byte;
+	var name: @String;
+	name = _new(String(len+1));
+	name[0:len] = s[0:len];
+	name[len] = 0;
+	seg = New(name, flags);
+	Change(seg);
+    }
+
     proc ChangeOp(n: _uint)
     {
 	if n
@@ -268,11 +285,11 @@ package segment
 
     proc Init()
     {
-	usegm = New(usegmname, {}, 0);
-	tsegm = New(tsegmname, {.ALLOC=true, .EXEC=true}, 1);
-	rsegm = New(rsegmname, {.ALLOC=true}, 2);
-	dsegm = New(dsegmname, {.ALLOC=true, .WRITE=true}, 3);
-	bsegm = New(bsegmname, {             .WRITE=true}, 4);
+	usegm = New(".undef",  {}                         );
+	tsegm = New(".text",   {.ALLOC=true, .EXEC=true}  );
+	rsegm = New(".rodata", {.ALLOC=true}              );
+	dsegm = New(".data",   {.ALLOC=true, .WRITE=true} );
+	bsegm = New(".bss",    {             .WRITE=true} );
 	Change(tsegm);
 	list.prev = tsegm;
     }

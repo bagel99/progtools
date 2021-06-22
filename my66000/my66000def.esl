@@ -24,8 +24,8 @@
 	I:	0..1;		// 15
 	s1:	0..1;		// 14
 	s2:	0..1;		// 13
-	rs3:	REG;		// 12..8
-	minor:	0..0b111;	// 7..5
+	minor:	0..0b111;	// 12..10
+	rs3:	REG;		// 9..5
 	rs2:	REG;		// 4..0
     }: packed, msb, bits(32);
 
@@ -154,14 +154,14 @@
 
     type Conditions:	// for BCND
     (	NM,  NN,  EQ0, NE0, GE0, GT0, LE0, LT0,		// integer
-	FCM, FUN, FEQ, FNE, FGE, FLT, FLE, FGT,		// double
-	FDE, _,   FIF, _,   FNA, _,   FNEG,_,		// double
+	FOR, FUN, FEQ, FNE, FGE, FLT, FGT, FLE,		// double
+	FORF,FUNF,FEQF,FNEF,FGEF,FLTF,FGTF,FLEF,	// single
 	IN,  EXIT,_,   _,   _,   _,   RFE, AL
     );
     const CondNames: [Conditions][5]_byte =
     {	"nm",  "nn",  "eq0", "ne0", "ge0", "gt0", "le0", "lt0",
-	"fcm", "fun", "feq", "fne", "fge", "flt", "fle", "fgt",
-	"fde", "",    "fif", "",    "fna", "",    "fneg", "",
+	"for", "fun", "feq", "fne", "fge", "flt", "fgt", "fle",
+	"forf","funf","feqf","fnef","fgef","fltf","fgtf","flef",
 	"in",  "exit","",    "",    "",    "",    "rfe", "al"
     };
     type CBits:		// result of CMP

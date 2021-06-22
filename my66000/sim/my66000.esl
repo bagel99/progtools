@@ -40,15 +40,24 @@ package my66000
     const PC = 32;	// not a general register
 
     var   reg:    [33]Word;	// includes PC
+    // ThreadHeader word 0
     var   instpc: Inst;		// value of PC for this instruction
-    var   shadow: _uint8;	// predication mask, 1 for skip
-    var   pcnt:   _uint8 = 0;	// predication count
+    // ThreadHeader word 1, but not packed
     var   cbits:  _uint16 = 0;	// carry bits
     var   creg:   0..31;	// carry register
+    var   roundm: 0..7;		// FP rounding mode
+    var   flags:  0..0b11111;	// FP sticky exceptions
+    var   vmode:  boolean = false; // in vector mode
+    var   vreg:   0..31;	// vector loop register
+    var   shadow: _uint8;	// predication mask, 1 for skip
+    // ThreadHeader word 2
+    var	  enabled:_uint64;
+    // ThreadHeader word 3
+    var	  raised: _uint64;
+    // Other status
+    var   pcnt:   _uint8 = 0;	// predication count
     var	  CI: boolean = false;	// for this instruction
     var   CO: boolean = false;	// "
-    var   vreg:   0..31;	// vector loop register
-    var   vmode: boolean = false; // in vector mode
     var   fault:  Faults = NONE;
     var   faultarg: UImm;
     var   rlast: _uint = 0;
@@ -341,6 +350,30 @@ import disinst;
 	return Word(src);
     }
 
+    // EXPERIMENTAL
+    proc DoBITR(src: SWord, w: _uint, o: _uint): Word
+    {   var dst: Word;
+	var msk: Word;
+	var n: _uint;
+
+	assert w != 0;
+	msk = (1 << w) - 1;
+//fde.str("BITR w="); fde.uint(w); fde.str(" o="); fde.uint(o);
+//fde.str(" msk="); fde.hex64(msk); fde.nl();
+	dst = 0;
+	n = 64;
+	loop
+	{   dst |= src & msk;
+	  exit n <= w;
+	    dst = dst << w;
+	    src = src >> w;
+	    n -= w;
+	}
+	if o != 0 then
+	    dst = dst >> o;
+	return dst;
+    }
+
     proc DoINS(src1: Word, src2: Word, w: _uint, o: _uint): Word
     {   var mask: _uint64;
 
@@ -439,7 +472,7 @@ import disinst;
 
 import float;
 
-    proc DoFloatCompare(s1: _float64, s2: _float64): Word
+    proc DoDoubleCompare(s1: _float64, s2: _float64): Word
     {   var fcc: FCondCode = {};
 	var tmp: Word;
 
@@ -458,6 +491,53 @@ import float;
 	    if 0.0 <= s1 && s1 <  s2 then fcc[FIN] = true;
 	    if 0.0 <  s1 && s1 <= s2 then fcc[CIN] = true;
 	    if 0.0 <= s1 && s1 <= s2 then fcc[RIN] = true;
+	    // The remainder only looks at s1
+	    if !s1.isNeg() then
+	    {	if s1.getExp() == 0x7FF then fcc[F1PI] = true;
+		else
+		{   if s1.getExp() == 0 then
+		    {	if s1 == 0.0 then fcc[F1PZ] = true;
+			else		  fcc[F1PD] = true;
+		    }
+		    else		  fcc[F1PN] = true;
+		}
+	    }
+	    else
+	    {	if s1.getExp() == 0x7FF then fcc[F1NI] = true;
+		else
+		{   if s1.getExp() == 0 then
+		    {	if s1 == 0.0 then fcc[F1NZ] = true;
+			else		  fcc[F1ND] = true;
+		    }
+		    else		  fcc[F1NN] = true;
+		}
+	    }
+	}
+	tmp = Word(fcc);
+	// Mitch say this is right, but I'm dubious
+	tmp = tmp | (((~tmp) << 8) & 0x3f00);
+	return tmp;
+    }
+
+    proc DoSingleCompare(s1: _float32, s2: _float32): Word
+    {   var fcc: FCondCode = {};
+	var tmp: Word;
+
+	if s1.isNaN() || s2.isNaN() then
+	{   fcc[UN] = true;
+	}
+	else
+	{   fcc[OR] = true;
+	    if s1 == s2 then { fcc[EQ] = true; }
+			else { fcc[NE] = true; }
+	    if s1 >= s2 then { fcc[GE] = true; }
+			else { fcc[LT] = true; }
+	    if s1 <= s2 then { fcc[LE] = true; }
+			else { fcc[GT] = true; }
+	    if s1 >  0.0 && s1 <  s2 then fcc[SIN] = true;
+	    if s1 >= 0.0 && s1 <  s2 then fcc[FIN] = true;
+	    if s1 >  0.0 && s1 <= s2 then fcc[CIN] = true;
+	    if s1 >= 0.0 && s1 <= s2 then fcc[RIN] = true;
 	    // The remainder only looks at s1
 	    if !s1.isNeg() then
 	    {	if s1.getExp() == 0x7FF then fcc[F1PI] = true;
@@ -653,13 +733,35 @@ fde.str(" src="); fde.hex64(src); fde.nl(); }
 		tmp = DoSLL(src1, (src2>>32)&0x3F, src2&0x3F);
 	}
 	is 0b110001 then	// FADD/FSUB
-	    tmp = Word(_float64(src1) + _float64(src2));
+	{   if op.S != 0 then	// single
+		tmp = Word(_uint32(_float32(_uint32(src1)) + _float32(_uint32(src2))));
+	    else
+		tmp = Word(_float64(src1) + _float64(src2));
+	}
 	is 0b110010 then	// FMUL
-	    tmp = Word(_float64(src1) * _float64(src2));
+	{   if op.S != 0 then	// single
+		tmp = Word(_uint32(_float32(_uint32(src1)) * _float32(_uint32(src2))));
+	    else
+		tmp = Word(_float64(src1) * _float64(src2));
+	}
 	is 0b110011 then	// FDIV
-	    tmp = Word(_float64(src1) / _float64(src2));
+	{   if op.S != 0 then	// single
+		tmp = Word(_uint32(_float32(_uint32(src1)) / _float32(_uint32(src2))));
+	    else
+		tmp = Word(_float64(src1) / _float64(src2));
+	}
 	is 0b110100 then	// FCMP
-	    tmp = DoFloatCompare(_float64(src1), _float64(src2));
+	{   if op.S != 0 then	// single
+		tmp = DoSingleCompare(_float32(_uint32(src1)), _float32(_uint32(src2)));
+	    else
+		tmp = DoDoubleCompare(_float64(src1), _float64(src2));
+	}
+	is 0b111001 then	// CSGN
+	{   if op.S != 0 then	// single
+		tmp = (src1 & 0x7FFF_FFFF) | (src2 & 0x8000_0000);
+	    else
+		tmp = (src1 & 0x7FFFFFFF_FFFF_FFFF) | (src2 & 0x80000000_00000000);
+	}
 	else
 	    Fault("Unimplemented instruction2", inst);
 	reg[op.rd] = tmp;
@@ -792,7 +894,7 @@ if db&16 != 0 && !continue then { fde.str("loop counter terminates\n"); }
 	    reg[PC] = reg[vreg];
     }
 
-    proc DoFmac(op: OP3)
+    proc DoFmacD(op: OP3)
     {   var src2, src3, tmp: _float64;
 
 	src2 = _float64(reg[op.rs2]);
@@ -803,11 +905,6 @@ if db&16 != 0 && !continue then { fde.str("loop counter terminates\n"); }
 		reg[PC] += 8;
 	    }
 	    else		// 32-bit, convert to 64
-//	    {	var u32: _uint32;
-//		var f32: _float32;
-//		u32 = _uint32(Read(reg[PC], WORD));
-//		f32 = _float32(u32);
-//		tmp = f32;
 	    {   tmp = _float32(_uint32(Read(reg[PC], WORD)));
 		reg[PC] += 4;
 	    }
@@ -825,12 +922,40 @@ if db&16 != 0 && !continue then { fde.str("loop counter terminates\n"); }
 	reg[op.rd] = Word((_float64(reg[op.rs1]) * src2) + src3);
     }
 
+    proc DoFmacF(op: OP3)
+    {   var src2, src3, tmp: _float32;
+
+	src2 = _float32(_uint32(reg[op.rs2]));
+	src3 = _float32(_uint32(reg[op.rs3]));
+	if op.I != 0 then	// has immediate
+	{   if op.s1 != 0 then	// 64-bit weird
+	    {   tmp = _float32*(_float64(Read(reg[PC], QUAD)));
+		reg[PC] += 8;
+	    }
+	    else		// 32-bit
+	    {   tmp = _float32(_uint32(Read(reg[PC], WORD)));
+		reg[PC] += 4;
+	    }
+	    if op.s2 != 0 then
+		src2 = tmp;
+	    else
+		src3 = tmp;
+	}
+	else
+	{   if op.s1 != 0 then
+		src2 = -src2;
+	    if op.s2 != 0 then
+		src3 = -src3;
+	}
+	reg[op.rd] = Word(_uint32((_float32(_uint32(reg[op.rs1])) * src2) + src3));
+    }
+
     proc Op3(inst: Inst)
     {   var op: OP3 = OP3(inst);
 	var tmp3: Word;
 
 	if op.minor
-	is 0b000 then	// the varieties of MUX
+	is 0b001 then	// the varieties of MUX
 	{   if op.I != 0 then	// has immediate
 	    {	if op.s1 != 0 then	// 64-bit
 		{   tmp3 = Read(reg[PC], QUAD);
@@ -867,7 +992,7 @@ if db&16 != 0 && !continue then { fde.str("loop counter terminates\n"); }
 		}
 	    }
 	}
-	is 0b010 then			// INS
+	is 0b011 then			// INS
 	{   var w,o: _uint;
 	    if op.I != 0 then	// has immediate
 	    {	if op.s1 != 0 then	// 64-bit (never used?)
@@ -888,7 +1013,8 @@ if db&16 != 0 && !continue then { fde.str("loop counter terminates\n"); }
 	    o = tmp3 & 0b111111;
 	    reg[op.rd] = DoINS(reg[op.rs1], reg[op.rs2], w, o);
 	}
-	is 0b100 then DoFmac(op);	// FMAC
+	is 0b000 then DoFmacD(op);	// FMAC
+	is 0b100 then DoFmacF(op);	// FMACF
 	is 0b111 then DoLoop(inst);	// LOOP
 	else
 	    Fault("Unimplemented instruction3", inst);
@@ -903,15 +1029,65 @@ if db&16 != 0 && !continue then { fde.str("loop counter terminates\n"); }
 	// FIXME - the only Op1 implement so for is HR for return
 	if op.minor
 	is 0b000000 then			// HR
-	{   if op.func == 0 then		// IP (aka PC)
+	{   if op.func
+	    is 0 then		// IP (aka PC)
 	    {   if op.r != 0 then		// R
 		    reg[op.rd] = reg[PC];
 		if op.w != 0 then		// W
 		    reg[PC] = src;
 	    }
+//	    is 1 then		// Modes
+	    is 2 then		// Active
+	    {   if op.r != 0 then		// R
+		    reg[op.rd] = raised;
+		if op.w != 0 then		// W
+		    raised = src;
+	    }
+	    is 3 then		// Enabled
+	    {   if op.r != 0 then		// R
+		    reg[op.rd] = enabled;
+		if op.w != 0 then		// W
+		    enabled = src;
+	    }
+	    is 4 then		// Shadow
+	    {   if op.r != 0 then		// R
+		    reg[op.rd] = shadow;
+		if op.w != 0 then		// W
+		    shadow = src;
+	    }
+	    is 5 then		// Flags
+	    {   if op.r != 0 then		// R
+		    reg[op.rd] = flags;
+		if op.w != 0 then		// W
+		    flags = src;
+	    }
+	    is 6 then		// Rounding Modes
+	    {   if op.r != 0 then		// R
+		    reg[op.rd] = roundm;
+		if op.w != 0 then		// W
+		    roundm = src;
+		// FIXME - if rounding modes set, set them on host too
+	    }
+//	    is 7 then		// Why
 	    else
 	        Fault("Unimplemented HR function", inst);
 	}
+	is 0b000101 then
+	{   if opb.func == 0 then
+	    {	if opb.s == 0 then
+		    reg[op.rd] = _abs(src);	// ABS
+		else
+		    reg[op.rd] = src;		// MOV
+	    }
+	    else
+	    {	if opb.s == 0 then
+		    reg[op.rd] = src & 0x7FFF_FFFF_FFFF_FFFF;
+		else
+		    reg[op.rd] = src & 0xFFFF_FFFF_7FFF_FFFF;
+	    }
+	}
+	is 0b000110 then Fault("Unimplemented EXPON", inst);
+	is 0b000111 then Fault("Unimplemented FRACT", inst);
 	is 0b001000 then			// POP
 	{   if opb.s1 != 0 then
 		src = ~src;
@@ -929,25 +1105,9 @@ if db&16 != 0 && !continue then { fde.str("loop counter terminates\n"); }
 		    reg[opb.rd] = _clznz(src);
 	    }
 	}
-	is 0b001100 then			// SWAP
-	{   reg[opb.rd] = (_ror(_uint16(src), 8) << 48) |
-			  (_ror(_uint16(src >> 16), 8) << 32) |
-			  (_ror(_uint16(src >> 32), 8) << 16) |
-			  (_ror(_uint16(src >> 48), 8));
-	}
-	is 0b001101 then			// SWAP32
-	{   var tmp32: _uint32;
-	    tmp32 = (_ror(_uint16(src), 8) << 16) |
-		     _ror(_uint16(src >> 16), 8);
-	    reg[opb.rd] = tmp32;
-	}
-	is 0b001110 then			// SWAP16
-	{   var tmp16: _uint16;
-	    tmp16 = _ror(_uint16(src), 8);
-	    reg[opb.rd] = tmp16;
-	}
 	is 0b010000 then reg[opb.rd] = Convert(src, opb.func);
 	is 0b010001 then reg[opb.rd] = Convert(src, opb.func+0b100000);
+	is 0b010100 then Fault("Unimplemented RNDxx", inst);
 	else
 	    Fault("Unimplemented instruction1", inst);
     }
@@ -1014,6 +1174,7 @@ fde.str(" new="); fde.hex8(shadow); fde.nl(); }
 	is 0b1001 then reg[ops.rd] = DoSRA(SWord(src), ops.w, ops.o);
 	is 0b1010 then reg[ops.rd] = DoSLL(src, ops.w, ops.o);
 	is 0b1011 then reg[ops.rd] = DoSLA(SWord(src), ops.w, ops.o);
+	is 0b1100 then reg[ops.rd] = DoBITR(src, ops.w, ops.o);	// EXPERIMENTAL
 	else
 	    Fault("Unimplemented shift instruction", inst);
     }
@@ -1128,57 +1289,24 @@ fde.nl(); }
 	    Write(adr, QUAD, tmp);
     }
 
-if _defined(ABI_BGL) then {
-    // WARNING
-    // DoExit and DoEnter do not follow Mitch's definition
-    // 1. The order of saving is different
-    // 2. It can save just one register but not all 32
-    // 3. If the frame pointer is saved then the new frame pointer
-    //    points to the old frame pointer.
-    proc DoExit(start:_uint, stop:_uint, disp:_uint)
-    {   var addr: Addr;
-
-	addr = reg[SP] + (disp & 0x7FFF);
-	loop
-	{   if stop == LR then
-		reg[PC] = Read(addr, QUAD);
-	    else
-		reg[stop] = Read(addr, QUAD);
-	    addr += 8;
-	  exit stop == start;
-	    stop = (stop-1) & 31;
-	}
-	reg[SP] = addr;
-    }
-
-    proc DoEnter(start:_uint, stop:_uint, disp:_uint)
-    {   var addr: Addr;
-
-	addr = reg[SP];
-	loop
-	{   addr -= 8;
-	    Write(addr, QUAD, reg[start]);
-	  exit start == stop;
-	    start = (start+1) & 31;
-	}
-	reg[SP] = addr - (disp & 0x7FFF);
-    }
-} else {
     // WARNING
     // DoExit and DoEnter do not follow Mitch's definition
     // 1. The can save one register but not all 32
     //    Mitch's spec can't save just one register
-    // 2. Frame pointer and bit F not yet implemented
+    // 2. Frame pointer and bits FS not yet implemented
     proc DoExit(start:_uint, stop:_uint, disp:_uint)
     {   var addr: Addr;
 
-	addr = reg[SP] + (disp & 0x7FFF);
+	if (disp & 1) != 0 then
+	    fde.str("Exit S bit ignored\n");
+	if (disp & 2) != 0 then
+	    fde.str("Exit F bit ignored\n");
+	addr = reg[SP] + (disp & 0xFFF8);
 	loop
 	{   if start == LR then
 		reg[PC] = Read(addr, QUAD);
 	    else
 		reg[start] = Read(addr, QUAD);
-//fde.str("read reg "); fde.uint(start); fde.str(" from "); fde.hex64(addr); fde.nl();
 	    addr += 8;
 	  exit stop == start;
 	    start = (start+1) & 31;
@@ -1189,17 +1317,19 @@ if _defined(ABI_BGL) then {
     proc DoEnter(start:_uint, stop:_uint, disp:_uint)
     {   var addr: Addr;
 
+	if (disp & 1) != 0 then
+	    fde.str("Enter S bit ignored\n");
+	if (disp & 2) != 0 then
+	    fde.str("Enter F bit ignored\n");
 	addr = reg[SP];
 	loop
 	{   addr -= 8;
-//fde.str("write reg "); fde.uint(stop); fde.str(" at "); fde.hex64(addr); fde.nl();
 	    Write(addr, QUAD, reg[stop]);
 	  exit stop == start;
 	    stop = (stop-1) & 31;
 	}
-	reg[SP] = addr - (disp & 0x7FFF);
+	reg[SP] = addr - (disp & 0xFFF8);
     }
-}
 
     proc OpMemImm(inst: Inst)
     {   var op: OPMEMIMM = OPMEMIMM(inst);
@@ -1292,6 +1422,20 @@ if _defined(ABI_BGL) then {
 	is GT0 then take = SWord(tmp) >  0;
 	is LE0 then take = SWord(tmp) <= 0;
 	is LT0 then take = SWord(tmp) <  0;
+	is FEQ then take = _float64(tmp) == 0.0;
+	is FNE then take = _float64(tmp) != 0.0;
+	is FGE then take = _float64(tmp) >= 0.0;
+	is FLT then take = _float64(tmp) <  0.0;
+	is FGT then take = _float64(tmp) >  0.0;
+	is FLE then take = _float64(tmp) >= 0.0;
+	is FEQF then take = _float32(_uint32(tmp)) == 0.0;
+	is FNEF then take = _float32(_uint32(tmp)) != 0.0;
+	is FGEF then take = _float32(_uint32(tmp)) >= 0.0;
+	is FLTF then take = _float32(_uint32(tmp)) <  0.0;
+	is FGTF then take = _float32(_uint32(tmp)) >  0.0;
+	is FLEF then take = _float32(_uint32(tmp)) >= 0.0;
+	else
+	    Fault("Unimplemented branch condition instruction", inst);
 	if take then
 	{   shadow = 0;
 	    reg[PC] = (Sext(15, inst&0xFFFF) << 2) + instpc;

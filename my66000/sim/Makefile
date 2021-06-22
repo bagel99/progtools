@@ -1,4 +1,4 @@
-ESLC=   eslc
+ESLC=   eslc -X
 INC=	-I.. -I../../libsim -I../../libelf -I../../lib
 LIB=	../../lib
 DBG=
