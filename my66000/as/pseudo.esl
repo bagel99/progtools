@@ -208,20 +208,27 @@
 	var flags: segment.SegmentFlags;
 	var n: _uint;
 
+	flags = {};
 	if s[0] == '.' then
 	{   r, n = GetSym(s[1:]);
 	    name = s;
 	    r = CheckComma(r);
 	    if r != 0 then	// there's a comma
-	    {	flags = {};
-		if r[0] == '"' then
-		{   do
+	    {   if r[0] == '"' then
+		{   loop
 		    {	r = r[1:];
+		      exit r[0] == '"' || r[0] == '\n';
 			if r[0]
 			is 'a' then flags.ALLOC = true;
 			is 'x' then flags.EXEC = true;
 			is 'w' then flags.WRITE = true;
-		    } while r[0] != '"' && r[0] != '\n';
+		    }
+		    r = r[1:];
+		}
+		r = CheckComma(r);
+		if r != 0 then
+		{   if r[0:9]  == "@progbits" then
+			flags.ALLOC = true;
 		}
 	    }
 	    else
@@ -270,6 +277,7 @@
 	{ "internal",		8,10, 1 },
 	{ "hidden",		6,10, 2 },
 	{ "protected",		9,10, 3 },
+	{ "loc",		3, 0, 0 },
 	{ "ident",		5, 0, 0 },
 	{ "cfi_startproc",     13, 0, 0 },
 	{ "cfi_endproc",       11, 0, 0 },

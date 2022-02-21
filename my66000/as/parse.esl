@@ -610,7 +610,7 @@ import my66000def;
 		{   op.imm |= (1 << (reg-1));
 		}
 		else
-		    Syntax("Illegal register in vec instruction\n");
+		    Syntax("Illegal register in vec instruction");
 		r = CheckComma(s);
 	      exit r == 0;
 		s = r;
@@ -797,6 +797,7 @@ import my66000def;
 	is 0b100 then { op.I = 1; }
 	is 0b101 then { op.I = 1; op.s2 = 1; }
 	is 0b110 then { op.I = 1; op.s1 = 1; }
+if debug.vec then {
 fde.str("type="); fde.uint8(type);
 fde.str(" comp="); fde.uint(comp);
 fde.str(" cmpkind="); fde.uint8(_uint8(cmpkind));
@@ -805,6 +806,7 @@ fde.str(" inckind="); fde.uint8(_uint8(inckind));
 if inckind != Reg then { fde.str(" incamt="); fde.int(incamt); }
 fde.str(" ISS="); fde.uint((op.I<<2)|(op.s1<<1)|op.s2);
 fde.nl();
+}
 	segment.Put4(_uint32(op));
 	if op.I != 0 then
 	{   if op.s2 == 0 then
@@ -1229,7 +1231,7 @@ fde.nl();
 //	{ "abs",   3,  0b000000_00000_00000_00110_100110_00000, Int1rOp },
 	{ "nabs",  4,  0b000000_00000_00000_00110_100111_00000, Int1rOp },
 
-
+	// normal loads/stores
 	{ "ldub",  4,  0b100000_00000_00000_00000_000000_00000, MemOp },
 	{ "lduh",  4,  0b100001_00000_00000_00000_000001_00000, MemOp },
 	{ "lduw",  4,  0b100010_00000_00000_00000_000010_00000, MemOp },
@@ -1425,6 +1427,21 @@ fde.nl();
 	{ "fasin",   5, 0b001101_00000_00000_00000_011000_11100, Xop5 },
 	{ "facos",   5, 0b001101_00000_00000_00000_011000_11101, Xop5 },
 	{ "faton",   6, 0b001101_00000_00000_00000_011000_11110, Xop5 },
+	// locking loads/stores
+	{ "ldubx",  5,  0b100000_00000_00000_00010_000000_00000, MemOp },
+	{ "lduhx",  5,  0b100001_00000_00000_00010_000001_00000, MemOp },
+	{ "lduwx",  5,  0b100010_00000_00000_00010_000010_00000, MemOp },
+	{ "lddx",   4,  0b100011_00000_00000_00010_000011_00000, MemOp },
+	{ "ldsbx",  5,  0b100100_00000_00000_00010_000100_00000, MemOp },
+	{ "ldshx",  5,  0b100101_00000_00000_00010_000101_00000, MemOp },
+	{ "ldswx",  5,  0b100110_00000_00000_00010_000110_00000, MemOp },
+	{ "lax",    3,  0b000000_00000_00000_00010_000111_00000, MemOp },
+	{ "stbx",   4,  0b101000_00000_00000_00010_001000_00000, MemOp },
+	{ "sthx",   4,  0b101001_00000_00000_00010_001001_00000, MemOp },
+	{ "stwx",   4,  0b101010_00000_00000_00010_001010_00000, MemOp },
+	{ "stdx",   4,  0b101011_00000_00000_00010_001011_00000, MemOp },
+	// exotic branch on conditons
+	{ "bin",   3,  0b011010_11000_00000_0000000000000000, BcmOp },
     };
 
     proc Instruction(s: @[]_byte, n: _uint)

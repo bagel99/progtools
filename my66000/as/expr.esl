@@ -197,11 +197,11 @@ package expr
 	s = SkipWS(s);
 	if s[0:2] == "<<" then
 	{   s = Expr4(s[2:], right);
-	    left.offs = left.offs << right.offs;
+	    left.offs = left.offs << _uint(right.offs);
 	}
 	elif s[0:2] == ">>" then
 	{   s = Expr4(s[2:], right);
-	    left.offs = left.offs >> right.offs;
+	    left.offs = left.offs >> _uint(right.offs);
 	}
 	return s;
     }

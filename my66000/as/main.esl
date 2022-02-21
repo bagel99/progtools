@@ -23,15 +23,28 @@ proc Syntax(msg: @[]_byte)
 
 proc Syntax2n(msg: @[]_byte, s: @[]_byte, n: _uint)
 {
+    fde.uint(lineno);
+    fde.str(": ");
     fde.str(msg);
     fde.strn(s, n);
     fde.nl();
 }
 
-proc SyntaxX(msg: @[]_byte, n: _uint32)
+proc SyntaxS(msg: @[]_byte, s: @[]_byte)
 {
+    fde.uint(lineno);
+    fde.str(": ");
     fde.str(msg);
-    fde.hex32(n);
+    fde.str(s);
+    fde.nl();
+}
+
+proc SyntaxN(msg: @[]_byte, n: _uint)
+{
+    fde.uint(lineno);
+    fde.str(": ");
+    fde.str(msg);
+    fde.uint(n);
     fde.nl();
 }
 
@@ -43,6 +56,7 @@ var debug:
     ca:  boolean;
     fa:  boolean;
     rel: boolean;
+    vec: boolean;
 }: packed;
 
 import exprdef;
@@ -78,6 +92,7 @@ proc main(argc: _uint, argv: @[]@[]_byte): _int
 	is 'D' then
 	{   if argv[i]@[2]
 	    is 'r' then debug.rel = true;
+	    is 'v' then debug.vec = true;
 	}
     	is 'A' then
     	{   if argv[i]@[2]

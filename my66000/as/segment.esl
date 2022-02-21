@@ -115,6 +115,7 @@ package segment
 	    is SYMB then
 	    {
 	    }
+	    fdo.str(" next="); fdo.hex(_uintptr(pf.next));
 	    fdo.nl();
 	    pf = pf.next;
 	}
@@ -136,6 +137,25 @@ package segment
 	curseg.ftail = pf;
     }
 
+    proc Check(s: @[]_byte)
+    {   var ps: Segment;
+	var pb: Block;
+	var pf: Fix;
+
+	fde.str(s); fde.str(": ");
+	ps = list.head;
+	while ps != 0 do
+	{   pb = ps.bhead;
+	    while pb != 0 do
+		pb = pb.next;
+	    pf = ps.fhead;
+	    while pf != 0 do
+		pf = pf.next;
+	    ps = ps.next;
+	}
+	fde.str("ok\n");
+    }
+
     proc Dump()
     {   var ps: Segment;
 	var pb: Block;
@@ -145,32 +165,41 @@ package segment
 
 	ps = list.head;
 	while ps != 0 do
-	{   fdo.str("Segment: "); fdo.str(ps.name);
-	    fdo.str(" size="); fdo.uint(ps.size); fdo.nl();
-	    pb = ps.bhead;
-	    while pb != 0 do
-	    {   if pb.size > 0 then
-		{   fdo.str("Block: addr="); fdo.hex64(pb.addr);
-		    fdo.str(" size="); fdo.uint(pb.size);
-		    fdo.str(" term="); fdo.str(KindName[pb.kind]);
-		    fdo.nl();
-		    i = 0;
-		    while i < pb.size do
-		    {   fdo.hex8(pb.code[i]);
-			i += 1;
-			if i % 16 == 0 then
-			    fdo.nl();
-			else
-			    fdo.chr(' ');
-		    }
-		    if i % 16 != 0 then
+	{   fdo.str("Segment ("); fdo.hex(_uintptr(ps));
+	    fdo.str(") "); fdo.str(ps.name);
+	    fdo.str(": flags=\"");
+	    if ps.flags.ALLOC then fdo.chr('a');
+	    if ps.flags.WRITE then fdo.chr('w');
+	    if ps.flags.EXEC  then fdo.chr('x');
+	    fdo.str("\" size="); fdo.uint(ps.size);
+	    fdo.str(" next="); fdo.hex(_uintptr(ps.next));
+	    fdo.nl();
+	    if ps.flags.ALLOC then
+	    {   pb = ps.bhead;
+		while pb != 0 do
+		{   if pb.size > 0 then
+		    {   fdo.str("Block: addr="); fdo.hex64(pb.addr);
+			fdo.str(" size="); fdo.uint(pb.size);
+			fdo.str(" term="); fdo.str(KindName[pb.kind]);
 			fdo.nl();
+			i = 0;
+			while i < pb.size do
+			{   fdo.hex8(pb.code[i]);
+			    i += 1;
+			    if i % 16 == 0 then
+				fdo.nl();
+			    else
+				fdo.chr(' ');
+			}
+			if i % 16 != 0 then
+			    fdo.nl();
+		    }
+		    pb = pb.next;
 		}
-	        pb = pb.next;
-	    }
-	    if ps.fhead != 0 then
-	    {   fdo.str("Fixups:\n");
-	        FixDump(ps);
+		if ps.fhead != 0 then
+		{   fdo.str("Fixups:\n");
+		    FixDump(ps);
+		}
 	    }
 	    ps = ps.next;
 	}
@@ -301,17 +330,15 @@ package segment
 
     proc Pad(ps: Segment, n: _uint)
     {   var pb: Block;
+	var i: _uint;
 
-	pb = ps.btail;
-	if pb.size + n >= DEFBLOKSIZE then	// need new block
-	{
-fde.str("Pad need new block"); fde.uint(n); fde.nl();
-	}
-	else
-	{   var i: _uint;
-	    for i from 0 to n-1 do
-		pb.code[pb.size+i] = 0;
-	    pb.size += n;
+	while n > 0 do
+	{   if ps.btail.size >= DEFBLOKSIZE then
+		Finish(SEQ);
+	    pb = ps.btail;
+	    pb.code[pb.size] = 0;
+	    pb.size += 1;
+	    n -= 1;
 	}
     }
 
@@ -357,16 +384,18 @@ fde.str("Pad need new block"); fde.uint(n); fde.nl();
 	var change, bound: boolean;
 
 	change = false;
+if debug.rel then { fde.str("TryFix: "); fde.str(ps.name); fde.nl(); }
 	pf = ps.fhead;
 	while pf != 0 do
 	{   if pf.kind != NONE then
-	    {   addr = pf.blok.addr + pf.boff;
+	    {
+if debug.rel then { fde.str("Fix "); fde.str(KindName[pf.kind]); }
+		addr = pf.blok.addr + pf.boff;
+if debug.rel then { fde.str(" at "); fde.str(ps.name); fde.chr(':');
+fde.hex32(_uint32(addr)); }
 		bound, val, seg = expr.Fix(pf.expr);
 		if seg != 0 then val += seg.addr;
-if debug.rel then {
-fde.str("Fix "); fde.str(KindName[pf.kind]);
-fde.str(" at "); fde.str(ps.name); fde.chr(':'); fde.hex32(_uint32(addr));
-fde.str(" bound="); fde.uint8(_uint8(bound));
+if debug.rel then { fde.str(" bound="); fde.uint8(_uint8(bound));
 fde.str(" val="); fde.hex32(val);
 fde.str(" tseg="); if seg != 0 then fde.str(seg.name); else fde.str("*UNKN*");
 fde.chr('('); expr.Dump(fde, pf.expr); fde.chr(')');
@@ -439,6 +468,17 @@ fde.str("ABS8 OK byte="); fde.int8(_int8(val)); fde.nl();}
 			change = true;
 		    }
 		}
+		is ABS32 then
+		{
+		    if bound then
+		    {
+if debug.rel  then {
+fde.str("ABS32 OK word="); fde.hex32(val); fde.nl();}
+			_packle(pf.blok.code[pf.boff:4], _uint32(val));
+			pf.kind = NONE;
+			change = true;
+		    }
+		}
 		is ABS64 then
 		{
 		    if bound then
@@ -498,9 +538,7 @@ fde.str("JT32 OK diff="); fde.int(diff); fde.nl();}
 		    }
 		}
 		else
-		{   fde.str("Relocation type ");
-		    fde.str(KindName[pf.kind]);
-		    fde.str("not yet handled\n");
+		{   SyntaxS("Relocation type not yet handled: ", KindName[pf.kind]);
 		}
 	    }
 	    pf = pf.next;
@@ -550,11 +588,13 @@ fde.str("JT32 OK diff="); fde.int(diff); fde.nl();}
 
 	// Order();
 	do
-	{   AssignAddresses();
+	{
+	    AssignAddresses();
 	    change = false;
 	    ps = list.head;
 	    while ps != 0 do
-	    {   if TryFix(ps) then change = true;
+	    {
+		if TryFix(ps) then change = true;
 	        ps = ps.next;
 	    }
 	} while change;
