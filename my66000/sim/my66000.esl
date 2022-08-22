@@ -36,6 +36,7 @@ package my66000
 
     const breakpoint: Inst = 0xFFAA0000;	// FIXME
     const LR = 0;
+    const FP = 30;
     const SP = 31;
     const PC = 32;	// not a general register
 
@@ -1026,7 +1027,6 @@ if db&16 != 0 && !continue then { fde.str("loop counter terminates\n"); }
 	var src: Word;
 
 	src = reg[op.rs1];
-	// FIXME - the only Op1 implement so for is HR for return
 	if op.minor
 	is 0b000000 then			// HR
 	{   if op.func
@@ -1108,6 +1108,13 @@ if db&16 != 0 && !continue then { fde.str("loop counter terminates\n"); }
 	is 0b010000 then reg[opb.rd] = Convert(src, opb.func);
 	is 0b010001 then reg[opb.rd] = Convert(src, opb.func+0b100000);
 	is 0b010100 then Fault("Unimplemented RNDxx", inst);
+	is 0b011101 then 	// long form VEC
+	{   // The I bit should be 1, with a 32-bit immediate
+	    vreg = op.rd;
+if db&16 != 0 then { fde.str("vreg="); fde.uint8(vreg); fde.nl(); }
+	    reg[op.rd] = reg[PC];
+	    vmode = true;
+	}
 	else
 	    Fault("Unimplemented instruction1", inst);
     }
@@ -1201,11 +1208,23 @@ fde.str(" new="); fde.hex8(shadow); fde.nl(); }
     {   var op: OPMEM = OPMEM(inst);
 	var adr, inx: Word;
 	var tmp: Word;
+	var disp, imm: _uint;
 
 	if op.rb == 0 then
 	    adr = instpc;
 	else
 	    adr = reg[op.rb];
+	// displacement, if any, comes first
+	if op.I != 0 then	// we have a following dispacement
+	{   if op.D != 0 then	// 64-bit immediate
+	    {	adr += Read(reg[PC], QUAD);
+		reg[PC] += 8;
+	    }
+	    else		// 32-bit signed immediate
+	    {	adr += Sext(31,Read(reg[PC], WORD));
+		reg[PC] += 4;
+	    }
+	}
 	if op.minor & 0b001000 != 0 then	// store
 	{   if op.minor & 0b010000 != 0 then	// store immediate
 	    {	if op.minor & 0b111
@@ -1223,17 +1242,6 @@ fde.str(" new="); fde.hex8(shadow); fde.nl(); }
 	    }
 	    else
 		tmp = reg[op.rd];
-	}
-	// FIXME - get displacement
-	if op.I != 0 then	// we have a following dispacement
-	{   if op.D != 0 then	// 64-bit immediate
-	    {	adr += Read(reg[PC], QUAD);
-		reg[PC] += 8;
-	    }
-	    else		// 32-bit signed immediate
-	    {	adr += Sext(31,Read(reg[PC], WORD));
-		reg[PC] += 4;
-	    }
 	}
 	// Some encodings aren't indexed (e.g. LDM/STM/MM)
 	if (op.minor & 0b111000) != 0b010000 then
@@ -1289,46 +1297,66 @@ fde.nl(); }
 	    Write(adr, QUAD, tmp);
     }
 
-    // WARNING
-    // DoExit and DoEnter do not follow Mitch's definition
-    // 1. The can save one register but not all 32
-    //    Mitch's spec can't save just one register
-    // 2. Frame pointer and bits FS not yet implemented
-    proc DoExit(start:_uint, stop:_uint, disp:_uint)
-    {   var addr: Addr;
+    proc PopOne(r:_uint, addr: Addr, S: boolean): Addr: inline
+    {	var tmp: Word;
 
-	if (disp & 1) != 0 then
-	    fde.str("Exit S bit ignored\n");
-	if (disp & 2) != 0 then
-	    fde.str("Exit F bit ignored\n");
-	addr = reg[SP] + (disp & 0xFFF8);
-	loop
-	{   if start == LR then
-		reg[PC] = Read(addr, QUAD);
+	if r != SP || S then
+	{
+//fde.str("pop "); fde.uint(r); fde.str(" from "); fde.hex64(addr); fde.nl();
+	    tmp = Read(addr, QUAD);
+	    if r == LR then
+		reg[PC] = tmp;
 	    else
-		reg[start] = Read(addr, QUAD);
+		reg[r] = tmp;
 	    addr += 8;
-	  exit stop == start;
-	    start = (start+1) & 31;
 	}
-	reg[SP] = addr;
+	return addr;
+    }
+
+    proc DoExit(start:_uint, stop:_uint, disp:_uint)
+    {   var stack: Addr;
+	var F, S: boolean;
+
+	S = (disp & 1) != 0;
+	F = (disp & 2) != 0;
+	if F then
+	    stack = reg[FP];
+	else
+	    stack = reg[SP];
+	stack += (disp & ~7);
+	do
+	{   stack = PopOne(start, stack, S);
+	    start = (start+1) & 31;
+	} while stop != start;
+	stack = PopOne(start, stack, S);
+	reg[SP] = stack;
+    }
+
+    proc PushOne(r:_uint, addr: Addr, S: boolean, F: boolean): Addr: inline
+    {
+	if r != SP || S then
+	{   addr -= 8;
+//fde.str("push "); fde.uint(r); fde.str(" to "); fde.hex64(addr); fde.nl();
+	    Write(addr, QUAD, reg[r]);
+	    if r == FP && F then
+		reg[FP] = addr;
+	}
+	return addr;
     }
 
     proc DoEnter(start:_uint, stop:_uint, disp:_uint)
-    {   var addr: Addr;
+    {   var stack: Addr;
+	var F, S: boolean;
 
-	if (disp & 1) != 0 then
-	    fde.str("Enter S bit ignored\n");
-	if (disp & 2) != 0 then
-	    fde.str("Enter F bit ignored\n");
-	addr = reg[SP];
-	loop
-	{   addr -= 8;
-	    Write(addr, QUAD, reg[stop]);
-	  exit stop == start;
+	S = (disp & 1) != 0;
+	F = (disp & 2) != 0;
+	stack = reg[SP];
+	do
+	{   stack = PushOne(stop, stack, S, F);
 	    stop = (stop-1) & 31;
-	}
-	reg[SP] = addr - (disp & 0xFFF8);
+	} while stop != start;
+	stack = PushOne(stop, stack, S, F);
+	reg[SP] = stack - (disp & ~7);
     }
 
     proc OpMemImm(inst: Inst)

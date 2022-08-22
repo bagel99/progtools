@@ -115,9 +115,9 @@
 
     proc disOpMem(inst: Inst, ip: Word)
     {   var op: OPMEM = OPMEM(inst);
-	var n: _uint = 4;
 	var addr: _uint64;
 	var minor: 0..0b111111;
+	var disp: _uint;
 	const OpName: [32]@[]_byte =
 	{ "ldub","lduh","lduw","ldd" ,"ldsb","ldsh","ldsw","la",
 	  "stb", "sth", "stw", "std", "???", "???", "???", "???",
@@ -134,15 +134,19 @@
 	    fde.str(OpName[op.minor&0b11111]);
 	    fde.chr('\t');
 	    if minor >= 0b011000 then	// store with immediate data
-	    {	fde.str("#0x");
+	    {	// address displacement, if any, comes before immediate data
+		disp = 0;
+		if op.I != 0 then
+		{	disp = 4;	// 4 byte displacement
+		    if op.D != 0 then
+			disp = 8;	// 8 byte displacement
+		}
+		fde.str("#0x");
 		if (minor & 0b100) == 0 then
-		{   n += 4;
-		    if minor == 0b011011 then	// STD
-		    {	fde.hex64(Read(ip+4, QUAD));
-			n += 4;
-		    }
+		{   if minor == 0b011011 then	// STD
+			fde.hex64(Read(ip+disp+4, QUAD));
 		    else
-			fde.hex32(_uint32(Read(ip+4, WORD)));
+			fde.hex32(_uint32(Read(ip+disp+4, WORD)));
 		}
 		else
 		    fde.int(_int(Sext(4, op.rd)));
@@ -173,11 +177,11 @@
 	    if op.I != 0 then
 	    {	fde.chr(',');
 		if op.D == 0 then	// 32-bit
-		{   addr = _int32(Read(ip+n, WORD));
+		{   addr = _int32(Read(ip+4, WORD));
 		    fde.int32(_int32(addr));
 		}
 		else
-		{   addr = Read(ip+n, QUAD);
+		{   addr = Read(ip+4, QUAD);
 		    fde.str("0x");
 		    fde.hex64(addr);
 		}
@@ -419,6 +423,24 @@
 	    {   fde.str(TransName[opb.func]);
 		if opb.s != 0 then fde.chr('f');
 	    }
+	    is 0b11101 then		// VEC
+	    {	var reg: _uint;
+		var mask: _uint32;
+		mask = _uint32(Read(ip+4, WORD));
+		fde.str("vec"); fde.chr('\t'); PReg(opb.rd);
+		fde.str(',{');
+		if mask != 0 then
+		{   loop
+		    {   reg = _ctz(mask);
+			PReg(reg);
+			mask &= ~(1 << reg);
+		      exit mask == 0;
+			fde.chr(',');
+		    }
+		}
+		fde.chr('}');
+		return;
+	    }
 	    fde.chr('\t');
 	    PReg(opb.rd); fde.chr(',');
 	    PReg(opb.rs1);
@@ -583,7 +605,7 @@
 	if bits != 0 then
 	{   loop
 	    {   reg = _ctz(bits);
-		PReg(reg+1);
+		PReg(reg+2);
 		bits &= ~(1 << reg);
 	      exit bits == 0;
 		fde.chr(',');

@@ -595,22 +595,22 @@ import my66000def;
     proc VecOp(s: @[]_byte, opt: _uint32)
     {   var op: OPVEC = OPVEC(opt);
 	var r: @[]_byte;
-	var reg: _uint;
+	var rd, reg: _uint;
+	var mask: _uint32;
+//		       33222222222211111111110000000000
+//		       10987654321098765432109876543210
+	const vecs = 0b00000000011111111111111111111100;
 
-	s,op.rd = GetReg(s);
+	s,rd = GetReg(s);
 	s = SkipComma(s);
-	// FIXME - parse vector operand
+	mask = 0;
 	if s[0] == '{' then
 	{   s = SkipWS(s[1:]);
 	    loop
 	    {
 	      exit s[0] == '}';
 	        s,reg = GetReg(s);
-		if reg >= 1 && reg <= 21 then
-		{   op.imm |= (1 << (reg-1));
-		}
-		else
-		    Syntax("Illegal register in vec instruction");
+		mask |= 1 << reg;
 		r = CheckComma(s);
 	      exit r == 0;
 		s = r;
@@ -618,7 +618,17 @@ import my66000def;
 	}
 	else
 	    Syntax("'{' expected\n");
-	segment.Put4(_uint32(op));
+	if mask & ~vecs == 0 then	// use short VEC
+	{   op.rd = rd;
+	    op.imm = (mask >> 2);
+	    segment.Put4(_uint32(op));
+	}
+	else				// use long VEC
+	{   var op1: OP1b = OP1b(0b001101_00000_00000_10100_011101_00000);
+	    op1.rd = rd;
+	    segment.Put4(_uint32(op1));
+	    segment.Put4(mask);
+	}
     }
 
     proc GetLoopCompare(s: @[]_byte): @[]_byte, _uint
@@ -1085,17 +1095,6 @@ fde.nl();
 		needreloc = true;
 	    }
 	    segment.Put4(_uint32(op));
-	    if datasize
-	    is 2 then
-	    {	if needreloc then
-		    imm.offs += 4;
-		segment.Put4(_uint32(dat.offs));
-	    }
-	    is 3 then
-	    {	if needreloc then
-		    imm.offs += 8;
-		segment.Put8(_uint64(dat.offs));
-	    }
 	    if op.I != 0 then
 	    {	if op.D == 0 then
 		{   if needreloc then
@@ -1107,6 +1106,17 @@ fde.nl();
 			segment.FixNew(imm, REL64, EXPR);
 		    segment.Put8(_uint64(imm.offs));
 		}
+	    }
+	    if datasize
+	    is 2 then
+	    {	if needreloc then
+		    imm.offs += 4;
+		segment.Put4(_uint32(dat.offs));
+	    }
+	    is 3 then
+	    {	if needreloc then
+		    imm.offs += 8;
+		segment.Put8(_uint64(dat.offs));
 	    }
 	}
 	else
@@ -1166,7 +1176,7 @@ fde.nl();
 
     proc EnterOp(s: @[]_byte, opt: _uint32)
     {	var op: OPMEMIMM = OPMEMIMM(opt);	// close enough model
-	var F: _uint;
+	var FS: _uint;
 	var imm: expr.ExprT;
 
 	s, op.rd = GetReg(s);	// Rstart
@@ -1174,7 +1184,7 @@ fde.nl();
 	s, op.rb = GetReg(s);	// Rstop
 	s = SkipComma(s);
 	if s[0] >= '0' && s[0] <= '3' then
-	    F = s[0] - '0';
+	    FS = s[0] - '0';
 	else
 	    Syntax("FS bits must be 0..3");
 	s = SkipComma(s[1:]);
@@ -1183,7 +1193,7 @@ fde.nl();
 	    Syntax("Displacement must be constant");
 	if (imm.offs & 7) != 0 then
 	    Syntax("Displacement must be multiple of 8");
-	op.imm = (imm.offs & 0xFFFF) | F;
+	op.imm = (imm.offs & 0xFFF8) | FS;
 	segment.Put4(_uint32(op));
     }
 
