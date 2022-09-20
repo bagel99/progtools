@@ -599,7 +599,7 @@ import my66000def;
 	var mask: _uint32;
 //		       33222222222211111111110000000000
 //		       10987654321098765432109876543210
-	const vecs = 0b00000000011111111111111111111100;
+	const vecs = 0b01111110000000001111111111111110;
 
 	s,rd = GetReg(s);
 	s = SkipComma(s);
@@ -620,7 +620,8 @@ import my66000def;
 	    Syntax("'{' expected\n");
 	if mask & ~vecs == 0 then	// use short VEC
 	{   op.rd = rd;
-	    op.imm = (mask >> 2);
+	    op.imm = ((mask >> 1)  & 0x007FFF) |
+	             ((mask >> 10) & 0x3F8000);
 	    segment.Put4(_uint32(op));
 	}
 	else				// use long VEC
@@ -1183,10 +1184,10 @@ fde.nl();
 	s = SkipComma(s);
 	s, op.rb = GetReg(s);	// Rstop
 	s = SkipComma(s);
-	if s[0] >= '0' && s[0] <= '3' then
+	if s[0] >= '0' && s[0] <= '7' then
 	    FS = s[0] - '0';
 	else
-	    Syntax("FS bits must be 0..3");
+	    Syntax("FS bits must be 0..7");
 	s = SkipComma(s[1:]);
 	s = Expr(s, imm);
 	if imm.op != NONE then

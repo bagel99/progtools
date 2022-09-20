@@ -596,16 +596,18 @@
 
     proc disVec(inst: Inst, ip: Word)
     {	var op: OPVEC = OPVEC(inst);
-	var bits: _uint;
+	var bits, tmp: _uint;
 	var reg: _uint;
 
 	fde.str("vec\t");
-	bits = op.imm;
+	tmp = op.imm;
+	bits = ((tmp & 0x1F8000) << 10) |
+	       ((tmp & 0x007FFF) << 1);
 	PReg(op.rd); fde.str(",{");
 	if bits != 0 then
 	{   loop
 	    {   reg = _ctz(bits);
-		PReg(reg+2);
+		PReg(reg);
 		bits &= ~(1 << reg);
 	      exit bits == 0;
 		fde.chr(',');

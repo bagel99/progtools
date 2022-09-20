@@ -105,6 +105,7 @@ proc DisSection(ptxt: elfread.pText)
 	fde.chr(' ');
 	inst = Read(addr, WORD);
 	addr += disInst(addr);
+	// Check for inline jump table, was previous inst a JT
 	if (inst & 0xFC00_0000) == 0x6C00_0000 then
 	{   var op: OPTT = OPTT(inst);
 	    var j, n: _uint;
@@ -112,7 +113,7 @@ proc DisSection(ptxt: elfread.pText)
 	    if op.sz
 	    is 0 then {}	// FIXME
 	    is 1 then
-	    {	for j from 0 to n-1 do
+	    {	for j from 0 to n do
 		{   if (j & 7) == 0 then
 			fde.str("\n\t\t\t.jt16\t");
 		    else

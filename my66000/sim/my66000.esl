@@ -1297,52 +1297,37 @@ fde.nl(); }
 	    Write(adr, QUAD, tmp);
     }
 
-    proc PopOne(r:_uint, addr: Addr, S: boolean): Addr: inline
-    {	var tmp: Word;
-
-	if r != SP || S then
-	{
-//fde.str("pop "); fde.uint(r); fde.str(" from "); fde.hex64(addr); fde.nl();
-	    tmp = Read(addr, QUAD);
-	    if r == LR then
-		reg[PC] = tmp;
-	    else
-		reg[r] = tmp;
-	    addr += 8;
-	}
-	return addr;
-    }
-
     proc DoExit(start:_uint, stop:_uint, disp:_uint)
     {   var stack: Addr;
-	var F, S: boolean;
+	var F, S, L: boolean;
+	var tmp: Word;
 
-	S = (disp & 1) != 0;
-	F = (disp & 2) != 0;
+	S = (disp & 1) != 0;	// restore saved SP
+	F = (disp & 2) != 0;	// use FP not SP for save area
+	L = (disp & 4) != 0;	// saved LR to LR, not IP
 	if F then
 	    stack = reg[FP];
 	else
 	    stack = reg[SP];
 	stack += (disp & ~7);
-	do
-	{   stack = PopOne(start, stack, S);
+	loop
+	{
+//fde.chr('R'); fde.uint(start); fde.nl();
+	    if start != SP || S then
+	    {	tmp = Read(stack, QUAD);
+//fde.str(" fm "); fde.hex64(stack); fde.nl();
+		stack += 8;
+		if start == LR && !L then
+		    reg[PC] = tmp;
+		else
+		    reg[start] = tmp;
+	    }
+	  exit stop == start;
 	    start = (start+1) & 31;
-	} while stop != start;
-	stack = PopOne(start, stack, S);
+	}
 	reg[SP] = stack;
     }
 
-    proc PushOne(r:_uint, addr: Addr, S: boolean, F: boolean): Addr: inline
-    {
-	if r != SP || S then
-	{   addr -= 8;
-//fde.str("push "); fde.uint(r); fde.str(" to "); fde.hex64(addr); fde.nl();
-	    Write(addr, QUAD, reg[r]);
-	    if r == FP && F then
-		reg[FP] = addr;
-	}
-	return addr;
-    }
 
     proc DoEnter(start:_uint, stop:_uint, disp:_uint)
     {   var stack: Addr;
@@ -1351,11 +1336,19 @@ fde.nl(); }
 	S = (disp & 1) != 0;
 	F = (disp & 2) != 0;
 	stack = reg[SP];
-	do
-	{   stack = PushOne(stop, stack, S, F);
+	loop
+	{
+//fde.chr('R'); fde.uint(stop); fde.nl();
+	    if stop != SP || S then
+	    {	stack -= 8;
+		Write(stack, QUAD, reg[stop]);
+//fde.str(" to "); fde.hex64(stack); fde.nl();
+	    }
+	    if stop == FP && F then
+		reg[FP] = stack;
+	  exit stop == start;
 	    stop = (stop-1) & 31;
-	} while stop != start;
-	stack = PushOne(stop, stack, S, F);
+	}
 	reg[SP] = stack - (disp & ~7);
     }
 
@@ -1472,37 +1465,31 @@ fde.nl(); }
 
     proc OpJt(inst: Inst)
     {	var op: OPTT = OPTT(inst);
-	var addr, entry, end, newpc: Word;
+	var addr, index, end, newpc: Word;
 	var offs: SWord;
 
+	index = _min(reg[op.rs1], op.imm);
+if db&8 != 0 then { fde.str("OpJt imm="); fde.uint16(op.imm);
+fde.str(" index="); fde.uint(index); }
 	if op.remote then
 	{
 	}
 	else
+	    addr = reg[PC] + (index << op.sz);
+if db&8 != 0 then { fde.str(" val="); fde.uint64(addr); }
+	if op.sz
+	is 0 then offs = Sext(7,Read(addr, BYTE));
+	is 1 then offs = Sext(15,Read(addr, HALF));
+	is 2 then offs = Sext(31,Read(addr, WORD));
+	is 3 then offs = Read(addr, QUAD);
+if db&8 != 0 then { fde.str(" offs="); fde.hex32(offs); }
+	newpc = (addr & ~3) + (offs << 2);
+if db&8 != 0 then { fde.str(" newpc="); fde.hex32(newpc); fde.nl(); }
+	if op.call then
 	{   end = reg[PC] + (op.imm * (1 << op.sz));
 	    end = (end + 3) & ~3;
-	    addr = reg[op.rs1];
-if db&4 != 0 then {
-fde.str("OpJt end="); fde.hex32(end);
-fde.str(" addr="); fde.hex32(addr); }
-	    addr = reg[PC] + (addr << op.sz);
-	}
-	if reg[op.rs1] >= op.imm then
-	    newpc = end;
-	else
-	{   if op.sz
-	    is 0 then offs = Sext(7,Read(addr, BYTE));
-	    is 1 then offs = Sext(15,Read(addr, HALF));
-	    is 2 then offs = Sext(31,Read(addr, WORD));
-	    is 3 then offs = Read(addr, QUAD);
-if db&4 != 0 then {
-fde.str(" offs="); fde.int64(offs); }
-	    newpc = (addr & ~3) + (offs << 2);
-	}
-if db&4 != 0 then {
-fde.str(" newpc="); fde.hex32(_uint32(newpc)); fde.nl(); }
-	if op.call then
 	    reg[0] = end;
+	}
 	reg[PC] = newpc;
     }
 
