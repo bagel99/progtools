@@ -116,7 +116,7 @@ package syscm3
 		intr = (hi * 32) + bit;
 		pri = 0;	// FIXME - lookup priority
 		curpri = cpu.GetPriority();
-		if log > 1 then
+		if logit > 1 then
 		{
 		    fderr.str("NVIC TryIntr intr="); fderr.uint(intr);
 		    fderr.str(" pri="); fderr.int(pri);
@@ -124,7 +124,7 @@ package syscm3
 		}
 		if pri < curpri then
 		{
-		    if log > 0 then
+		    if logit > 0 then
 		    {
 			fderr.str("NVIC TakeIntr intr="); fderr.uint(intr);
 			fderr.nl();
@@ -139,7 +139,7 @@ package syscm3
 	{   var bit: _uint;
 	    var hi:  _uint;
 
-	    if log > 1 then
+	    if logit > 1 then
 	    {
 		fderr.str("NVIC SetPend "); fderr.uint(intr); fderr.nl();
 	    }
@@ -155,7 +155,7 @@ package syscm3
 	{   var bit: _uint;
 	    var hi:  _uint;
 
-	    if log > 1 then
+	    if logit > 1 then
 	    {
 		fderr.str("NVIC ClrPend "); fderr.uint(intr); fderr.nl();
 	    }

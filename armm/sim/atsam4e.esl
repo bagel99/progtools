@@ -30,7 +30,7 @@ package PHY
 		state = READY;
 	    }
 	}
-if log > 2 then {
+if logit > 2 then {
 fderr.str("PHY read reg=0x"); fderr.hex8(preg);
 fderr.str(" val="); fderr.hex16(rv); fderr.nl();
 }
@@ -39,7 +39,7 @@ fderr.str(" val="); fderr.hex16(rv); fderr.nl();
 
     proc Write(preg: _uint, dat: _uint16)
     {
-if log > 2 then {
+if logit > 2 then {
 fderr.str("PHY write reg=0x"); fderr.hex8(preg);
 fderr.str(" val="); fderr.hex16(dat); fderr.nl();
 }

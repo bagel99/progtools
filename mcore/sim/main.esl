@@ -3,7 +3,7 @@ import zstr;
 import out;
 
 var db: _uint = 0;
-var log: _uint = 2;
+var logit: _uint = 2;
 
 const fdin: sys.fildes = 0;
 const fdout: out.OutFD = 1;

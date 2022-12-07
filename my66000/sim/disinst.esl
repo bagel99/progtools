@@ -56,10 +56,16 @@
 		if t8 > 15 then t8 |= ~0xF;
 		fde.int8(t8);
 	    }
-	    is 'I' then		// unsigned I5 in Rs1
-		fde.uint8(op.rs1);
-	    is 'J' then		// unsigned I5 in Rs2
-		fde.uint8(op.rs2);
+	    is 'I' then		// signed I5 in Rs1
+	    {   t8 = op.rs1;
+		if t8 > 15 then t8 |= ~0xF;
+		fde.int8(t8);
+	    }
+	    is 'J' then		// signed I5 in Rs2
+	    {   t8 = op.rs2;
+		if t8 > 15 then t8 |= ~0xF;
+		fde.int8(t8);
+	    }
 	    is 'K' then		// unsigned I5 in Rs3
 		fde.uint8(op.rs3);
 	    is 'L' then		// signed I10 in Rs3, Rs2
@@ -207,17 +213,20 @@
 	{ "???", "adds","muls","divs","cmp", "???", "maxs","mins",
 	  "???", "???", "???", "???", "sra", "sla", "???", "???",
 	  "???", "faddf","fmulf","fdivf","fcmpf","???","fmaxf","fminf",
-	  "???", "csgnf","eaddf", "???", "???", "???", "???", "???"
+	  "???", "csgnf","eaddf", "???", "???", "powf", "atan2f", "???"
 	};
-	const OpFmt: [32]@[]_byte =	// I s1 s2 D
-	{   "R,S,T",	"R,#I,T",	"R,S,T",	"R,#I,T",
-	    "R,S,-T",	"R,#I,-T",	"R,S,-T",	"R,#I,-T",
-	    "R,-S,T",	"R,#-I,T",	"R,-S,T",	"R,#-I,T",
-	    "R,-S,-T",	"R,#-I,-T",	"R,-S,-T",	"R,#-I,-T",
-	    "R,S,#Y",	"R,S,#Z",	"R,S,#Y",	"R,S,#Z",
-	    "R,#Y,T",	"R,#Z,T",	"R,#Y,T",	"R,#Z,T",
-	    "R,-S,#Y",	"R,-S,#Z",	"R,-S,#Y",	"R,-S,#Z",
-	    "R,#Y,-T",	"R,#Z,-T",	"R,#Y,-T",	"R,#Z,-T"
+	const OpFmt: [16]@[]_byte =	// I.D.s1.s2
+	{   "R,S,T",	"R,S,-T",	"R,-S,T",	"R,-S,-T",
+	    "R,S,#J",	"R,#I,T",	"R,-S,#J",	"R,#I,-T",
+	    "R,S,#Y",	"R,#Y,T",	"R,-S,#Y",	"R,#Y,-T",
+	    "R,S,#Z",	"R,#Z,T",	"R,-S,#Z",	"R,#Z,-T"
+	};
+	// Map I.s1.s2.S.D into I.D.s1.s2
+	const MapSpec: [32]_byte =
+	{   0x0, 0x4, 0x0, 0x4, 0x1, 0x5, 0x1, 0x5,
+	    0x2, 0x6, 0x2, 0x6, 0x3, 0x7, 0x3, 0x7,
+	    0x8, 0xC, 0x8, 0xC, 0x9, 0xD, 0x9, 0xD,
+	    0xA, 0xE, 0xA, 0xE, 0xB, 0xF, 0xB, 0xF
 	};
 	minor = op.minor;
 	if minor < 0b100000 then
@@ -227,7 +236,8 @@
 	{   if op.S != 0 then fde.str(OpNameS[op.minor&0b11111]);
 			 else fde.str(OpNameU[op.minor&0b11111]);
 	    fde.chr('\t');
-	    PFmt(inst, ip, OpFmt[(inst >> 11)&0b11111]);
+	    PFmt(inst, ip, OpFmt[MapSpec[(inst >> 11)&0b11111]]);
+//fde.chr('\t'); fde.hex8(MapSpec[(inst >> 11)&0b11111]);
 	}
     }
 
@@ -391,6 +401,16 @@
 	}
 	else
 	{   var opb: OP1b = OP1b(inst);
+	    const OpFmt: [32]@[]_byte =	// I s1 sd S D
+	    {   "R,S",	"R,#I",	"R,S",	"R,#I",
+		"R,S,",	"R,#I",	"R,S",	"R,#I",	// FIXME - sd ignored
+		"R,-S",	"R,#-I","R,-S",	"R,#-I",
+		"R,-S",	"R,#-I","R,-S",	"R,#-I",
+		"R,#Y",	"R,#Z",	"R,#Y",	"R,#Z",
+		"R,#Y",	"R,#Z",	"R,#Y",	"R,#Z",
+		"R,#-Y","R,#-Z","R,#-Y","R,#-Z",
+		"R,#-Y","R,#-Z","R,#-Y","R,#-Z"
+	    };
 	    if opb.minor
 	    is 0b00101 then
 	    {	if opb.func == 0 then
@@ -399,7 +419,7 @@
 		}
 		else	// assume opb.func = 1
 		{   fde.str("fabs");
-		    if opb.s != 0then fde.chr('f');
+		    if opb.s != 0 then fde.chr('f');
 		}
 	    }
 	    is 0b00110..0b00111	then	// EXPON,FRACT
@@ -442,8 +462,7 @@
 		return;
 	    }
 	    fde.chr('\t');
-	    PReg(opb.rd); fde.chr(',');
-	    PReg(opb.rs1);
+	    PFmt(inst, ip, OpFmt[(inst >> 11)&0b11111]);
 	}
     }
 

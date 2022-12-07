@@ -473,6 +473,16 @@ import disinst;
 
 import float;
 
+    // Convert IMM5 -16..15 operand to floating point immediate
+    proc FloatImm5(value: _uint, short: _uint): Word
+    {	var tmp: _int;
+	tmp = Sext(4, value);
+	if short != 0 then
+	    return Word(_uint32(_float32*(tmp)));
+	else
+	    return Word(_float64*(tmp));
+    }
+
     proc DoDoubleCompare(s1: _float64, s2: _float64): Word
     {   var fcc: FCondCode = {};
 	var tmp: Word;
@@ -567,11 +577,89 @@ import float;
 	return tmp;
     }
 
-    proc Convert(src: Word, func: _uint): Word
+    import math;
+
+    proc Transcend(src: Word, func: _uint, isf32: boolean, invert: boolean): Word
+    {
+if db&4 != 0 then {
+fde.str("trans "); fde.hex8(_uint8(func)); }
+	if isf32 then
+	{   if invert then src ^= 0x8000_0000;
+	    var flt: _float32 = _float32(_uint32(src));
+	    const f1: _float32 = 1.0;
+	    if func
+	    is 0b00000 then flt = math.log2f(flt);	// log2
+	    is 0b00001 then flt = math.logf(flt);	// ln
+	    is 0b00010 then flt = math.log10f(flt);	// log10
+	    is 0b00100 then flt = math.exp2f(flt);	// exp2
+	    is 0b00101 then flt = math.expf(flt);	// exp
+	    is 0b00110 then flt = math.exp10f(flt);	// exp10
+	    is 0b01000 then flt = f1 / flt;		// rcp
+	    is 0b01100 then flt = f1 / math.sqrtf(flt);	// rsqrt
+	    is 0b01101 then flt = math.sqrtf(flt);	// sqrt
+	    is 0b10000 then flt = math.log2f(flt+f1);	// log2(x+1)
+	    is 0b10001 then flt = math.log1pf(flt);	// log(x+1)
+	    is 0b10010 then flt = math.log10f(flt+f1);	// log10(x+1)
+	    is 0b10100 then flt = math.exp2f(flt)-f1;	// exp2(x)-1
+	    is 0b10101 then flt = math.expm1f(flt);	// exp(x)-1
+	    is 0b10110 then flt = math.exp10f(flt)-f1;	// exp10(x)-1
+	    is 0b11000 then flt = math.sinf(flt);	// sin
+	    is 0b11001 then flt = math.cosf(flt);	// cos
+	    is 0b11010 then flt = math.tanf(flt);	// tan
+	    is 0b11100 then flt = math.asinf(flt);	// asin
+	    is 0b11101 then flt = math.acosf(flt);	// acos
+	    is 0b11110 then flt = math.atanf(flt);	// atan
+	    return Word(_uint32(flt));
+	}
+	else	// fp64
+ 	{   if invert then src ^= 0x8000_0000_0000_0000;
+	    var dbl: _float64 = _float64(src);
+	    const d1: _float64 = 1.0;
+	    if func
+	    is 0b00000 then dbl = math.log2(dbl);	// log2
+	    is 0b00001 then dbl = math.log(dbl);	// ln
+	    is 0b00010 then dbl = math.log10(dbl);	// log10
+	    is 0b00100 then dbl = math.exp2(dbl);	// exp2
+	    is 0b00101 then dbl = math.exp(dbl);	// exp
+	    is 0b00110 then dbl = math.exp10(dbl);	// exp10
+	    is 0b01000 then dbl = d1 / dbl;		// rcp
+	    is 0b01100 then dbl = d1 / math.sqrt(dbl);	// rsqrt
+	    is 0b01101 then dbl = math.sqrt(dbl);	// sqrt
+	    is 0b10000 then dbl = math.log2(dbl+d1);	// log2(x+1)
+	    is 0b10001 then dbl = math.log1p(dbl);	// log(x+1)
+	    is 0b10010 then dbl = math.log10(dbl+d1);	// log10(x+1)
+	    is 0b10100 then dbl = math.exp2(dbl)-d1;	// exp2(x)-1
+	    is 0b10101 then dbl = math.expm1(dbl);	// exp(x)-1
+	    is 0b10110 then dbl = math.exp10(dbl)-d1;	// exp10(x)-1
+	    is 0b11000 then dbl = math.sin(dbl);	// sin
+	    is 0b11001 then dbl = math.cos(dbl);	// cos
+	    is 0b11010 then dbl = math.tan(dbl);	// tan
+	    is 0b11100 then dbl = math.asin(dbl);	// asin
+	    is 0b11101 then dbl = math.acos(dbl);	// acos
+	    is 0b11110 then dbl = math.atan(dbl);	// atan
+	    return Word(dbl);
+	}
+   }
+
+    proc Convert(src: Word, func: _uint, invert: boolean): Word
     {
 if db&4 != 0 then {
 fde.str("cvt "); fde.hex8(_uint8(func));
 fde.str(" src="); fde.hex64(src); fde.nl(); }
+	type SrcType: (U, S, F, D);
+	const Input: [64]SrcType =
+	{ D, S, U, U, D, D, D, D, F, U, U, U, F, F, F, F,
+	  U, F, F, F, U, U, U, U, S, U, F, F, S, S, S, S,
+	  D, U, U, U, D, D, D, D, F, U, U, U, F, F, F, F,
+	  U, D, D, D, U, U, U, U, S, U, D, D, S, S, S, S
+	};
+
+	if invert then
+	{   if Input[func]
+	    is S then src = -src;
+	    is F then src = src ^ 0x8000_0000;
+	    is D then src = src ^ 0x8000_0000_0000_0000;
+	}
 	if func >> 4
 	is 0b00 then	// unsigned result
 	{   var unsigned: _uint64;
@@ -615,44 +703,67 @@ fde.str(" src="); fde.hex64(src); fde.nl(); }
     {   var op: OP2 = OP2(inst);
 	var tmp, src1, src2: Word;
 	var inv1, inv2: boolean;
-	type Kind: (INT, LOG, SHF, FLT);
+	type Kind: (INT, LOG, SHF, FLT, MIX);
+	var kind: Kind;
 	const kindtab: [32]Kind =
 	{ INT, INT, INT, INT, INT, INT, INT,	// ADD-MIN
 	  LOG, LOG, LOG, LOG,			// OR-XOR
 	  SHF, SHF,
 	  INT, INT, INT,
 	  FLT, FLT, FLT, FLT, FLT, FLT, FLT, FLT,
-	  FLT, FLT, FLT, FLT, FLT, FLT, FLT, FLT
+	  FLT, FLT, MIX, FLT, FLT, FLT, FLT, FLT
 	};
 
+	kind = kindtab[op.minor&0x1F];
 	if op.I == 0 then
 	{   if op.D != 0 then	// IMM5
-		src1 = op.rs1;
-	    else
-		src1 = reg[op.rs1];
-	    src2 = reg[op.rs2];
-	    inv1 = op.s1 != 0;
-	    inv2 = op.s2 != 0;
+	    {	if op.s2 == 0 then
+		{   src1 = reg[op.rs1];
+		    src2 = Sext(4, op.rs2);
+		    if kind == FLT then
+			src2 = FloatImm5(op.rs2, op.S);
+		    else
+			src2 = Sext(4, op.rs2);
+		    inv1 = op.s1 != 0;
+		    inv2 = false;
+		}
+		else
+		{   if kind == FLT then
+			src1 = FloatImm5(op.rs1, op.S);
+		    else
+			src1 = Sext(4, op.rs1);
+		    src2 = reg[op.rs2];
+		    inv1 = false;
+		    inv2 = op.s1 != 0;
+		}
+	    }
+	    else	// both reg
+	    {   src1 = reg[op.rs1];
+		src2 = reg[op.rs2];
+		inv1 = op.s1 != 0;
+		inv2 = op.s2 != 0;
+	    }
 	}
 	else	// immediate used
 	{   if op.D == 0 then	// 32-bit
-	    {	tmp = Sext(31,Read(reg[PC], WORD));
-		// 32-bit floats are coverted to 64-bit float
-		if op.minor >= 0b110000 then	// floating point inst
-		{   var f64: _float64;
-		    var f32: _float32;
-		    f32 = _float32(_uint32(tmp));
-		    f64 = f32;
-		    tmp = Word(f64);
-		    //tmp = Word(_uint64(_float64*(_float32(_uint32(tmp)))));
+	    {	tmp = Read(reg[PC], WORD);
+		if kind == FLT then
+		{   if op.S == 0 then	// expect 64-bit
+		    {   // 32-bit floats are converted to 64-bit float
+			var f64: _float64;
+			var f32: _float32;
+			f32 = _float32(_uint32(tmp));
+			f64 = f32;
+			tmp = Word(f64);
+		    }
 		}
+		else
+		    tmp = Sext(31, tmp);
 		reg[PC] += 4;
-//fde.str("Op2 immediate 32\n");
 	    }
 	    else		// 64-bit
 	    {	tmp = Read(reg[PC], QUAD);
 		reg[PC] += 8;
-//fde.str("Op2 immediate 64\n");
 	    }
 	    if op.s2 == 0 then
 	    {	src1 = reg[op.rs1];
@@ -667,21 +778,21 @@ fde.str(" src="); fde.hex64(src); fde.nl(); }
 		inv2 = op.s1 != 0;
 	    }
 	}
-//fde.str("Op2 src1="); fde.hex64(src1); fde.str(" src2="); fde.hex64(src2);
-//fde.str(" inv1="); fde.uint8(_uint8(inv1));fde.str(" inv2="); fde.uint8(_uint8(inv2)); fde.nl();
 
 	if inv1 then
 	{   if kindtab[op.minor&0b011111]
-	    is INT then src1 = -src1;
-	    is LOG then src1 = ~src1;
-	    is FLT then src1 ^= 0x8000_0000_0000_0000;	// flip sign bit
+	    is INT     then src1 = -src1;
+	    is LOG     then src1 = ~src1;
+	    is FLT,MIX then src1 ^= 0x8000_0000_0000_0000;	// flip sign bit
 	}
 	if inv2 then
 	{   if kindtab[op.minor&0b011111]
-	    is INT then src2 = -src2;
-	    is LOG then src2 = ~src2;
-	    is FLT then src1 ^= 0x8000_0000_0000_0000;	// flip sign bit
+	    is INT,MIX then src2 = -src2;
+	    is LOG     then src2 = ~src2;
+	    is FLT     then src2 ^= 0x8000_0000_0000_0000;	// flip sign bit
 	}
+//fde.str("Op2 src1="); fde.hex64(src1); fde.str(" src2="); fde.hex64(src2);
+//fde.str(" inv1="); fde.uint8(_uint8(inv1));fde.str(" inv2="); fde.uint8(_uint8(inv2)); fde.nl();
 	if op.minor
 	is 0b100001 then	// ADD
 	{   tmp = DoAdd(src1,src2);
@@ -733,6 +844,8 @@ fde.str(" src="); fde.hex64(src); fde.nl(); }
 	    else
 		tmp = DoSLL(src1, (src2>>32)&0x3F, src2&0x3F);
 	}
+	is 0b101110 then	// BITR
+	    Fault("BITR not yet implemented", inst);
 	is 0b110001 then	// FADD/FSUB
 	{   if op.S != 0 then	// single
 		tmp = Word(_uint32(_float32(_uint32(src1)) + _float32(_uint32(src2))));
@@ -757,12 +870,40 @@ fde.str(" src="); fde.hex64(src); fde.nl(); }
 	    else
 		tmp = DoDoubleCompare(_float64(src1), _float64(src2));
 	}
+	is 0b110110 then	// FMAX
+	    Fault("FMAX not yet implemented", inst);
+	is 0b110111 then	// FMIN
+	    Fault("FMIN not yet implemented", inst);
 	is 0b111001 then	// CSGN
 	{   if op.S != 0 then	// single
 		tmp = (src1 & 0x7FFF_FFFF) | (src2 & 0x8000_0000);
 	    else
 		tmp = (src1 & 0x7FFFFFFF_FFFF_FFFF) | (src2 & 0x80000000_00000000);
 	}
+	is 0b111010 then	// EADD
+	{   if op.S == 0 then	// double
+	    {	var dbl: _float64;
+		var old, new: _int;
+		var frac: _uint64;
+		dbl = _float64(src1);
+		if dbl.isNaN() || dbl.isInf() then
+		    tmp = src1;
+		else
+		{   old = dbl.getExp();
+		    new = old + src2;
+		    frac = dbl.getFrac();
+		    tmp = Word(float64_make(dbl.getSign(),_uint(new),frac));
+		}
+	    }
+	    else		// single
+	    {
+		Fault("EADD single not yet implemented", inst);
+	    }
+	}
+	is 0b111101 then	// POW
+	    Fault("POW not yet implemented", inst);
+	is 0b111110 then	// ATAN2
+	    Fault("ATAN2 not yet implemented", inst);
 	else
 	    Fault("Unimplemented instruction2", inst);
 	reg[op.rd] = tmp;
@@ -993,7 +1134,7 @@ if db&16 != 0 && !continue then { fde.str("loop counter terminates\n"); }
 		}
 	    }
 	}
-	is 0b011 then			// INS
+	is 0b010 then			// INS
 	{   var w,o: _uint;
 	    if op.I != 0 then	// has immediate
 	    {	if op.s1 != 0 then	// 64-bit (never used?)
@@ -1025,8 +1166,39 @@ if db&16 != 0 && !continue then { fde.str("loop counter terminates\n"); }
     {   var op: OP1a = OP1a(inst);
 	var opb: OP1b = OP1b(inst);
 	var src: Word;
+	var invert: boolean;
+/*
+	type Kind: (ZEXT, SEXT, FLTX);
+	type Decode:
+	(ILL, HR, ABS, EXPON, FRACT, POP, FF1, CVT0, CVT1, RND, TRAN, VEC);
+	const insttab: [32]Decode =
+	{ HR,	ILL,	ILL,	ILL,	ILL,	ABS,	EXPON,	FRACT,
+	  POP,	FF1,	ILL,	ILL,	ILL,	ILL,	ILL,	ILL,
+	  CVT0,	CVT1,	ILL,	ILL,	RND,	ILL,	ILL,	ILL,
+	  TRAN,	ILL,	ILL,	ILL,	ILL,	VEC,	ILL,	ILL
+	};
+	var opcode: Decode;
 
-	src = reg[op.rs1];
+	opcode = insttab[op.minor];
+*/
+	if opb.I == 0 then
+	{   if opb.D != 0 then	// IMM5
+		src = Sext(4, opb.rs1);	// FIXME - how should this be extended
+	    else
+		src = reg[op.rs1];
+	}
+	else	// immediate used
+	{   if opb.D == 0 then	// 32-bit
+	    {	src = Sext(31,Read(reg[PC], WORD));
+		// FIXME - how should this be extended
+		reg[PC] += 4;
+	    }
+	    else		// 64-bit
+	    {	src = Read(reg[PC], QUAD);
+		reg[PC] += 8;
+	    }
+	}
+	invert = opb.s1 != 0;
 	if op.minor
 	is 0b000000 then			// HR
 	{   if op.func
@@ -1086,15 +1258,46 @@ if db&16 != 0 && !continue then { fde.str("loop counter terminates\n"); }
 		    reg[op.rd] = src & 0xFFFF_FFFF_7FFF_FFFF;
 	    }
 	}
-	is 0b000110 then Fault("Unimplemented EXPON", inst);
+	is 0b000110 then			// EXPON
+	{   var dst: Word;
+	    if opb.s == 0 then	// double
+	    {	var dbl: _float64;
+		if invert then src ^= 0x8000_0000_0000_0000;
+		dbl = _float64(src);
+		if dbl.isNaN() then
+		    dst = 0;
+		elif dbl.isNInf() then
+		    dst = _int64?min;
+		elif dbl.isPInf() then
+		    dst = _int64?max;
+		// FIXME - denorms
+		else
+		    dst = dbl.getTrueExp();
+	    }
+	    else		// single
+	    {	var flt: _float32;
+		if invert then src ^= 0x8000_0000;
+		flt = _float32(_uint32(src));
+		if flt.isNaN() then
+		    dst = 0;
+		elif flt.isNInf() then
+		    dst = _int64?min;
+		elif flt.isPInf() then
+		    dst = _int64?max;
+		// FIXME - denorms
+		else
+		    dst = flt.getTrueExp();
+	    }
+	    reg[op.rd] = dst;
+	}
 	is 0b000111 then Fault("Unimplemented FRACT", inst);
 	is 0b001000 then			// POP
-	{   if opb.s1 != 0 then
+	{   if invert then
 		src = ~src;
 	    reg[opb.rd] = _pop(src);
 	}
 	is 0b001001 then			// FF1
-	{   if opb.s1 != 0 then
+	{   if invert then
 		src = ~src;
 	    if src == 0 then
 		reg[opb.rd] = -1;
@@ -1105,9 +1308,10 @@ if db&16 != 0 && !continue then { fde.str("loop counter terminates\n"); }
 		    reg[opb.rd] = _clznz(src);
 	    }
 	}
-	is 0b010000 then reg[opb.rd] = Convert(src, opb.func);
-	is 0b010001 then reg[opb.rd] = Convert(src, opb.func+0b100000);
+	is 0b010000 then reg[opb.rd] = Convert(src, opb.func, invert);
+	is 0b010001 then reg[opb.rd] = Convert(src, opb.func+0b100000, invert);
 	is 0b010100 then Fault("Unimplemented RNDxx", inst);
+	is 0b011000 then reg[opb.rd] = Transcend(src, opb.func, opb.s != 0, invert);
 	is 0b011101 then 	// long form VEC
 	{   // The I bit should be 1, with a 32-bit immediate
 	    vreg = op.rd;
@@ -1448,13 +1652,13 @@ fde.nl(); }
 	is FGE then take = _float64(tmp) >= 0.0;
 	is FLT then take = _float64(tmp) <  0.0;
 	is FGT then take = _float64(tmp) >  0.0;
-	is FLE then take = _float64(tmp) >= 0.0;
+	is FLE then take = _float64(tmp) <= 0.0;
 	is FEQF then take = _float32(_uint32(tmp)) == 0.0;
 	is FNEF then take = _float32(_uint32(tmp)) != 0.0;
 	is FGEF then take = _float32(_uint32(tmp)) >= 0.0;
 	is FLTF then take = _float32(_uint32(tmp)) <  0.0;
 	is FGTF then take = _float32(_uint32(tmp)) >  0.0;
-	is FLEF then take = _float32(_uint32(tmp)) >= 0.0;
+	is FLEF then take = _float32(_uint32(tmp)) <= 0.0;
 	else
 	    Fault("Unimplemented branch condition instruction", inst);
 	if take then

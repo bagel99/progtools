@@ -575,8 +575,8 @@ package cc2538
 	    { "af",	0x420, '\n' },
 	};
 
-	logsave = log;
-	log = 0;
+	logsave = logit;
+	logit = 0;
 	port = 'A';
 	for i from 0 to 3 do
 	{   fderr.str("Port "); fderr.chr(port); fderr.nl();
@@ -589,7 +589,7 @@ package cc2538
 	    }
 	    port += 1;
 	}
-	log = logsave;
+	logit = logsave;
     }
 }	
 

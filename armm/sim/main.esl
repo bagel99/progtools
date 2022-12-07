@@ -20,7 +20,7 @@ import srec;
 
 proc Log(msg: @[]_byte, addr: _uint32, data: _uint32)
 {
-    if log > 0 then
+    if logit > 0 then
     {
 	fderr.chr('\t');
 	fderr.str(msg);
@@ -36,7 +36,7 @@ proc Log(msg: @[]_byte, addr: _uint32, data: _uint32)
 
 proc LogR(msg: @[]_byte, addr: _uint32, data: _uint32, size: cpu.Width)
 {
-    if log > 0 then
+    if logit > 0 then
     {
 	fderr.str("\tRead  ");
 	fderr.str(msg);
@@ -47,10 +47,10 @@ proc LogR(msg: @[]_byte, addr: _uint32, data: _uint32, size: cpu.Width)
 	is BYTE then { fderr.hex8(_uint8(data)); fderr.chr('\t'); }
 	is HALF then fderr.hex16(_uint16(data));
 	is WORD then fderr.hex32(data);
-	if log > 1 then
+	if logit > 1 then
 	{   fderr.str("\t@");
 	    fderr.hex32(armm.instpc);
-	    if log > 2 then
+	    if logit > 2 then
 	    {   fderr.str("\tcycle ");
 		fderr.uint(cpu.cycles);
 	    }
@@ -61,7 +61,7 @@ proc LogR(msg: @[]_byte, addr: _uint32, data: _uint32, size: cpu.Width)
 
 proc LogW(msg: @[]_byte, addr: _uint32, data: _uint32, size: cpu.Width)
 {
-    if log > 0 then
+    if logit > 0 then
     {
 	fderr.str("\tWrite ");
 	fderr.str(msg);
@@ -69,10 +69,10 @@ proc LogW(msg: @[]_byte, addr: _uint32, data: _uint32, size: cpu.Width)
 	fderr.hex32(addr);
 	fderr.str("]<-");
 	fderr.hex32(data);
-	if log > 1 then
+	if logit > 1 then
 	{   fderr.str("\t@");
 	    fderr.hex32(armm.instpc);
-	    if log > 2 then
+	    if logit > 2 then
 	    {   fderr.str("\tcycle ");
 		fderr.uint(cpu.cycles);
 	    }

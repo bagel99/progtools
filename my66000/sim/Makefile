@@ -10,7 +10,7 @@ ARCH:= $(shell uname -m)
 .SECONDARY: %.s %.ll
 
 %.out: %.s
-	$(GCC) $< $(LIB)/arch/$(ARCH)/lib.a -o $@
+	$(GCC) $< $(LIB)/arch/$(ARCH)/lib.a -lm -o $@
 
 %.s: %.esl
 	$(ESLC) -m$(ARCH) $(DBG) $(INC) $(OPT) $< >$@

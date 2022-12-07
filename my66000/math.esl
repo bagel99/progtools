@@ -1,0 +1,45 @@
+/*
+ * Hooks to math.h routines
+ * Must link with -lm
+ */
+
+package math
+{   // _float64 routines
+    proc sqrt(x: _float64): _float64: external("sqrt");
+    proc log(x: _float64): _float64: external("log");
+    proc log2(x: _float64): _float64: external("log2");
+    proc log10(x: _float64): _float64: external("log10");
+    proc log1p(x: _float64): _float64: external("log1p");
+    proc exp(x: _float64): _float64: external("exp");
+    proc exp2(x: _float64): _float64: external("exp2");
+    proc exp10(x: _float64): _float64: external("exp10");
+    proc expm1(x: _float64): _float64: external("expm1");
+    proc sin(x: _float64): _float64: external("sin");
+    proc cos(x: _float64): _float64: external("cos");
+    proc tan(x: _float64): _float64: external("tan");
+    proc asin(x: _float64): _float64: external("asin");
+    proc acos(x: _float64): _float64: external("acos");
+    proc atan(x: _float64): _float64: external("atan");
+    proc atan2(y: _float64, x: _float64): _float64: external("atan2");
+    proc pow(x: _float64, y: _float64): _float64: external("pow");
+
+    // _float32 routines
+    proc sqrtf(x: _float32): _float32: external("sqrtf");
+    proc logf(x: _float32): _float32: external("logf");
+    proc log2f(x: _float32): _float32: external("log2f");
+    proc log10f(x: _float32): _float32: external("log10f");
+    proc log1pf(x: _float32): _float32: external("log1pf");
+    proc expf(x: _float32): _float32: external("expf");
+    proc exp2f(x: _float32): _float32: external("exp2f");
+    proc exp10f(x: _float32): _float32: external("exp10f");
+    proc expm1f(x: _float32): _float32: external("expm1f");
+    proc sinf(x: _float32): _float32: external("sinf");
+    proc cosf(x: _float32): _float32: external("cosf");
+    proc tanf(x: _float32): _float32: external("tanf");
+    proc asinf(x: _float32): _float32: external("asinf");
+    proc acosf(x: _float32): _float32: external("acosf");
+    proc atanf(x: _float32): _float32: external("atanf");
+    proc atan2f(y: _float32, x: _float32): _float32: external("atan2f");
+    proc powf(x: _float32, y: _float32): _float32: external("powf");
+}
+

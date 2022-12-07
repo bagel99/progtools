@@ -9,7 +9,7 @@ const fdout: out.OutFD = 1;
 const fderr: out.OutFD = 2;
 
 var db: _uint = 0;		// debug level
-var log: _uint = 2;		// logging level
+var logit: _uint = 2;		// logging level
 
 package stm32f407
 {

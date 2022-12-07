@@ -95,8 +95,8 @@ package comd
 	var i: _uint;
 	var logsave: _uint;
 
-	logsave = log;
-	log = 0;
+	logsave = logit;
+	logit = 0;
 	i = 0;
 	while n > 0 do
 	{   if i == 0 then
@@ -122,7 +122,7 @@ package comd
 		i = 0;
 	    }
 	}
-	log = logsave;
+	logit = logsave;
     }
 
     proc MemDumpH(addr: cpu.Addr,  n: _uint)
@@ -130,8 +130,8 @@ package comd
 	var i: _uint;
 	var logsave:  _uint;
 
-	logsave = log;
-	log = 0;
+	logsave = logit;
+	logit = 0;
 	i = 0;
 	while n > 0 do
 	{   if i == 0 then
@@ -153,7 +153,7 @@ package comd
 	    n -= 1;
 	}
 	if (addr & 0xF) != 0 then fderr.nl();
-	log = logsave;
+	logit = logsave;
     }
 
     proc MemDumpW(addr: cpu.Addr,  n: _uint)
@@ -161,8 +161,8 @@ package comd
 	var i: _uint;
 	var logsave:  _uint;
 
-	logsave = log;
-	log = 0;
+	logsave = logit;
+	logit = 0;
 	i = 0;
 	while n > 0 do
 	{   if i == 0 then
@@ -184,7 +184,7 @@ package comd
 	    n -= 1;
 	}
 	if (addr & 0xF) != 0 then fderr.nl();
-	log = logsave;
+	logit = logsave;
     }
 
     proc MemDumpD(addr: cpu.Addr,  n: _uint)
@@ -193,8 +193,8 @@ package comd
 	var logsave:  _uint;
 	if cpu.Word?bits == 64 then
 	{
-	    logsave = log;
-	    log = 0;
+	    logsave = logit;
+	    logit = 0;
 	    i = 0;
 	    while n > 0 do
 	    {   if i == 0 then
@@ -216,7 +216,7 @@ package comd
 		n -= 1;
 	    }
 	    if (addr & 0xF) != 0 then fderr.nl();
-	    log = logsave;
+	    logit = logsave;
 	}
 	else	// cpu.Word?size != 64
 	    fderr.str("mdd not implemented\n");
@@ -499,7 +499,7 @@ package comd
 
 	if narg >= 2 then
 	{   n = strtoud(args[1]);
-	    log = n;
+	    logit = n;
 	}
     }
 

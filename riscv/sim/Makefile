@@ -1,7 +1,7 @@
 ESLC=   eslc
 INC=	-I../../libsim -I../../libelf -I../../lib
 LIB=	../../lib
-DBG=	-g
+DBG=
 OPT=	-i	# disable inlining
 GCC=	gcc
 ARCH:= $(shell uname -m)

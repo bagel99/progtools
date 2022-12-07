@@ -65,7 +65,7 @@ package at86rf233
 
     proc RegRead(reg: _byte): _byte
     {
-if log > 2 then {
+if logit > 2 then {
 fderr.str("SPISLAVE read reg=");  fderr.hex8(reg);
 fderr.str(" val=");  fderr.hex8(regs[reg]);
 fderr.nl();
@@ -75,7 +75,7 @@ fderr.nl();
 
     proc RegWrite(reg: _byte, dat: _byte)
     {
-if log > 2 then {
+if logit > 2 then {
 fderr.str("SPISLAVE write reg=");  fderr.hex8(reg);
 fderr.str(" val=");  fderr.hex8(dat);
 fderr.nl();
