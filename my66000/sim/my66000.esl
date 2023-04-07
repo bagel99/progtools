@@ -14,12 +14,14 @@ package my66000
     type  Width: (BYTE, HALF, WORD, QUAD);
     type  Faults: (NONE, EXIT, BKPT, SVC, OTHER);
 
+    // The first 3 bits below must match those in ELF
     type MemFlags:
     {   x:	boolean;	// executable
         w:	boolean;	// writeable
+	r:	boolean;	// readable
         a:	boolean;	// allocate memory
         l:	boolean;	// load from object file
-    }: packed, bits(32);
+    }: packed, lsb, bits(32);
 
     type Mem:
     {	adr:   _address;
@@ -30,8 +32,8 @@ package my66000
 	write: @_(adr: Addr, w: Width, data: Word);
 	init:  @_();
     };
-
-    var memtab: @[]Mem;
+    type MemTab: []Mem;
+    var memtab: @MemTab;
     var nmem: _uint;
 
     const breakpoint: Inst = 0xFFAA0000;	// FIXME
@@ -63,6 +65,7 @@ package my66000
     var   faultarg: UImm;
     var   rlast: _uint = 0;
     var   cycles: _uint = 0;
+    var   setbp: boolean = false;
     var   stackstat:
     {     min:   Word;
 	  max:   Word;
@@ -166,6 +169,8 @@ fde.str("write error "); fde.int(rv); fde.nl();
 	}
 	else
 	{
+fde.str("Arg[0]="); fde.int(Arg[0]); fde.nl();
+fde.hex64(n); fde.nl();
 fde.str("** Unimplemented system call "); fde.uint(n); fde.nl();
 	}
     }
@@ -224,6 +229,10 @@ fde.str("** Unimplemented system call "); fde.uint(n); fde.nl();
 		return;
 	    }
 	}
+	if !memtab[i].flg.w && !setbp then
+	{   Fault("Write not allowed", addr);
+	    return;
+	}
 	rlast = i;
 	if memtab[i].write == 0 then	// ordinary memory
 	{   addr -= memtab[i].beg;
@@ -246,13 +255,17 @@ fde.str("** Unimplemented system call "); fde.uint(n); fde.nl();
     {   var old: Inst;
 
 	old = Read(addr, WORD);
+	setbp = true;
 	Write(addr, WORD, breakpoint | n);
+	setbp = false;
 	return old;
     }
 
     proc ClrBreakpoint(addr: Addr, inst: Inst):: inline
     {
+	setbp = true;
 	Write(addr, WORD, inst);
+	setbp = false;
     }
 
 
@@ -967,14 +980,12 @@ if db&16 != 0 then { fde.str("vreg="); fde.uint8(vreg); fde.nl(); }
 
 	loop = reg[op.rs1];
 if db&16 != 0 then {
-fde.str("loop=R"); fde.uint(op.rs1); fde.str("=0x"); fde.hex32(loop);
-fde.str(" fmt="); fde.uint((inst >> 13)&7); fde.str(" cnd="); fde.hex8(op.rd);
-fde.str(" cmp="); }
+fde.str("LOOP fmt="); fde.uint((inst >> 13)&7); fde.str(" cnd="); fde.hex8(op.rd);
+}
 	fmt = (inst >> 13) & 7;
 	if fmt
 	is 0b000, 0b001, 0b101 then
 	{   cmp = reg[op.rs2];
-if db&16 != 0 then { fde.chr('R'); fde.uint(op.rs2); fde.chr('='); }
 	}
 	is 0b010 then
 	{   cmp = op.rs2;
@@ -990,12 +1001,10 @@ if db&16 != 0 then { fde.chr('R'); fde.uint(op.rs2); fde.chr('='); }
 	}
 	else
 	    Fault("Illegal loop option", inst);
-if db&16 != 0 then { fde.str("0x"); fde.hex32(cmp); fde.str(" inc="); }
 
 	if fmt
 	is 0b000, 0b100 then
 	{   inc = reg[op.rs3];
-if db&16 != 0 then { fde.chr('R'); fde.uint(op.rs3); fde.chr('='); }
 	}
 	is 0b001, 0b010 then
 	{   inc = op.rs3;
@@ -1005,11 +1014,24 @@ if db&16 != 0 then { fde.chr('R'); fde.uint(op.rs3); fde.chr('='); }
 	{   inc = 1;
 	}
 	is 0b101, 0b110 then
-	{   inc = reg[op.rs3];
+	{   inc = Read(reg[PC], WORD);
 	    reg[PC] += 4;
 	}
 	what = WhatTab[op.rd];
 	if what.increg then add = inc; else add = 1;
+if db&16 != 0 then
+{   fde.str(" increg="); fde.uint8(_uint8(what.increg));
+    fde.str(" comp1="); fde.str(CBitNames[what.comp1]);
+    fde.str(" comp2="); fde.str(CBitNames[what.comp2]);
+    fde.str(" signed="); fde.uint8(_uint8(what.signed));
+    fde.nl();
+    fde.str("cmp=0x"); fde.hex64(cmp);
+    fde.str(" inc=0x"); fde.hex64(inc);
+    fde.nl();
+    fde.str(" add=0x"); fde.hex64(add);
+    fde.str(" loop=R"); fde.uint(op.rs1); fde.str("=0x"); fde.hex64(loop);
+    fde.nl();
+}
 if db&16 != 0 then { fde.str("0x"); fde.hex32(add); fde.nl(); }
 	var continue: boolean = true;
 	var result: CondCode;
@@ -1491,6 +1513,16 @@ fde.nl(); }
 		i -= 1;
 	    }
 	}
+       is 0b010110 then                // MS
+       {   i = reg[op.rd];     // Rcnt
+           tmp = reg[op.rb];
+           to = reg[op.ri];
+           while i != 0 do
+           {   Write(to, BYTE, tmp);
+               to += 1;
+               i -= 1;
+           }
+       }
 	is 0b001000, 0b011000, 0b011100 then	// STB
 	    Write(adr, BYTE, tmp);
 	is 0b001001, 0b011001, 0b011101  then	// STH
@@ -1811,11 +1843,58 @@ fde.nl();
 	return fault == NONE;
     }
 
+    proc DumpMemTab()
+    {   var i: _uint;
+	fde.str("nsegs="); fde.uint16(nmem); fde.nl();
+	for i from 0 to nmem-1 do
+	{
+	    fde.hex64(memtab[i].beg);
+	    fde.chr('-');
+	    fde.hex64(memtab[i].end);
+	    fde.str(" @ ");
+	    fde.hex64(_uintptr(memtab[i].adr));
+	    fde.str(" : ");
+	    if memtab[i].flg.r then fde.chr('r');
+	    if memtab[i].flg.w then fde.chr('w');
+	    if memtab[i].flg.x then fde.chr('x');
+	    fde.nl();
+	}
+    }
+
+
     // ****
     // initialize state using ELF segments
     // ****
     proc Load()
-    {
+    {   var i, n: _uint;
+	var newmem: @MemTab;
+
+	// Determine how man segments ELF loaded
+	n = 0;
+	for i from 0 to memory.nsegs-1 do
+	{	if memory.seg[n].end > memory.seg[n].beg then
+		n += 1;
+	}
+	// Create a new memory table
+	// First the segments from ELF
+	newmem = _new(MemTab(n+2));
+	for i from 0 to n-1 do
+	{   newmem[i] = memtab[0];
+	    newmem[i].adr = memory.seg[i].mem;
+	    newmem[i].beg = memory.seg[i].beg;
+	    newmem[i].end = memory.seg[i].end;
+	    newmem[i].flg = _uint32(memory.seg[i].flags);
+	}
+	// The remainder of RAM, must alloc it
+	newmem[n] = memtab[0];
+	newmem[n].beg = memory.seg[n-1].end + 1;
+	newmem[n].adr = sys.malloc(newmem[n].end - newmem[n].beg + 1);
+	// The special args area
+	newmem[n+1] = memtab[1];
+	newmem[n+1].flg = {.r=true};
+	memtab = newmem;
+	nmem = n+2;
+if db > 2 then { DumpMemTab(); }
     }
 
     // ****
@@ -1825,13 +1904,10 @@ fde.nl();
     {
 //	reg[PC] = Read(memtab[0].beg+0x18, QUAD);
 	reg[PC] = 0;
-	reg[SP] = memtab[0].end+1;
+	reg[SP] = memtab[nmem-2].end+1;
 	// FIXME - fake argument list
-	reg[1]  = Read(memtab[1].beg, QUAD);
+	reg[1]  = Read(memtab[nmem-1].beg, QUAD);
 	reg[2]  = 0x02F0_0008;
-	// Fake it for the alternate ABI
-	reg[16] = reg[1];
-	reg[17] = reg[2];
 	stackstat.min = reg[SP];
 	stackstat.max = reg[SP];
     }
@@ -1925,49 +2001,31 @@ package chip
     const name = "generic";
     const ResetAddress = 0;
 
-    const D: my66000.MemFlags = { .x=true, .w=true, .a=true, .l=true };
+    const D: my66000.MemFlags = { .x=true, .w=true, .r=true, .a=true, .l=true };
     var MemTab: []my66000.Mem =
     {
 	{ 0, 0x0000_0000, 0x02EF_FFFF, D, 0, 0, 0 },		// RAM
 	{ 0, 0x02F0_0000, 0x02F0_0FFF, D, 0, 0, 0 },		// ARGS
     };
     const NSegs = MemTab?len;
-    const NELFSegs = 3;
+    const NELFSegs = 4;
 
     proc Init(argc: _uint, argv: @[]@[]_byte)
     {   var i, j, k, n: _uint;
 
+	// Stuff for ELF
 	memory = pMemory(sys.malloc(Memory?size + NELFSegs*Segment?size));
-	j = 0;
-	for i from 0 to MemTab?len-1 do
-	{
-	    if MemTab[i].flg.a then	// allocate memory
-	    {
-var size: _uint;
-var addr: _address;
-size = MemTab[i].end - MemTab[i].beg + 1;
-addr = sys.malloc(size);
-fde.str("size="); fde.uint(size);
-fde.str(" addr="); fde.hex(_uint(addr));  fde.nl();
-MemTab[i].adr = addr;
-//	        MemTab[i].adr = sys.malloc(MemTab[i].end - MemTab[i].beg + 1);
-	    }
-	    if MemTab[i].flg.l then	// ELF needs to load this
-	    {   if j < NELFSegs then
-	    	{   memory.seg[j].mem = MemTab[i].adr;
-	    	    memory.seg[j].beg = MemTab[i].beg;
-	    	    memory.seg[j].end = MemTab[i].end;
-	    	    memory.seg[j].typ = 0;
-	    	    j += 1;
-	    	}
-	    }
-	}
-	memory.nsegs = j;
+	memory.nsegs = NELFSegs;
+	// Initial memory map for simulator
 	my66000.memtab = MemTab;
 	my66000.nmem = MemTab?len;
 	// generate argument list
+	my66000.memtab[1].adr =
+	    sys.malloc(my66000.memtab[1].end - my66000.memtab[1].beg + 1);
+fde.str("arg list1\n");
 	const ptrsize = 8;	// size of pointer on target
 	my66000.Write(my66000.memtab[1].beg,  QUAD, argc);
+fde.str("arg list2\n");
 	j = ptrsize;		// really size of argc
 	k = j + ptrsize * argc;
 	for n from 0 to argc-1 do

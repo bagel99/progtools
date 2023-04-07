@@ -127,7 +127,7 @@
 	const OpName: [32]@[]_byte =
 	{ "ldub","lduh","lduw","ldd" ,"ldsb","ldsh","ldsw","la",
 	  "stb", "sth", "stw", "std", "???", "???", "???", "???",
-	  "???", "???", "???", "ldm", "stm", "mm",  "???", "???",
+	  "???", "???", "???", "ldm", "stm", "mm",  "ms", "???",
 	  "stb", "sth", "stw", "std", "stb", "sth", "stw", "std"
 	};
 
@@ -165,7 +165,7 @@
 	    {	PReg(op.ri); fde.chr(',');
 		op.ri = 0;	// defeat indexing
 	    }
-	    is 0b010101 then		// MM
+	    is 0b010101, 0b010110 then		// MM, MS
 	    {	PReg(op.rb); fde.chr(',');
 		PReg(op.ri);
 		return;

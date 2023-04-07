@@ -73,6 +73,7 @@ if db > 2 then fderr.str("ELF: got magic\n");
 		nphdr = pfh@.phnum;
 		nshdr = pfh@.shnum;
 if db > 2 then fderr.str("ELF: got machine\n");
+if _defined(DYNAMIC) then n = 0;
 		if !ignoreproghdr && nphdr > 0 then	// have program sections
 		{
 if db > 2 then {fderr.str("nphdr="); fderr.uint32(nphdr); fderr.nl(); }
@@ -90,12 +91,27 @@ fderr.str(" paddr="); fderr.hex64(pph.paddr); fderr.nl();
 fderr.str("fsize="); fderr.hex64(pph.fsize);
 fderr.str(" msize="); fderr.hex64(pph.msize); fderr.nl();
 fderr.str("type="); fderr.hex32(_uint32(pph.type));
+fderr.str("flags="); fderr.hex32(_uint32(pph.flags));
 fderr.str(" offs="); fderr.hex64(pph.offset); fderr.nl();
 }
 			// convert endian if necessary
 			if pph@.type == LOAD && pph@.fsize > 0 then
 			{
 			    sys.lseek(fd, sys.off_t(start+pph@.offset), SET);
+if _defined(DYNAMIC) then {
+			    if n >= memory.nsegs then
+			    {
+fderr.str("Not enough allocated segments: n="); fde.uint16(n);
+fderr.str(" max="); fde.uint16(memory.nsegs); fde.nl();
+				return false;
+			    }
+			    memory.seg[n].mem = sys.malloc(pph@.fsize);
+			    memory.seg[n].beg = pph@.paddr;
+			    memory.seg[n].end = pph@.paddr + pph@.fsize - 1;
+			    memory.seg[n].flags = _uint16(_uint32(pph@.flags));
+			    sys.read(fd, memory.seg[n].mem, pph@.fsize);
+			    n += 1;
+} else {
 			    n = findseg(pph.paddr, memory);
 			    if n >= memory.nsegs then
 			    {
@@ -106,41 +122,80 @@ fderr.str(" size "); fderr.uint(pph@.fsize); fderr.nl();
 			    sys.read(fd,
 				memory.seg[n].mem@[pph@.paddr - memory.seg[n].beg:],
 				pph@.fsize);
+}
 			}
 			nphdr -= 1;
 		    }
 		}
 		else			// no program sections
-		{
+		{   var i: _uint;
+		    var flags: elf.ProgFlags;
 		    offs = pfh@.shoff;
 		    hdrsize = pfh@.shentsize;
-//fderr.str("shnum="); fderr.uint32(nshdr);
-//fderr.str(" mapsize="); fderr.uint32(pmap32?size + nshdr*smap32?size);
-//fderr.nl();
-		    while nshdr > 0 do
+if db > 2 then {
+fderr.str("shnum="); fderr.uint32(nshdr);
+fderr.nl();
+}
+		    for i from 0 to nshdr-1 do
 		    {   sys.lseek(fd, sys.off_t(start+offs), SET);
 			sys.read(fd, buf, elf.secthdr64?size);
 			offs += hdrsize;
 			psh = psec(buf[0:elf.secthdr64?size]);
+if db > 2 then {
+fderr.str("shnum=");  fderr.uint32(i);
+fderr.str(" addr="); fderr.hex64(psh@.addr);
+fderr.str(" size="); fderr.uint64(psh@.size);
+fderr.str(" type="); fderr.uint64(_uint64(psh@.type));
+fderr.str(" flags="); fderr.hex64(_uint64(psh@.flags));
+fderr.nl();
+}
 			// convert endian if necessary
-		        if (psh@.type == PROGBITS || psh@.type == NOBITS) &&
-		           (psh@.flags.ALLOC) then
-			{   n = findseg(psh@.addr, memory);
-//fderr.str("shnum=");  fderr.uint32(nshdr);
-//fderr.str(" addr="); fderr.hex64(psh@.addr);
-//fderr.str(" segnum="); fderr.uint32(n);
-//fderr.nl();
+		        if (psh@.type == PROGBITS || psh@.type == NOBITS)
+			    && psh@.size != 0 then
+			{
+fderr.str("seqn="); fderr.uint(n);
+fderr.str(" shnum=");  fderr.uint32(i);
+fderr.str(" addr="); fderr.hex64(psh@.addr);
+fderr.nl();
+			    sys.lseek(fd, sys.off_t(start+psh@.offset), SET);
+if _defined(DYNAMIC) then {
 			    if n >= memory.nsegs then
+			    {
+fderr.str("Not enough allocated segments: n="); fde.uint16(n);
+fderr.str(" max="); fde.uint16(memory.nsegs); fde.nl();
 				return false;
+			    }
+			    memory.seg[n].mem = sys.malloc(psh@.size);
+			    memory.seg[n].beg = psh@.addr;
+			    memory.seg[n].end = psh@.addr + psh@.size - 1;
+			    flags = {};
+			    if psh@.flags.EXEC then
+				flags.X = true;
+			    else
+			    {	flags.R = true;
+				if psh@.flags.WRITE then
+				    flags.W = true;
+			    }
+			    memory.seg[n].flags = _uint16(_uint32(flags));
+			    if psh@.flags.ALLOC then
+				sys.read(fd, memory.seg[n].mem, psh@.size);
+			    n += 1;
+} else {
+			    n = findseg(psh@.addr, memory);
+			    if n >= memory.nsegs then
+			    {
+fderr.str("No segment for address ");  fderr.hex64(pph.vaddr);
+fderr.str(" size "); fderr.uint(pph@.fsize); fderr.nl();
+				return false;
+			    }
 			    if psh@.addr + psh@.size - 1 > memory.seg[n].end then
 				return false;
-			    sys.lseek(fd, sys.off_t(start+psh@.offset), SET);
 			    if psh@.type == PROGBITS then
 				sys.read(fd,
 				  memory.seg[n].mem@[psh@.addr - memory.seg[n].beg:],
 				  psh@.size);
+}
 			}
-			nshdr -= 1;
 		    }
 	    	}
 	    	return true;

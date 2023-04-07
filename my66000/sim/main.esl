@@ -13,6 +13,7 @@ alias fde as fderr;	// ""
 alias fdi as fdin;	// ""
 
 import elf;
+const DYNAMIC: boolean = true;
 import elfload64;
 alias elfload.Memory64 as Memory;
 alias elfload.Segment64 as Segment;
@@ -106,58 +107,6 @@ proc strtou32(s: @[]_byte): _uint32
 
 import comd;
 
-// Segment table make sure its in order
-proc SegmentCheck(): boolean
-{   var i: _uint;
-    var last: _uint32;
-    var temp: cpu.Mem;
-    var sorted: boolean;
-
-/*
-    do	// bubble sort
-    {   sorted = true;
-	for i from 0 to chip.NSegs-1 do
-	{
-	    if i != 0 then
-	    {   if chip.MemTab[i].beg <= last then
-		{   // swap with previous
-	            temp = chip.MemTab[i-1];
-	            chip.MemTab[i-1] = chip.MemTab[i];
-		    chip.MemTab[i] = temp;
-		    sorted = false;
-		}
-	    }
-	    last = chip.MemTab[i].end;
-	}
-    } while !sorted;
-*/
-    // check for allocated ordinary memory
-    for i from 0 to chip.NSegs-1 do
-    {	if chip.MemTab[i].read == 0 then
-	{   if chip.MemTab[i].adr == 0 then
-	    {	fde.str("Unallocated memory at ");
-	    	fde.hex64(chip.MemTab[i].beg);
-	    	fde.nl();
-	    	return false;
-	    }
-	}
-    }
-    if db != 0 then
-    {   fde.str("NSegs="); fde.uint(chip.NSegs); fde.nl();
-	for i from 0 to chip.NSegs-1 do
-	{   fde.str("\t["); fde.uint(i); fde.str("] ");
-	    fde.hex64(chip.MemTab[i].beg); fde.str(":");
-	    fde.hex64(chip.MemTab[i].end);
-	    if chip.MemTab[i].adr != 0 then
-	    {	fde.str(" @ ");
-	    	fde.hex(_uint(chip.MemTab[i].adr));
-	    }
-	    fde.nl();
-	}
-    }
-    return true;
-}
-
 proc HexLoad(fd: sys.fildes, memory: @Memory)
 {
     var buf: [4096]_byte;
@@ -213,9 +162,6 @@ proc main(argc:_uint, argv:@[]@[]_byte):_int //[[global]]
     fde.str("Using chip "); fde.str(chip.name); fde.nl();
     chip.Init(argc-i, argv[i:]);
 
-    if !SegmentCheck() then
-	return 3;
-
     if loadmode
     is BIN then
     {	// FIXME - how do we specify this
@@ -235,7 +181,6 @@ proc main(argc:_uint, argv:@[]@[]_byte):_int //[[global]]
 	}
     }
     cpu.Reset(chip.ResetAddress);
-//    syscm3.Init(chip.ResetAddress);
     sys.signal(INT, Interrupt);
     var fault: cpu.Faults;
     var rv: _int;
