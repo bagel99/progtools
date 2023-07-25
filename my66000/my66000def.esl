@@ -126,9 +126,10 @@
 	cond:	0..31;		// 25..21
 	rs1:	REG;		// 20..16
 	minor:	0..0b1111;	// 15..12
-	I:	0..1;		// 11     - invert
-	ml:	0..7;		// 10..8  - length-1
-	shadow: 0..0b11111111;	// 7..0
+	_:      0..0b11;	// 11..10
+	else:	0..8;		// 9..6
+	_:      0..0b11;	// 5..4
+	then:   0..8;		// 3..0
     }: packed, msb, bits(32);
 
     type OPPB:
@@ -136,9 +137,10 @@
 	bit:	0..63;		// 26..21 - extends into major
 	rs1:	REG;		// 20..16
 	minor:	0..0b1111;	// 15..12
-	I:	0..1;		// 11     - invert
-	ml:	0..7;		// 10..8  - length-1
-	shadow: 0..0b11111111;	// 7..0
+	_:      0..0b11;	// 11..10
+	else:	0..8;		// 9..6
+	_:      0..0b11;	// 5..4
+	then:   0..8;		// 3..0
     }: packed, msb, bits(32);
 
     type OPTT:
@@ -153,55 +155,47 @@
 
 
     type Conditions:	// for BCND
-    (	NM,  NN,  EQ0, NE0, GE0, GT0, LE0, LT0,		// integer
-	FOR, FUN, FEQ, FNE, FGE, FLT, FGT, FLE,		// double
-	FORF,FUNF,FEQF,FNEF,FGEF,FLTF,FGTF,FLEF,	// single
-	IN,  EXIT,_,   _,   _,   _,   RFE, AL
+    (	EQ0, NE0, GE0, LT0, GT0, LE0, A,   N,		// integer
+	DEQ, DNE, DGE, DLT, DGT, DLE, DOR, DUN,		// double
+	FEQ, FNE, FGE, FLT, FGT, FLE, FOR, FUN,		// single
+	IN,  _,   _,    _,   _,  SVR, SVC, RET
     );
     const CondNames: [Conditions][5]_byte =
-    {	"nm",  "nn",  "eq0", "ne0", "ge0", "gt0", "le0", "lt0",
-	"for", "fun", "feq", "fne", "fge", "flt", "fgt", "fle",
-	"forf","funf","feqf","fnef","fgef","fltf","fgtf","flef",
-	"in",  "exit","",    "",    "",    "",    "rfe", "al"
+    {	"eq0", "ne0", "ge0", "lt0", "gt0", "le0", "a",   "n",
+	"deq", "dne", "dge", "dlt", "dgt", "dle", "dor", "dun",
+	"feq", "fne", "fge", "flt", "fgt", "fle", "for", "fun",
+	"in",  "",    "",    "",    "",    "svr", "svc", "ret"
     };
-    type CBits:		// result of CMP
-    (	NE=0, EQ,
-	GT=2, GE, LT, LE,		// signed
-	_, _,				// duplicates of NE, EQ
-	HI=10, HS, LO, LS,		// unsigned
-	SIN=16, FIN, CIN, RIN,		// range
-	NM=34, _, N, _, Z, P, SM, UM,	// number line
+    type CBits:		// result of CMP or FCMP
+    (	EQ=0, NEQ, NE, NNE, GE, NGE, LT, NLT,		// 0-7
+	GT=8, NGT, LE, NLE, HS, LO,  HI, LS,		// 8-15
+	OR=16, NOR, TO, NTO,				// 16-23
+	SIN=24, FIN, CIN, RIN,				// 24-31
+	SNaN=32, QNaN, MINF, MNOR, MDE, MZE, PZE, PDE,	// 32-39
+	PNOR=40, NINF,					// 40-47
 	_=63
     );
-    const CBitNames: [CBits][4]_byte =
-    {   "ne", "eq", "gt", "ge", "lt", "le", "??", "??",	// 0-7
-	"ne", "eq", "hi", "hs", "lo", "ls", "??", "??",	// 8-15
-	"sin","fin","cin","rin","??", "??", "??", "??",	// 16-23
-	"??", "??", "??", "??", "??", "??", "??", "??",	// 23-31
-	"??", "??", "nm", "??", "n",  "??", "z",  "p",	// 32-39
-	"sm", "um", "??", "??", "??", "??", "??", "??",	// 40-47
-	"??", "??", "??", "??", "??", "??", "??", "??",	// 48-55
-	"??", "??", "??", "??", "??", "??", "??", "??"	// 56-63
-    };
-    type FCBits:	// result of FCMP
-    (	NE=0, EQ, GT, GE, LT, LE,
-	OR=6, UN,
-	NNE=8, NEQ, NGT, NGE, NLT, NLE,
-	SIN=16, FIN, CIN, RIN,
-	F1S=32, F1Q,
-	F1PI=34, F1PN, F1PD, F1PZ, F1NZ, F1ND, F1NN, F1NI,
-	_=63
-    );
-    const FCBitNames: [FCBits][5]_byte =
-    {   "ne",  "eq",  "gt",  "ge",  "lt",  "le",  "or",  "un",	// 0-7
-	"nne", "neq", "ngt", "nge", "nlt", "nle", "??",  "??",	// 8-15
-	"sin", "fin", "cin", "rin", "??",  "??",  "??",  "??",	// 16-23
-	"??",  "??",  "??",  "??",  "??",  "??",  "??",  "??",	// 23-31
-	"f1s", "f1q", "f1pi","f1pn","f1pd","f1pz","f1nz","f1nd",// 32-39
-	"f1nn","f1ni","??",  "??",  "??",  "??",  "??",  "??",	// 40-47
+    const CBitNames: [CBits][5]_byte =
+    {   "eq",  "neq", "ne",  "nne", "ge",  "nge", "lt",  "nlt",	// 0-7
+	"gt",  "ngt", "le",  "nle", "hs",  "lo",  "hi",  "ls",	// 8-15
+	"or",  "nor", "to",  "nto", "??",  "??",  "??",  "??",	// 16-23
+	"sin", "fin", "cin", "rin", "??",  "??",  "??",  "??",	// 24-31
+	"snan","qnan","minf","mnor","mde", "mze", "pze", "pde",	// 32-39
+	"??",  "??",  "??",  "??",  "??",  "??",  "??",  "??",	// 40-47
 	"??",  "??",  "??",  "??",  "??",  "??",  "??",  "??",	// 48-55
 	"??",  "??",  "??",  "??",  "??",  "??",  "??",  "??"	// 56-63
     };
+    type RoundingModes:
+    (	NE,	// nearest even
+	NO,	// nearest odd
+	NM,	// nearest magnitude
+	_,	// unused
+	AZ,	// away from zero
+	TZ,	// towards zero
+	PI,	// towards + infinity
+	NI,	// towards - infinity
+	CM	// current mode
+    );
 
     const regname: [33]@[]_byte =
     {	"r0",	"r1",	"r2",	"r3",	"r4",	"r5",	"r6",	"r7",

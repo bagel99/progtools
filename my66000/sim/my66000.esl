@@ -52,15 +52,15 @@ package my66000
     var   flags:  0..0b11111;	// FP sticky exceptions
     var   vmode:  boolean = false; // in vector mode
     var   vreg:   0..31;	// vector loop register
-    var   shadow: _uint8;	// predication mask, 1 for skip
     // ThreadHeader word 2
     var	  enabled:_uint64;
     // ThreadHeader word 3
     var	  raised: _uint64;
     // Other status
-    var   pcnt:   _uint8 = 0;	// predication count
-    var	  CI: boolean = false;	// for this instruction
-    var   CO: boolean = false;	// "
+    var   shadow: _uint16;	// predication shadow bit map, 1 means skip
+    var   pcnt:   _uint8 = 0;	// predication count, total
+    var	  CI: boolean = false;	// carry in for this instruction
+    var   CO: boolean = false;	// carry out for this instruction
     var   fault:  Faults = NONE;
     var   faultarg: UImm;
     var   rlast: _uint = 0;
@@ -286,7 +286,6 @@ fde.str("** Unimplemented system call "); fde.uint(n); fde.nl();
 
 
     type CondCode: [CBits]boolean: packed;
-    type FCondCode: [FCBits]boolean: packed;
 
 import disinst;
     proc DoLDM(fm: _uint, to: _uint, adr: Word)
@@ -362,6 +361,18 @@ import disinst;
 	    src = src << o;
 	// FIXME - check for overflow
 	return Word(src);
+    }
+
+    proc DoROT(src: Word, w: _uint, o: _uint): Word
+    {   var dst: Word;
+
+	if w != 0 then
+	{   dst = _rol(src, 64-o);
+	    dst = dst >> (64-w);
+	}
+	else
+	    dst = _rol(src, o);
+	return dst;
     }
 
     // EXPERIMENTAL
@@ -452,14 +463,14 @@ import disinst;
     proc CheckCondition(cond: Conditions, src: Word): boolean
     {
 	if cond
-	is NM  then return src == 0x8000_0000_0000_0000;
-	is NN  then return src != 0x8000_0000_0000_0000;
 	is EQ0 then return src == 0;
 	is NE0 then return src != 0;
 	is GE0 then return SWord(src) >= 0;
 	is GT0 then return SWord(src) >  0;
 	is LE0 then return SWord(src) <= 0;
 	is LT0 then return SWord(src) <  0;
+	is A   then return true;
+	is N   then return false;
 	fde.str("Unimplemented condition "); fde.uint8(_uint8(cond)); fde.nl();
 	return false;
     }
@@ -470,17 +481,22 @@ import disinst;
     proc DoCompare(src1: Word, src2: Word): Word
     {   var cc: CondCode = {};
 
+	cc[EQ] = src1 == src2;
 	cc[NE] = src1 != src2;
-	cc[EQ] = ~cc[NE];
-	cc[GT] = SWord(src1) > SWord(src2);
 	cc[GE] = SWord(src1) >= SWord(src2);
 	cc[LT] = SWord(src1) < SWord(src2);
+	cc[GT] = SWord(src1) > SWord(src2);
 	cc[LE] = SWord(src1) <= SWord(src2);
-	cc[HI] = src1 > src2;
 	cc[HS] = src1 >= src2;
 	cc[LO] = src1 < src2;
+	cc[HI] = src1 > src2;
 	cc[LS] = src1 <= src2;
-	// FIXME - wait there's more
+	cc[SIN] = SWord(src1) >= 0 && SWord(src1) <= SWord(src2);
+	cc[FIN] = SWord(src1) >  0 && SWord(src1) <= SWord(src2);
+	cc[CIN] = SWord(src1) >= 0 && SWord(src1) <  SWord(src2);
+	cc[RIN] = SWord(src1) >  0 && SWord(src1) <  SWord(src2);
+if db&4 != 0 then {
+  fde.str("DoCompare=0x"); fde.hex64(Word(cc)); fde.nl(); }
 	return Word(cc);
     }
 
@@ -497,97 +513,49 @@ import float;
     }
 
     proc DoDoubleCompare(s1: _float64, s2: _float64): Word
-    {   var fcc: FCondCode = {};
+    {   var fcc: CondCode = {};
 	var tmp: Word;
 
 	if s1.isNaN() || s2.isNaN() then
-	{   fcc[UN] = true;
+	{   fcc[NOR] = true;
 	}
 	else
 	{   fcc[OR] = true;
+	    // FIXME - probably not correct
 	    if s1 == s2 then { fcc[EQ] = true; }
 			else { fcc[NE] = true; }
 	    if s1 >= s2 then { fcc[GE] = true; }
 			else { fcc[LT] = true; }
 	    if s1 <= s2 then { fcc[LE] = true; }
 			else { fcc[GT] = true; }
-	    if 0.0 <  s1 && s1 <  s2 then fcc[SIN] = true;
-	    if 0.0 <= s1 && s1 <  s2 then fcc[FIN] = true;
-	    if 0.0 <  s1 && s1 <= s2 then fcc[CIN] = true;
-	    if 0.0 <= s1 && s1 <= s2 then fcc[RIN] = true;
-	    // The remainder only looks at s1
-	    if !s1.isNeg() then
-	    {	if s1.getExp() == 0x7FF then fcc[F1PI] = true;
-		else
-		{   if s1.getExp() == 0 then
-		    {	if s1 == 0.0 then fcc[F1PZ] = true;
-			else		  fcc[F1PD] = true;
-		    }
-		    else		  fcc[F1PN] = true;
-		}
-	    }
-	    else
-	    {	if s1.getExp() == 0x7FF then fcc[F1NI] = true;
-		else
-		{   if s1.getExp() == 0 then
-		    {	if s1 == 0.0 then fcc[F1NZ] = true;
-			else		  fcc[F1ND] = true;
-		    }
-		    else		  fcc[F1NN] = true;
-		}
-	    }
+	    // FIXME - wait there's more
 	}
-	tmp = Word(fcc);
-	// Mitch say this is right, but I'm dubious
-	tmp = tmp | (((~tmp) << 8) & 0x3f00);
-	return tmp;
+if db&4 != 0 then {
+  fde.str("DoDoubleCompare=0x"); fde.hex64(Word(fcc)); fde.nl(); }
+	return Word(fcc);
     }
 
     proc DoSingleCompare(s1: _float32, s2: _float32): Word
-    {   var fcc: FCondCode = {};
+    {   var fcc: CondCode = {};
 	var tmp: Word;
 
 	if s1.isNaN() || s2.isNaN() then
-	{   fcc[UN] = true;
+	{   fcc[NOR] = true;
 	}
 	else
 	{   fcc[OR] = true;
+	    // FIXME - probably not correct
 	    if s1 == s2 then { fcc[EQ] = true; }
 			else { fcc[NE] = true; }
 	    if s1 >= s2 then { fcc[GE] = true; }
 			else { fcc[LT] = true; }
 	    if s1 <= s2 then { fcc[LE] = true; }
 			else { fcc[GT] = true; }
-	    if s1 >  0.0 && s1 <  s2 then fcc[SIN] = true;
-	    if s1 >= 0.0 && s1 <  s2 then fcc[FIN] = true;
-	    if s1 >  0.0 && s1 <= s2 then fcc[CIN] = true;
-	    if s1 >= 0.0 && s1 <= s2 then fcc[RIN] = true;
-	    // The remainder only looks at s1
-	    if !s1.isNeg() then
-	    {	if s1.getExp() == 0x7FF then fcc[F1PI] = true;
-		else
-		{   if s1.getExp() == 0 then
-		    {	if s1 == 0.0 then fcc[F1PZ] = true;
-			else		  fcc[F1PD] = true;
-		    }
-		    else		  fcc[F1PN] = true;
-		}
-	    }
-	    else
-	    {	if s1.getExp() == 0x7FF then fcc[F1NI] = true;
-		else
-		{   if s1.getExp() == 0 then
-		    {	if s1 == 0.0 then fcc[F1NZ] = true;
-			else		  fcc[F1ND] = true;
-		    }
-		    else		  fcc[F1NN] = true;
-		}
-	    }
+	    // FIXME - wait there's more
 	}
-	tmp = Word(fcc);
-	// Mitch say this is right, but I'm dubious
-	tmp = tmp | (((~tmp) << 8) & 0x3f00);
-	return tmp;
+if db&4 != 0 then {
+  fde.str("DoSingleCompare=0x"); fde.hex64(Word(fcc)); fde.nl(); }
+	return Word(fcc);
     }
 
     import math;
@@ -652,87 +620,93 @@ fde.str("trans "); fde.hex8(_uint8(func)); }
 	    is 0b11110 then dbl = math.atan(dbl);	// atan
 	    return Word(dbl);
 	}
-   }
+    }
 
-    proc Convert(src: Word, func: _uint, invert: boolean): Word
+    type CvtType: (U, S, F, D);
+    proc Convert(src: Word, fm: CvtType, to: CvtType): Word
     {
 if db&4 != 0 then {
-fde.str("cvt "); fde.hex8(_uint8(func));
+fde.str("cvt ");
 fde.str(" src="); fde.hex64(src); fde.nl(); }
-	type SrcType: (U, S, F, D);
-	const Input: [64]SrcType =
-	{ D, S, U, U, D, D, D, D, F, U, U, U, F, F, F, F,
-	  U, F, F, F, U, U, U, U, S, U, F, F, S, S, S, S,
-	  D, U, U, U, D, D, D, D, F, U, U, U, F, F, F, F,
-	  U, D, D, D, U, U, U, U, S, U, D, D, S, S, S, S
-	};
 
-	if invert then
-	{   if Input[func]
-	    is S then src = -src;
-	    is F then src = src ^ 0x8000_0000;
-	    is D then src = src ^ 0x8000_0000_0000_0000;
-	}
-	if func >> 4
-	is 0b00 then	// unsigned result
+	if to
+	is U then	// unsigned result
 	{   var unsigned: _uint64;
-	    if func & 0b1111
-	    is 0b0000 then unsigned = _uint64*(_float64(src));
-	    is 0b0001 then unsigned = _uint64(_int64(src));
-	    is 0b1000 then unsigned = _uint64*(_float32(_uint32(src)));
-	    else fde.str("unimplemented rounding mode\n");
+	    if fm
+	    is D then unsigned = _uint64*(_float64(src));
+	    is S then unsigned = _uint64(_int64(src));
+	    is F then unsigned = _uint64*(_float32(_uint32(src)));
+	    else fde.str("unimplemented cvt mode\n");
 	    return Word(unsigned);
 	}
-	is 0b01 then	// double result
-	{   var double: _float64;
-	    if func & 0b1111
-	    is 0b0000 then double = _float64*(_uint64(src));
-	    is 0b0001 then double = _float32(_uint32(src));
-	    is 0b1000 then double = _float64*(_int64(src));
-	    else fde.str("unimplemented rounding mode\n");
-	    return Word(double);
-	}
-	is 0b10 then	// signed result
+	is S then	// signed result
 	{   var signed: _int64;
-	    if func & 0b1111
-	    is 0b0000 then signed = _int64*(_float64(src));
-	    is 0b0001 then signed = _int64(_uint64(src));
-	    is 0b1000 then signed = _int64*(_float32(_uint32(src)));
-	    else fde.str("unimplemented rounding mode\n");
+	    if fm
+	    is D then signed = _int64*(_float64(src));
+	    is U then signed = _int64(_uint64(src));
+	    is F then signed = _int64*(_float32(_uint32(src)));
+	    else fde.str("unimplemented cvt mode\n");
 	    return Word(signed);
 	}
-	is 0b11 then	// float result
+	is D then	// double result
+	{   var double: _float64;
+	    if fm
+	    is U then double = _float64*(_uint64(src));
+	    is F then double = _float32(_uint32(src));
+	    is S then double = _float64*(_int64(src));
+	    else fde.str("unimplemented cvt mode\n");
+	    return Word(double);
+	}
+	is F then	// float result
 	{   var float: _float32;
-	    if func & 0b1111
-	    is 0b0000 then float = _float32*(_uint64(src));
-	    is 0b0001 then float = _float64(src);
-	    is 0b1000 then float = _float32*(_int64(src));
-	    else fde.str("unimplemented rounding mode\n");
+	    if fm
+	    is U then float = _float32*(_uint64(src));
+	    is D then float = _float64(src);
+	    is S then float = _float32*(_int64(src));
+	    else fde.str("unimplemented cvt mode\n");
 	    return Word(_uint32(float));
 	}
+    }
+
+    proc RoundD(src: Word, src2: Word): Word
+    {
+if db&4 != 0 then {
+fde.str("rnd ");
+fde.str(" src="); fde.hex64(src);
+fde.str(" src2="); fde.uint8(src2); fde.nl(); }
+	return src;	// FIXME - temp
+    }
+
+    proc RoundF(src: Word, src2: Word): Word
+    {
+if db&4 != 0 then {
+fde.str("rndf ");
+fde.str(" src="); fde.hex64(src);
+fde.str(" src2="); fde.uint8(src2); fde.nl(); }
+	return src;	// FIXME - temp
     }
 
     proc Op2(inst: Inst)
     {   var op: OP2 = OP2(inst);
 	var tmp, src1, src2: Word;
 	var inv1, inv2: boolean;
-	type Kind: (INT, LOG, SHF, FLT, MIX);
+	type Kind: (INT, LOG, SHF, FLT, MIX, CVT);
 	var kind: Kind;
 	const kindtab: [32]Kind =
-	{ INT, INT, INT, INT, INT, INT, INT,	// ADD-MIN
-	  LOG, LOG, LOG, LOG,			// OR-XOR
-	  SHF, SHF,
-	  INT, INT, INT,
+	{ INT, INT, INT, INT, INT, INT, INT, INT,	// ADD-MIN
+	  LOG, LOG, LOG, LOG, SHF, SHF, SHF, INT,	// OR-XOR,SR,SL,BITR
 	  FLT, FLT, FLT, FLT, FLT, FLT, FLT, FLT,
 	  FLT, FLT, MIX, FLT, FLT, FLT, FLT, FLT
 	};
 
-	kind = kindtab[op.minor&0x1F];
+	if op.minor < 0b100000 then
+	    kind = CVT;
+	else
+	    kind = kindtab[op.minor&0x1F];
 	if op.I == 0 then
 	{   if op.D != 0 then	// IMM5
 	    {	if op.s2 == 0 then
 		{   src1 = reg[op.rs1];
-		    src2 = Sext(4, op.rs2);
 		    if kind == FLT then
 			src2 = FloatImm5(op.rs2, op.S);
 		    else
@@ -804,9 +778,53 @@ fde.str(" src="); fde.hex64(src); fde.nl(); }
 	    is LOG     then src2 = ~src2;
 	    is FLT     then src2 ^= 0x8000_0000_0000_0000;	// flip sign bit
 	}
-//fde.str("Op2 src1="); fde.hex64(src1); fde.str(" src2="); fde.hex64(src2);
-//fde.str(" inv1="); fde.uint8(_uint8(inv1));fde.str(" inv2="); fde.uint8(_uint8(inv2)); fde.nl();
+if db&4 != 0 then {
+fde.str("src1="); fde.hex64(src1); fde.str(" inv1="); fde.uint8(_uint8(inv1));
+fde.str(" src2="); fde.hex64(src2); fde.str(" inv2="); fde.uint8(_uint8(inv2));
+fde.nl();}
 	if op.minor
+	is 0b000001 then	// CVTII
+	{   if op.S == 0 then
+		tmp = Convert(src1, U, S);
+	    else
+		tmp = Convert(src1, S, U);
+	}
+	is 0b000010 then	// CVTSF
+	{   if op.S == 0 then
+		tmp = Convert(src1, S, D);
+	    else
+		tmp = Convert(src1, S, F);
+	}
+	is 0b000011 then	// CVTUF
+	{   if op.S == 0 then
+		tmp = Convert(src1, U, D);
+	    else
+		tmp = Convert(src1, U, F);
+	}
+	is 0b010001 then	// CVTDI
+	{   if op.S == 0 then
+		tmp = Convert(src1, D, U);
+	    else
+		tmp = Convert(src1, D, S);
+	}
+	is 0b010010 then	// CVTFI
+	{   if op.S == 0 then
+		tmp = Convert(src1, F, U);
+	    else
+		tmp = Convert(src1, F, S);
+	}
+	is 0b010011 then	// CVTFF
+	{   if op.S == 0 then
+		tmp = Convert(src1, D, F);
+	    else
+		tmp = Convert(src1, F, D);
+	}
+	is 0b010100 then	// RND
+	{   if op.S == 0 then
+		tmp = RoundD(src1,src2);
+	    else
+		tmp = RoundF(src1,src2);
+	}
 	is 0b100001 then	// ADD
 	{   tmp = DoAdd(src1,src2);
 	    // FIXME - check signed overflow if S-bit set
@@ -936,45 +954,46 @@ if db&16 != 0 then { fde.str("vreg="); fde.uint8(vreg); fde.nl(); }
 	var cnd: 0..31;
 	var fmt: 0..7;
 	var inc, cmp, loop, add: _int;
+	// OR and TO are placeholders, not really conditions
 	type What:
 	{   increg: boolean;	// false => inc is +1, true => inc is reg
-	    comp1:  CBits;	// Z => true
-	    comp2:  CBits;	// Z => true, P => INC!=0
+	    comp1:  CBits;	// OR => true
+	    comp2:  CBits;	// OR => true, TO => INC!=0
 	    signed: boolean;
 	}: packed;
 	const WhatTab: [32]What =
-	{   {  true, NE,  Z, false },
-	    {  true, EQ,  Z, false },
-	    {  true, HI,  Z, false },
-	    {  true, HS,  Z, false },
-	    {  true, LO,  Z, false },
-	    {  true, LS,  Z, false },
-	    {  true,  Z,  Z, false },
-	    {  false,NE,  P, false },
-	    {  false,EQ,  P, false },
-	    {  false,HI,  P, false },
-	    {  false,HS,  P, false },
-	    {  false,LO,  P, false },
-	    {  false,LS,  P, false },
-	    {  false, Z, NE, false },
-	    {  false, Z, HI, false },
-	    {  false, Z, LO, false },
-	    {  true, NE,  Z, true  },
-	    {  true, EQ,  Z, true  },
-	    {  true, GT,  Z, true  },
-	    {  true, GE,  Z, true  },
-	    {  true, LT,  Z, true  },
-	    {  true, LE,  Z, true  },
-	    {  true,  Z,  Z, true  },
-	    {  false,NE,  P, true  },
-	    {  false,EQ,  P, true  },
-	    {  false,GT,  P, true  },
-	    {  false,GE,  P, true  },
-	    {  false,LT,  P, true  },
-	    {  false,LE,  P, true  },
-	    {  false, Z, EQ, false },
-	    {  false, Z, HS, false },
-	    {  false, Z, LS, false }
+	{   {  true, NE, OR, false },
+	    {  true, EQ, OR, false },
+	    {  true, HI, OR, false },
+	    {  true, HS, OR, false },
+	    {  true, LO, OR, false },
+	    {  true, LS, OR, false },
+	    {  true, OR, OR, false },
+	    {  false,NE, TO, false },
+	    {  false,EQ, TO, false },
+	    {  false,HI, TO, false },
+	    {  false,HS, TO, false },
+	    {  false,LO, TO, false },
+	    {  false,LS, TO, false },
+	    {  false,OR, NE, false },
+	    {  false,OR, HI, false },
+	    {  false,OR, LO, false },
+	    {  true, NE, OR, true  },
+	    {  true, EQ, OR, true  },
+	    {  true, GT, OR, true  },
+	    {  true, GE, OR, true  },
+	    {  true, LT, OR, true  },
+	    {  true, LE, OR, true  },
+	    {  true, OR, OR, true  },
+	    {  false,NE, TO, true  },
+	    {  false,EQ, TO, true  },
+	    {  false,GT, TO, true  },
+	    {  false,GE, TO, true  },
+	    {  false,LT, TO, true  },
+	    {  false,LE, TO, true  },
+	    {  false,OR, EQ, false },
+	    {  false,OR, HS, false },
+	    {  false,OR, LS, false }
 	};
 	var what: What;
 
@@ -1035,8 +1054,8 @@ if db&16 != 0 then
 if db&16 != 0 then { fde.str("0x"); fde.hex32(add); fde.nl(); }
 	var continue: boolean = true;
 	var result: CondCode;
-	if what.comp2 != Z then
-	{   if what.comp2 == P then
+	if what.comp2 != OR then
+	{   if what.comp2 == TO then
 		continue = inc != 0;
 	    else
 	    {   result = CondCode(DoCompare(inc, cmp));
@@ -1047,7 +1066,7 @@ if db&16 != 0 && !continue then { fde.str("condition terminates\n"); }
 	if continue then
 	{   loop += add;
 	    reg[op.rs1] = loop;
-	    if what.comp1 != Z then
+	    if what.comp1 != OR then
 	    {   result = CondCode(DoCompare(loop, cmp));
 		continue = result[what.comp1];
 if db&16 != 0 && !continue then { fde.str("loop counter terminates\n"); }
@@ -1330,9 +1349,6 @@ if db&16 != 0 && !continue then { fde.str("loop counter terminates\n"); }
 		    reg[opb.rd] = _clznz(src);
 	    }
 	}
-	is 0b010000 then reg[opb.rd] = Convert(src, opb.func, invert);
-	is 0b010001 then reg[opb.rd] = Convert(src, opb.func+0b100000, invert);
-	is 0b010100 then Fault("Unimplemented RNDxx", inst);
 	is 0b011000 then reg[opb.rd] = Transcend(src, opb.func, opb.s != 0, invert);
 	is 0b011101 then 	// long form VEC
 	{   // The I bit should be 1, with a 32-bit immediate
@@ -1347,19 +1363,20 @@ if db&16 != 0 then { fde.str("vreg="); fde.uint8(vreg); fde.nl(); }
 
     proc UpdateShadow(take: boolean, inst: Inst)
     {	var op: OPPC = OPPC(inst);	// or OPPB
-	var mask: _uint8;
-	var new: _uint8;
+	var mask: _uint16;
+	var new: _uint16;
 	var cnt: _uint8;
 
-	cnt  = op.ml+1;
-	mask = 0xFF >> (8 - cnt);
+	cnt  = op.else + op.then;
+	new  = ((1 << op.else) - 1) << op.then;
+	if !take then new = ~new;
+	mask = 0xFFFF >> (16 - cnt);
 if db&4 != 0 then {
 fde.str("\tUpdateShadow: ip="); fde.hex32(_uint32(reg[PC]));
 fde.str(" take="); fde.uint8(_uint8(take));
 fde.str(" cnt="); fde.uint8(cnt);
-fde.str(" mask="); fde.hex8(mask); }
-	new  = op.shadow;
-	if !take then new = ~new;
+fde.str(" new="); fde.hex16(new);
+fde.str(" mask="); fde.hex16(mask); }
 	new &= mask;
 	if pcnt == 0 then
 	    pcnt = cnt;
@@ -1374,11 +1391,11 @@ fde.str(" at ip="); fde.hex32(_uint32(reg[PC])); fde.nl();
 	    }
 	}
 if db&4 != 0 then {
-fde.str(" old="); fde.hex8(shadow);
-fde.str(" this="); fde.hex8(new); }
+fde.str(" old="); fde.hex16(shadow);
+fde.str(" this="); fde.hex16(new); }
 	shadow = new | (shadow & ~mask);
 if db&4 != 0 then {
-fde.str(" new="); fde.hex8(shadow); fde.nl(); }
+fde.str(" new="); fde.hex16(shadow); fde.nl(); }
     }
 
     proc DoPb1(inst: Inst, src: Word)
@@ -1403,6 +1420,7 @@ fde.str(" new="); fde.hex8(shadow); fde.nl(); }
 	if ops.minor
 	is 0b0000 then DoPb1(inst, src);
 	is 0b0001 then DoPcnd(inst, src);
+	is 0b0110 then reg[ops.rd] = DoROT(src, ops.w, ops.o);
 	is 0b1000 then reg[ops.rd] = DoSRL(src, ops.w, ops.o);
 	is 0b1001 then reg[ops.rd] = DoSRA(SWord(src), ops.w, ops.o);
 	is 0b1010 then reg[ops.rd] = DoSLL(src, ops.w, ops.o);
@@ -1531,6 +1549,14 @@ fde.nl(); }
 	    Write(adr, WORD, tmp);
 	is 0b001011, 0b011011, 0b011111 then	// STD
 	    Write(adr, QUAD, tmp);
+	is 0b100011 then			// CALX
+	{   reg[LR] = reg[PC];
+	    reg[PC] = Read(adr, QUAD);
+	}
+	is 0b100111 then			// CALA
+	{   reg[LR] = reg[PC];
+	    reg[PC] = adr;
+	}
     }
 
     proc DoExit(start:_uint, stop:_uint, disp:_uint)
@@ -1671,26 +1697,28 @@ fde.nl(); }
 	tmp = reg[op.rs1];
 	cond = Conditions(op.cond);
 	if cond
-	is NM  then take = tmp == 0x8000_0000_0000_0000;
-	is NN  then take = tmp != 0x8000_0000_0000_0000;
 	is EQ0 then take = tmp == 0;
 	is NE0 then take = tmp != 0;
 	is GE0 then take = SWord(tmp) >= 0;
 	is GT0 then take = SWord(tmp) >  0;
 	is LE0 then take = SWord(tmp) <= 0;
 	is LT0 then take = SWord(tmp) <  0;
-	is FEQ then take = _float64(tmp) == 0.0;
-	is FNE then take = _float64(tmp) != 0.0;
-	is FGE then take = _float64(tmp) >= 0.0;
-	is FLT then take = _float64(tmp) <  0.0;
-	is FGT then take = _float64(tmp) >  0.0;
-	is FLE then take = _float64(tmp) <= 0.0;
-	is FEQF then take = _float32(_uint32(tmp)) == 0.0;
-	is FNEF then take = _float32(_uint32(tmp)) != 0.0;
-	is FGEF then take = _float32(_uint32(tmp)) >= 0.0;
-	is FLTF then take = _float32(_uint32(tmp)) <  0.0;
-	is FGTF then take = _float32(_uint32(tmp)) >  0.0;
-	is FLEF then take = _float32(_uint32(tmp)) <= 0.0;
+	is DEQ then take = _float64(tmp) == 0.0;
+	is DNE then take = _float64(tmp) != 0.0;
+	is DGE then take = _float64(tmp) >= 0.0;
+	is DLT then take = _float64(tmp) <  0.0;
+	is DGT then take = _float64(tmp) >  0.0;
+	is DLE then take = _float64(tmp) <= 0.0;
+	is FEQ then take = _float32(_uint32(tmp)) == 0.0;
+	is FNE then take = _float32(_uint32(tmp)) != 0.0;
+	is FGE then take = _float32(_uint32(tmp)) >= 0.0;
+	is FLT then take = _float32(_uint32(tmp)) <  0.0;
+	is FGT then take = _float32(_uint32(tmp)) >  0.0;
+	is FLE then take = _float32(_uint32(tmp)) <= 0.0;
+	is RET then
+	{   reg[PC] = reg[LR];
+	    return;
+	}
 	else
 	    Fault("Unimplemented branch condition instruction", inst);
 	if take then
@@ -1793,7 +1821,7 @@ fde.str("ExtraLen="); fde.uint(xlength); fde.nl();
 	skip = 0;
 	if pcnt > 0 then
 	{   skip = shadow & 1;
-if db&4 != 0 then { fde.hex8(shadow); fde.chr(' '); }
+if db&4 != 0 then { fde.hex16(shadow); fde.chr(' '); }
 	    shadow = shadow >> 1;
 	    pcnt -= 1;
 	}

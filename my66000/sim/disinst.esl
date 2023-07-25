@@ -14,7 +14,7 @@
 	    }
 	}
 	fde.str("0x");
-	fde.hex32(_uint32(addr));
+	fde.hex64(_uint64(addr));
     }
 
     proc PWO(wo: Word)
@@ -124,22 +124,24 @@
 	var addr: _uint64;
 	var minor: 0..0b111111;
 	var disp: _uint;
-	const OpName: [32]@[]_byte =
-	{ "ldub","lduh","lduw","ldd" ,"ldsb","ldsh","ldsw","la",
-	  "stb", "sth", "stw", "std", "???", "???", "???", "???",
-	  "???", "???", "???", "ldm", "stm", "mm",  "ms", "???",
-	  "stb", "sth", "stw", "std", "stb", "sth", "stw", "std"
+	const OpName: [64]@[]_byte =
+	{ "ldub","lduh","lduw","ldd" ,"ldsb","ldsh","ldsw","la",   // 0b000xxx
+	  "stb", "sth", "stw", "std", "???", "pre", "push","???",  // 0b001xxx
+	  "???", "???", "???", "ldm", "stm", "mm",  "ms",  "???",  // 0b010xxx
+	  "stb", "sth", "stw", "std", "stb", "sth", "stw", "std",  // 0b011xxx
+	  "???", "???", "???", "calx","???", "???", "???", "cala", // 0b100xxx
+	  "???", "???", "???", "???", "???", "???", "???", "???",  // 0b101xxx
+	  "???", "???", "???", "???", "???", "???", "???", "???",  // 0b110xxx
+	  "???", "???", "???", "???", "???", "???", "???", "???"   // 0b111xxx
 	};
 
 	minor = op.minor;
-	if minor > 0b011111 then
-	{
-	}
-	else
-	{
-	    fde.str(OpName[op.minor&0b11111]);
+	fde.str(OpName[minor]);
+	    if op.L == 1 then
+		fde.chr('l');
 	    fde.chr('\t');
-	    if minor >= 0b011000 then	// store with immediate data
+	    if minor
+	    is 0b011000 .. 0b011111 then	// store immediate
 	    {	// address displacement, if any, comes before immediate data
 		disp = 0;
 		if op.I != 0 then
@@ -156,10 +158,12 @@
 		}
 		else
 		    fde.int(_int(Sext(4, op.rd)));
+		fde.chr(',');
 	    }
-	    else
-		PReg(op.rd);
-	    fde.chr(',');
+	    is 0b000000.. 0b010111 then	// normal register src/dst
+	    {	PReg(op.rd);
+		fde.chr(',');
+	    }
 	    if minor
 	    is 0b010011, 0b010100 then	// LDM,STM
 	    {	PReg(op.ri); fde.chr(',');
@@ -193,27 +197,34 @@
 		}
 	    }
 	    fde.chr(']');
-	    if op.rb == 0 then
-	    {   fde.str("\t; ");
-		PAddr(ip+addr);
-	    }
-	}
+//	    if op.rb == 0 then
+//	    {   fde.str("\t; ");
+//		PAddr(ip+addr);
+//	    }
     }
 
     proc disOp2(inst: Inst, ip: Word)
     {   var op: OP2 = OP2(inst);
 	var minor: 0..0b111111;
-	const OpNameU: [32]@[]_byte =
-	{ "???", "add", "mul", "div", "cmp", "???", "max", "min",
-	  "or",  "xor", "and", "???", "srl", "sll", "bitr","???",
-	  "???", "fadd","fmul","fdiv","fcmp","???", "fmax","fmin",
-	  "???", "csgn","eadd","???", "???", "pow", "atan2","???"
+	const OpNameU: [64]@[]_byte =
+	{ "???",  "cvtus","cvtsd","cvtud","???",  "???",  "???",  "???",
+	  "???",  "???",  "???",  "???",  "???",  "???",  "???",  "???",
+	  "???",  "cvtdu","cvtfu","cvtdf","rnd",  "???",  "???",  "???",
+	  "???",  "???",  "???",  "???",  "???",  "???",  "???",  "???",
+	  "???",  "add",  "mul",  "div",  "cmp",  "???",  "max",  "min",
+	  "or",   "xor",  "and",  "???",  "srl",  "sll",  "bitr", "???",
+	  "???",  "fadd", "fmul", "fdiv", "fcmp", "???",  "fmax", "fmin",
+	  "???",  "csgn", "eadd", "???",  "???",  "pow",  "atan2","???"
 	};
-	const OpNameS: [32]@[]_byte =
-	{ "???", "adds","muls","divs","cmp", "???", "maxs","mins",
-	  "???", "???", "???", "???", "sra", "sla", "???", "???",
-	  "???", "faddf","fmulf","fdivf","fcmpf","???","fmaxf","fminf",
-	  "???", "csgnf","eaddf", "???", "???", "powf", "atan2f", "???"
+	const OpNameS: [64]@[]_byte =
+	{ "???",  "cvtsu","cvtsf","cvtuf","???",  "???",  "???",  "???",
+	  "???",  "???",  "???",  "???",  "???",  "???",  "???",  "???",
+	  "???",  "cvtds","cvtfs","cvtfd","rndf", "???",  "???",  "???",
+	  "???",  "???",  "???",  "???",  "???",  "???",  "???",  "???",
+	  "???",  "adds", "muls", "divs", "cmp",  "???",  "maxs", "mins",
+	  "???",  "???",  "???",  "???",  "sra",  "sla",  "???",  "???",
+	  "???",  "faddf","fmulf","fdivf","fcmpf","???",  "fmaxf","fminf",
+	  "???",  "csgnf","eaddf","???",  "???",  "powf", "atan2f","???"
 	};
 	const OpFmt: [16]@[]_byte =	// I.D.s1.s2
 	{   "R,S,T",	"R,S,-T",	"R,-S,T",	"R,-S,-T",
@@ -229,12 +240,8 @@
 	    0xA, 0xE, 0xA, 0xE, 0xB, 0xF, 0xB, 0xF
 	};
 	minor = op.minor;
-	if minor < 0b100000 then
-	{
-	}
-	else
-	{   if op.S != 0 then fde.str(OpNameS[op.minor&0b11111]);
-			 else fde.str(OpNameU[op.minor&0b11111]);
+	{   if op.S != 0 then fde.str(OpNameS[op.minor]);
+			 else fde.str(OpNameU[op.minor]);
 	    fde.chr('\t');
 	    PFmt(inst, ip, OpFmt[MapSpec[(inst >> 11)&0b11111]]);
 //fde.chr('\t'); fde.hex8(MapSpec[(inst >> 11)&0b11111]);
@@ -326,18 +333,6 @@
 	  "cvt", "cvt", "???", "???", "rnd", "???", "???", "???",
 	  "???", "???", "???", "???", "???", "???", "???", "???"
 	};
-	const Cvt0Sfx: [32]@[]_byte =
-	{ "du", "su", "??", "??", "du", "du", "du", "du",
-	  "fu", "??", "??", "??", "su", "su", "su", "su",
-	  "ud", "fd", "??", "??", "ud", "ud", "ud", "ud",
-	  "sd", "??", "??", "??", "sd", "sd", "sd", "sd"
-	};
-	const Cvt1Sfx: [32]@[]_byte =
-	{ "ds", "??", "us", "??", "ds", "ds", "ds", "ds",
-	  "fs", "??", "??", "??", "fs", "fs", "fs", "fs",
-	  "uf", "df", "df", "df", "uf", "uf", "uf", "uf",
-	  "sf", "??", "df", "df", "sf", "sf", "sf", "sf"
-	};
 	const TransName: [32]@[]_byte =
 	{ "fln2",   "fln",  "flog",      "???",
 	  "fexp2",  "fexp", "fexp10",    "???",
@@ -353,13 +348,6 @@
 	  '?', '?', '?', '?', '?', '?', '?', '?',
 	  '?', '?', '?', '?', '?', '?', '?', '?',
 	  '?', '?', '?', '?', '?', '?', '?', '?'
-	};
-
-	const RndFunc: [32]@[]_byte =
-	{ "ne", "rm", "??", "??", "az", "tz", "pi", "ni",
-	  "??", "??", "??", "??", "??", "??", "??", "??",
-	  "??", "??", "??", "??", "??", "??", "??", "??",
-	  "??", "??", "??", "??", "??", "??", "??", "??"
 	};
 
 	if opa.minor == 0b000000 then	// HR
@@ -428,17 +416,6 @@
 	    }
 	    is 0b01000..0b01111	then	// POP,FF1,...
 		fde.str(OpName[opb.minor]);
-	    is 0b10000 then		// CVT
-	    {   fde.str("cvt"); fde.str(Cvt0Sfx[opb.func]);
-	    }
-	    is 0b10001 then		// CVT
-	    {   fde.str("cvt"); fde.str(Cvt1Sfx[opb.func]);
-	    }
-	    is 0b10100 then		// RND
-	    {
-		fde.str("rnd"); fde.str(RndFunc[opb.func]);
-		if opb.s != 0 then fde.chr('f');
-	    }
 	    is 0b11000 then		// TRANS
 	    {   fde.str(TransName[opb.func]);
 		if opb.s != 0 then fde.chr('f');
@@ -466,15 +443,15 @@
 	}
     }
 
-    proc PShadow(n: _uint, mask: _uint)
-    {   var k: _uint;
-
-	k = 1;
-	loop
-	{   if (mask & k) != 0 then fde.chr('F'); else fde.chr('T');
-	  exit n == 0;
-	    n -= 1;
-	    k = k << 1;
+    proc PShadow(e: _uint, t: _uint)
+    {
+	while t > 0 do
+	{   fde.chr('T');
+	    t -= 1;
+	}
+	while e > 0 do
+	{   fde.chr('F');
+	    e -= 1;
 	}
     }
 
@@ -482,7 +459,7 @@
     {	var op: OPSHF = OPSHF(inst);
 	const ShfOpNames: [16]@[]_byte =
 	{   "pb1", "pcnd","???", "???",
-	    "???", "???", "???", "???",
+	    "???", "???", "rot", "???",
 	    "srl", "sra", "sll", "sla",
 	    "bitr","???", "???", "???"
 	};
@@ -493,17 +470,15 @@
 	{   var opb: OPPB = OPPB(inst);
 	    fde.uint8(opb.bit); fde.chr(',');
 	    PReg(opb.rs1); fde.chr(',');
-	    fde.uint8(opb.I); fde.chr(',');
-	    PShadow(opb.ml, opb.shadow);
+	    PShadow(opb.else, opb.then);
 	}
 	is 0b0001 then
 	{   var opc: OPPC = OPPC(inst);
 	    fde.str(CondNames[opc.cond]); fde.chr(',');
 	    PReg(opc.rs1); fde.chr(',');
-	    fde.uint8(opc.I); fde.chr(',');
-	    PShadow(opc.ml, opc.shadow);
+	    PShadow(opc.else, opc.then);
 	}
-	is 0b1000..0b1100 then
+	else
 	    PFmt(inst, ip, "R,S,#N");
     }
 
@@ -523,12 +498,18 @@
     {	var op: OPBC = OPBC(inst);
 	var adr: Word;
 
-	fde.str("b");
-	fde.str(CondNames[op.cond]); fde.chr('\t');
-	PReg(op.rs1); fde.chr(',');
-	adr = Word(Sext(15, inst&0xFFFF)) << 2;
-	adr += ip;
-	fde.str("0x"); fde.hex32(_uint32(adr));
+	if Conditions(op.cond)
+	is RET then fde.str("ret");
+	is SVR then fde.str("svr");
+	is SVC then fde.str("svc");
+	else
+	{   fde.str("b");
+	    fde.str(CondNames[op.cond]); fde.chr('\t');
+	    PReg(op.rs1); fde.chr(',');
+	    adr = Word(Sext(15, inst&0xFFFF)) << 2;
+	    adr += ip;
+	    fde.str("0x"); fde.hex32(_uint32(adr));
+	}
     }
 
     proc disOpJt(inst: Inst, ip: Word)
