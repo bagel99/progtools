@@ -54,6 +54,19 @@
 	func:	0..0b11111;	// 4..0
     }: packed, msb, bits(32);
 
+    type OPLOOP:
+    {	major:	0..0b111111;	// 31..26
+	cnd:	0..0b11111;	// 25..21
+	rs1:	REG;		// 20..16
+	I:	0..1;		// 15
+	s1:	0..1;		// 14
+	s2:	0..1;		// 13
+	s:      0..1;		// 12
+	kind:	0..0b11;	// 11..10
+	rs3:	REG;		// 9..5
+	rs2:	REG;		// 4..0
+    }: packed, msb, bits(32);
+
     type OPCARRY:
     {	major:	0..0b111111;	// 31..26
 	rd:	REG;		// 25..21

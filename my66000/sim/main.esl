@@ -27,8 +27,6 @@ const NMemTypes = 32;
 // Arg[1..] are the normal procedure call args.
 var Arg: [9]_uint =
 { 8, 1, 2, 3, 4, 5, 6, 7, 8 };	// Mitch's ABI
-const ArgAlt: [9]_uint =
-{ 24, 16, 17, 18, 19, 20, 21, 22, 23 };	// BGL's ABI
 
 import my66000;
 alias my66000 as cpu;
@@ -144,9 +142,7 @@ proc main(argc:_uint, argv:@[]@[]_byte):_int //[[global]]
 		n = strtou32(argv[i]@);
 	    }
 	}
-	is 'd' then	db = argv[i]@[2] - '0';
-	is 'a' then	// alternate ABI
-	    Arg = ArgAlt;
+	is 'd' then	db = strtou32(argv[i]@[2:]);
 	i += 1;
     }
     if i >= argc then

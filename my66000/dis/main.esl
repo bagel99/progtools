@@ -79,7 +79,7 @@ proc GetSym(addr: Addr): @[]_byte
     return 0;
 }
 
-
+alias fdo as fdx;
 import disinst;
 
 proc DisSection(ptxt: elfread.pText)

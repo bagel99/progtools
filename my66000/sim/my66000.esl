@@ -287,7 +287,9 @@ fde.str("** Unimplemented system call "); fde.uint(n); fde.nl();
 
     type CondCode: [CBits]boolean: packed;
 
+alias fde as fdx;
 import disinst;
+
     proc DoLDM(fm: _uint, to: _uint, adr: Word)
     {
 	do
@@ -949,129 +951,122 @@ if db&16 != 0 then { fde.str("vreg="); fde.uint8(vreg); fde.nl(); }
 	vmode = true;
     }
 
-    proc DoLoop(inst: Inst)
-    {   var op: OP3 = OP3(inst);
-	var cnd: 0..31;
-	var fmt: 0..7;
-	var inc, cmp, loop, add: _int;
-	// OR and TO are placeholders, not really conditions
-	type What:
-	{   increg: boolean;	// false => inc is +1, true => inc is reg
-	    comp1:  CBits;	// OR => true
-	    comp2:  CBits;	// OR => true, TO => INC!=0
-	    signed: boolean;
-	}: packed;
-	const WhatTab: [32]What =
-	{   {  true, NE, OR, false },
-	    {  true, EQ, OR, false },
-	    {  true, HI, OR, false },
-	    {  true, HS, OR, false },
-	    {  true, LO, OR, false },
-	    {  true, LS, OR, false },
-	    {  true, OR, OR, false },
-	    {  false,NE, TO, false },
-	    {  false,EQ, TO, false },
-	    {  false,HI, TO, false },
-	    {  false,HS, TO, false },
-	    {  false,LO, TO, false },
-	    {  false,LS, TO, false },
-	    {  false,OR, NE, false },
-	    {  false,OR, HI, false },
-	    {  false,OR, LO, false },
-	    {  true, NE, OR, true  },
-	    {  true, EQ, OR, true  },
-	    {  true, GT, OR, true  },
-	    {  true, GE, OR, true  },
-	    {  true, LT, OR, true  },
-	    {  true, LE, OR, true  },
-	    {  true, OR, OR, true  },
-	    {  false,NE, TO, true  },
-	    {  false,EQ, TO, true  },
-	    {  false,GT, TO, true  },
-	    {  false,GE, TO, true  },
-	    {  false,LT, TO, true  },
-	    {  false,LE, TO, true  },
-	    {  false,OR, EQ, false },
-	    {  false,OR, HS, false },
-	    {  false,OR, LS, false }
-	};
-	var what: What;
+    proc DoLoopCompare(op: OPLOOP, inc: Word, cmp: Word): boolean
+    {
+	if op.cnd
+	is 6 then return true;
+	is 0 then return inc == cmp;
+	is 1 then return inc != cmp;
+	is 2 then if op.s != 0 then
+	         return SWord(inc) >= SWord(cmp);
+	      else
+	         return inc >= cmp;
+	is 3 then if op.s != 0 then
+	         return SWord(inc) < SWord(cmp);
+	      else
+	         return inc < cmp;
+	is 4 then if op.s != 0 then
+	         return SWord(inc) > SWord(cmp);
+	      else
+	         return inc > cmp;
+	is 5 then if op.s != 0 then
+	         return SWord(inc) <= SWord(cmp);
+	      else
+	         return inc <= cmp;
+    }
 
-	loop = reg[op.rs1];
+    proc DoLoop(inst: Inst)
+    {   var op: OPLOOP = OPLOOP(inst);
+	var inc, cmp, loop, add: _int;
+
 if db&16 != 0 then {
-fde.str("LOOP fmt="); fde.uint((inst >> 13)&7); fde.str(" cnd="); fde.hex8(op.rd);
+fde.hex32(_uint32(reg[PC]));
+fde.str(": LOOP"); fde.uint(op.kind);
+fde.str(" cnd="); fde.uint(op.cnd);
+fde.str(" rs1="); fde.uint(op.rs1);
+fde.str(" rs2="); fde.uint(op.rs2);
+fde.str(" rs3="); fde.uint(op.rs3);
+fde.str(" iss="); fde.uint(op.I); fde.uint(op.s1); fde.uint(op.s2);
+fde.nl();
 }
-	fmt = (inst >> 13) & 7;
-	if fmt
-	is 0b000, 0b001, 0b101 then
-	{   cmp = reg[op.rs2];
-	}
-	is 0b010 then
-	{   cmp = op.rs2;
-	    if cmp > 15 then cmp |= ~0xF;	// FIXME - sign extend
-	}
-	is 0b011 then
-	{   cmp = (op.rs3 << 5) | op.rs2;	// 10-bit immediate
-	    if cmp > 511 then cmp &= ~0x1FF;	// FIXME - sign extend
-	}
-	is 0b100, 0b110 then
-	{   cmp = Read(reg[PC], WORD);
-	    reg[PC] += 4;
+	loop = reg[op.rs1];
+	if op.I != 0 then
+	{   if op.s1 == 0 then
+	    {   if op.s2 == 0 then
+		{   inc = reg[op.rs3];
+		    cmp = Read(reg[PC], WORD);
+		    reg[PC] += 4;
+		}
+		else
+		{   cmp = reg[op.rs2];
+		    inc = Read(reg[PC], WORD);
+		    reg[PC] += 4;
+		}
+	    }
+	    else
+	    {   if op.s2 == 0 then
+		{   cmp = Read(reg[PC], WORD);
+		    reg[PC] += 4;
+		    inc = Read(reg[PC], WORD);
+		    reg[PC] += 4;
+		}
+		else
+		{   inc = 1;
+		    cmp = Read(reg[PC], QUAD);
+		    reg[PC] += 8;
+		}
+	    }
 	}
 	else
-	    Fault("Illegal loop option", inst);
-
-	if fmt
-	is 0b000, 0b100 then
-	{   inc = reg[op.rs3];
+	{   if op.s1 == 0 then
+		inc = reg[op.rs3];
+	    else
+		inc = op.rs3;		// IMM5
+	    if op.s2 == 0 then
+		cmp = reg[op.rs2];
+	    else
+		cmp = op.rs2;		// IMM5
 	}
-	is 0b001, 0b010 then
-	{   inc = op.rs3;
-	    if inc > 15 then inc |= ~0xF;	// FIXME - sign extend
-	}
-	is 0b011 then
-	{   inc = 1;
-	}
-	is 0b101, 0b110 then
-	{   inc = Read(reg[PC], WORD);
-	    reg[PC] += 4;
-	}
-	what = WhatTab[op.rd];
-	if what.increg then add = inc; else add = 1;
+	var continue: boolean = true;
+	if op.kind
+	is 1 then
+	{
 if db&16 != 0 then
-{   fde.str(" increg="); fde.uint8(_uint8(what.increg));
-    fde.str(" comp1="); fde.str(CBitNames[what.comp1]);
-    fde.str(" comp2="); fde.str(CBitNames[what.comp2]);
-    fde.str(" signed="); fde.uint8(_uint8(what.signed));
-    fde.nl();
-    fde.str("cmp=0x"); fde.hex64(cmp);
-    fde.str(" inc=0x"); fde.hex64(inc);
-    fde.nl();
-    fde.str(" add=0x"); fde.hex64(add);
-    fde.str(" loop=R"); fde.uint(op.rs1); fde.str("=0x"); fde.hex64(loop);
+{   fde.str("loop1 loop="); fde.int64(loop);
+    fde.str(" + "); fde.int64(inc);
+    fde.str(" compare " ); fde.int64(loop); fde.str(" : "); fde.int64(cmp);
     fde.nl();
 }
-if db&16 != 0 then { fde.str("0x"); fde.hex32(add); fde.nl(); }
-	var continue: boolean = true;
-	var result: CondCode;
-	if what.comp2 != OR then
-	{   if what.comp2 == TO then
-		continue = inc != 0;
+	    loop += inc;
+	    continue = DoLoopCompare(op, loop, cmp);
+	}
+	is 2 then
+	{
+if db&16 != 0 then
+{   fde.str(" loop=0x"); fde.hex64(loop);
+    fde.str(" cmp=0x"); fde.hex64(cmp);
+    fde.str(" inc=0x"); fde.hex64(inc);
+    fde.nl();
+}
+	    if inc == 0 then
+		continue = false;
 	    else
-	    {   result = CondCode(DoCompare(inc, cmp));
-		continue = result[what.comp2];
-	    }
-if db&16 != 0 && !continue then { fde.str("condition terminates\n"); }
-	}
-	if continue then
-	{   loop += add;
-	    reg[op.rs1] = loop;
-	    if what.comp1 != OR then
-	    {   result = CondCode(DoCompare(loop, cmp));
-		continue = result[what.comp1];
-if db&16 != 0 && !continue then { fde.str("loop counter terminates\n"); }
+	    {	loop += 1;
+		continue = DoLoopCompare(op, loop, cmp);
 	    }
 	}
+	is 3 then
+	{
+if db&16 != 0 then
+{   fde.str("loop3 loop="); fde.int64(loop);
+    fde.str(" + 1");
+    fde.str(" compare " ); fde.int64(inc); fde.str(" : "); fde.int64(cmp);
+    fde.nl();
+}
+	    loop += 1;
+	    continue = DoLoopCompare(op, inc, cmp);
+	}
+	reg[op.rs1] = loop;
 	vmode = continue;
 	if continue then
 	    reg[PC] = reg[vreg];
@@ -1198,7 +1193,6 @@ if db&16 != 0 && !continue then { fde.str("loop counter terminates\n"); }
 	}
 	is 0b000 then DoFmacD(op);	// FMAC
 	is 0b100 then DoFmacF(op);	// FMACF
-	is 0b111 then DoLoop(inst);	// LOOP
 	else
 	    Fault("Unimplemented instruction3", inst);
     }
@@ -1783,12 +1777,12 @@ fde.str(" cbits=0x"); fde.hex16(cbits); fde.nl();
 	xlength = 0;
 	// if( instruction<31:29> = 3'b001 && instruction<15> )
 	if (inst & 0xE0008000 == 0x20008000) then
-	{   // XOPs with additional words of instruction and D bit
+	{   // XOPs with additional words of instruction and I bit
 	    xlength += 1;	// D bit
 	    if (inst & 0x1C000000) == 0x10000000 then
-		xlength += (inst >> 13)&1;	// d bit
+		xlength += (inst >> 13)&1;	// s1 bit
 	    else
-		xlength += (inst >> 12)&1;	// d bit
+		xlength += (inst >> 12)&1;	// s2 bit
 	    if (inst & 0x1C000780) == 0x04000300 then // store imm long
 	    {	xlength += 1;
 		if ((inst >> 5) & 3) == 3 then	// std imm
@@ -1849,6 +1843,7 @@ fde.nl();
 	is 0b001010           then Op2(inst);
 	is 0b001100	      then Op3(inst);
 	is 0b001101	      then Op1(inst);
+	is 0b010101	      then DoLoop(inst);
 	is 0b011000..0b011001 then OpBb(inst);
 	is 0b011010	      then OpBc(inst);
 	is 0b011011           then OpJt(inst);

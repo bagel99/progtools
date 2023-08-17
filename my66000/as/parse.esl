@@ -653,203 +653,152 @@ import my66000def;
 	}
     }
 
-    // FIXME - we are parsing the old style loop.
-    // This requires the old compare bit values.
-    proc GetLoopCompare(s: @[]_byte): @[]_byte, _uint
+    proc GetLoopCompare(s: @[]_byte): @[]_byte, _uint, boolean
     {   var i: _uint;
-        const OldCBitNames: [16][2]_byte =
-	{ 'ne', 'eq', 'gt', 'ge', 'lt', 'le', '??', '??',
-	  '??', '??', 'hi', 'hs', 'lo', 'ls', '??', '??'
+	var signed: boolean = false;
+	const CNDNames: [10][2]_byte =
+	{   'eq',  'ne', 'hs',  'lo',  'hi',  'ls',	// unsigned
+	    'ge',  'lt',  'gt', 'le'			// signed
 	};
-	if s[0] == 't' then return s[1:0], 6;	// 6 => tS
+
+	if s[0] == 'a' then return s[1:0], 6, false;
 	i = 0;
-	while i < 16 && s[0:2] != OldCBitNames[i][0:2] do
+	while i < 10 && s[0:2] != CNDNames[i][0:2] do
 	    i += 1;
-	if i > 15 then
+	if i > 10 then
 	{   Syntax("Illegal loop condition\n");
-	    return s, 0;
+	    return s, 0, false;
 	}
-	return s[2:0], i;
-    }
-
-    proc GetLoopAmt(s: @[]_byte): @[]_byte, _int
-    {	var isneg: boolean = false;
-	var val: _int;
-
-	if s[0] == '-' then
-	{   s = s[1:];
-	    isneg = true;
+	if i > 6 then
+	{   i -= 4;
+	    signed = true;
 	}
-	s, val = lex.Dec(s);
-	if isneg then val =- val;
-	return s, val;
-    }
-
-    proc IsLoopTest(s: @[]_byte): boolean
-    {
-	s = SkipWS(s);
-	if s[0:2] == '!=' then
-	{   s = SkipWS(s[2:]);
-	    if s[0] == '0' then return true;
-	}
-	return false;
-    }
-
-    proc GetLoopCmp(s: @[]_byte): @[]_byte, _uint
-    {   var cmp: _uint = 0b00110;	// default to none
-	var n: _uint = 0;
-
-	if s[0]
-	is '!' then
-	{   if s[1] == '=' then { n = 2; cmp = 0b01101; }
-	    else Syntax("Invalid comparison");
-	}
-	is '=' then
-	{   if s[1] == '=' then { n = 2; cmp = 0b11101; }
-	    else Syntax("Invalid comparison");
-	}
-	is '>' then
-	{   if s[1] == '=' then { n = 2; cmp = 0b11110; }
-	    else { n = 1; cmp = 0b01110; }
-	}
-	is '<' then
-	{   if s[1] == '=' then { n = 2; cmp = 0b11111; }
-	    else { n = 1; cmp = 0b01111; }
-	}
-	return s[n:], cmp;
+	return s[2:0], i, signed;
     }
 
     proc LoopOp(s: @[]_byte, opt: _uint32)
-    {   var op: OP3 = OP3(opt);
-	var comp: _uint;
-	var type: 0..2;
-	var incamt, cmpamt: _int;
+    {   var op: OPLOOP = OPLOOP(opt);
+	var signed: boolean;
+	var kind: _uint;
 	var r: @[]_byte;
-	type IncKind: (Reg, Plus1, Imm5, Imm32);
-	type CmpKind: (Reg, Imm5, Imm10, Imm32);
-	var inckind: IncKind;
-	var cmpkind: CmpKind;
-	const ISSForm: [CmpKind][IncKind]_uint8 =
-	{   { 0b000, 0b001, 0b001, 0b101 },
-	    { 0b100, 0b010, 0b010, 0b110 },
-	    { 0b100, 0b011, 0b110, 0b110 },
-	    { 0b100, 0b110, 0b110, 0b110 }
-	};
+	var immop: (NONE, RS2, RS3, BOTH);
+	var immsz: (IMM5, IMM32, IMM64);
+	var imm2, imm3: expr.ExprT;
 
+	kind = op.kind;
+	immop = NONE;
 	// rd is cnd
 	// rs1 is rloop
-	// rs2 is rcmp or imm4:0
-	// rs3 is rinc or imm4:0 or imm9:5
-	s, comp = GetLoopCompare(s);
+	// rs2 is rcmp or imm
+	// rs3 is rinc or imm
+	s, op.cnd, signed = GetLoopCompare(s);
+	if signed then op.s = 1;
 	s = SkipComma(s);		// 1st comma
 	s, op.rs1 = GetReg(s);		// loop register
 	s = SkipComma(s);		// 2nd comma
-	if comp != 6 then	// CMP is for loop counter
-	{
-	    // initial map condition bits into loop conditions
-	    if comp >= 8 then	// unsigned compare
-		comp -= 8;
-	    elif comp > 2 then	// signed compare
-		comp += 16;
-	    type = 1;
-	    if s[0] == '#' then
-	    {   cmpkind = Imm32;
-		s, cmpamt = GetLoopAmt(s[1:0]);
+	// rs2 can be '#imm' or 'reg'
+	if s[0] == '#' then
+	{   s = Expr(s[1:], imm2);
+	    if imm2.op != NONE then
+	    {	fde.str("arg non-constant immediate expr=");
+		expr.Dump(fde, imm2); fde.nl();
 	    }
-	    else
-	    {	cmpkind = Reg;
-		s, op.rs2 = GetReg(s);
-	    }
-	    r = CheckComma(s);
-	    if r != 0 then		// 3rd comma
-	    {	s = r;
-		if s[0] == '#' then
-		{   inckind = Imm32;
-		    s, incamt = GetLoopAmt(s[1:]);
-		}
-		else
-		{   inckind = Reg;
-		    s, op.rs3 = GetReg(s);
-		    if IsLoopTest(s) then
-		    {	type = 2;
-			comp += 7;
-		    }
-		}
-	    }
-	    else	// no 3rd comma, assume +1 increment
-	    {	inckind = Plus1;
-		incamt = 1;
-	    }
+	    immop = RS2;
 	}
-	else			// compare is 't'
-	{   type = 3;
+	else
 	    s, op.rs2 = GetReg(s);
-	    s, comp = GetLoopCmp(s);
-	    cmpkind = Reg;
-	    if comp != 0b00110 then
-	    {	if s[0] == '#' then
-		{   inckind = Imm32;
-		    s, cmpamt = GetLoopAmt(s[1:]);
-		}
-		else
-		{   s, op.rs3 = GetReg(s);
-		    inckind = Reg;
-		}
+	s = SkipComma(s);
+	// rs3 can be '#imm' or 'reg'
+	if s[0] == '#' then
+	{   s = Expr(s[1:], imm3);
+	    if imm3.op != NONE then
+	    {	fde.str("arg non-constant immediate expr=");
+		expr.Dump(fde, imm3); fde.nl();
+	    }
+	    if immop != NONE then
+		immop = BOTH;
+	    else
+		immop = RS3;
+	}
+	else
+	    s, op.rs3 = GetReg(s);
+	if immop
+	is RS2 then
+	{
+	    if imm2.offs >= 0 && imm2.offs <= 31 then
+	    {	op.s2 = 1;
+		op.rs2 = imm2.offs;
 	    }
 	    else
-	    {	type = 1;
-		inckind = Plus1;
-		incamt = 1;
+	    {	op.I = 1;
+		if IsImm32(imm2.offs, false) then
+		    op.s1 = 0;
+		else
+		    op.s1 = 1;
 	    }
 	}
-	op.rd = comp;
-	// map inc and cmp kinds
-	if inckind == Imm32 then
-	{   if incamt == 1 then
-		inckind = Plus1;
-	    elif incamt >= -16 && incamt < 16 then
-		inckind = Imm5;
+	is RS3 then
+	{
+	    if imm3.offs >= 0 && imm3.offs <= 31 then
+	    {	op.s1 = 1;
+		op.rs3 = imm3.offs;
+	    }
+	    elif IsImm32(imm3.offs, false) then
+	    {	op.I = 1;
+		op.s2 = 1;
+	    }
+	    else
+		fde.str("Immediate value too large for RS3\n");
 	}
-	if cmpkind == Imm32 then
-	{   if cmpamt >= -16 && cmpamt < 16 then
-		cmpkind = Imm5;
-	    elif cmpamt >= -512 && cmpamt < 512 then
-		cmpkind = Imm10;
+	is BOTH then	// two immediates
+	{
+	    if (imm2.offs >= 0 && imm2.offs <= 31) &&
+	       (imm3.offs >= 0 && imm3.offs <= 31) then
+	    {	op.s2 = 1;
+		op.rs2 = imm2.offs;
+		op.s1 = 1;
+		op.rs3 = imm3.offs;
+	    }
+	    else
+	    {   op.I = 1;
+		op.s1 = 1;
+		if IsImm32(imm2.offs, false) && IsImm32(imm3.offs, false) then
+		    ;
+		elif imm3.offs == 1 then
+		    op.s2 = 1;
+		else
+		    fde.str("Illegal LOOP immediates\n");
+	    }
 	}
-	if ISSForm[cmpkind][inckind]
-	is 0b001 then
-	{   op.rs3 = _uint(incamt) & 0x1F;
-	    op.s2 = 1;
-	}
-	is 0b010 then
-	{   op.rs3 = _uint(incamt) & 0x1F;
-	    op.rs2 = _uint(cmpamt) & 0x1F;
-	    op.s1 = 1;
-	}
-	is 0b011 then
-	{   op.rs2 = _uint(cmpamt) & 0x1F;
-	    op.rs2 = (_uint(cmpamt) >> 5) & 0x1F;
-	    op.s1 = 1; op.s2 = 1;
-	}
-	is 0b100 then { op.I = 1; }
-	is 0b101 then { op.I = 1; op.s2 = 1; }
-	is 0b110 then { op.I = 1; op.s1 = 1; }
+
 if debug.vec then {
-fde.str("type="); fde.uint8(type);
-fde.str(" comp="); fde.uint(comp);
-fde.str(" cmpkind="); fde.uint8(_uint8(cmpkind));
-if cmpkind != Reg then { fde.str(" cmpamt="); fde.int(cmpamt); }
-fde.str(" inckind="); fde.uint8(_uint8(inckind));
-if inckind != Reg then { fde.str(" incamt="); fde.int(incamt); }
-fde.str(" ISS="); fde.uint((op.I<<2)|(op.s1<<1)|op.s2);
+fde.str("kind="); fde.uint(kind);
+fde.str(" comp="); fde.uint(op.cnd);
+fde.str(" signed="); fde.uint8(_uint8(signed));
+fde.str(" iss="); fde.uint(op.I); fde.uint(op.s1); fde.uint(op.s2);
+if immop == RS2 || immop == BOTH then
+{  fde.str(" imm2="); fde.int(imm2.offs); }
+if immop == RS3 || immop == BOTH then
+{  fde.str(" imm3="); fde.int(imm3.offs); }
 fde.nl();
 }
 	segment.Put4(_uint32(op));
 	if op.I != 0 then
-	{   if op.s2 == 0 then
-		segment.Put4(_uint32(cmpamt));
-	    if op.s1 != 0 || op.s2 != 0 then
-		segment.Put4(_uint32(incamt));
+	{   if op.s1 == 0 then
+	    {   if op.s2 == 0 then
+		    segment.Put4(_uint32(imm2.offs));
+		else
+		    segment.Put4(_uint32(imm3.offs));
+	    }
+	    else
+	    {	if op.s2 == 0 then
+		{
+		    segment.Put4(_uint32(imm2.offs));
+		    segment.Put4(_uint32(imm3.offs));
+		}
+		else
+		    segment.Put8(_uint64(imm2.offs));
+	    }
 	}
     }
 
@@ -1430,7 +1379,10 @@ fde.nl();
 	{ "cmov",  4,  0b001100_00000_00000_001001_00000_00000, Int3Op },
 	{ "mux",   3,  0b001100_00000_00000_000001_00000_00000, Int3Op },
 	{ "ins",   3,  0b001100_00000_00000_000010_00000_00000, Int3Op },
-	{ "loop",  4,  0b001100_00000_00000_000111_00000_00000, LoopOp },
+
+	{ "loop1", 5,  0b010101_00000_00000_000001_00000_00000, LoopOp },
+	{ "loop2", 5,  0b010101_00000_00000_000010_00000_00000, LoopOp },
+	{ "loop3", 5,  0b010101_00000_00000_000011_00000_00000, LoopOp },
 
 
 	{ "abs",   3,  0b001101_00000_00000_00000_000101_00000, Int1Op },
