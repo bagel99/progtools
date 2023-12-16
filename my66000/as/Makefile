@@ -1,8 +1,8 @@
-ESLC=   eslc
+ESLC=   eslc -X
 INC=	-I.. -I../../libelf -I../../lib
 LIB=	../../lib
 DBG=
-OPT=	-i	# disable inlining
+OPT=	-Ai	# disable inlining
 GCC=	gcc
 ARCH:= $(shell uname -m)
 

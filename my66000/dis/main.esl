@@ -98,11 +98,11 @@ proc DisSection(ptxt: elfread.pText)
 	    newsym = false;
 	}
 	if addr == symaddr then
-	{   fde.str(symname); fde.str(":\n");
+	{   fdx.str(symname); fdx.str(":\n");
 	    newsym = true;
 	}
-	fde.hex32(_uint32(addr));
-	fde.chr(' ');
+	fdx.hex32(_uint32(addr));
+	fdx.chr(' ');
 	inst = Read(addr, WORD);
 	addr += disInst(addr);
 	// Check for inline jump table, was previous inst a JT
@@ -115,10 +115,10 @@ proc DisSection(ptxt: elfread.pText)
 	    is 1 then
 	    {	for j from 0 to n do
 		{   if (j & 7) == 0 then
-			fde.str("\n\t\t\t.jt16\t");
+			fdx.str("\n\t\t\t.jt16\t");
 		    else
-			fde.chr(',');
-		    fde.int16(_int16(Read(addr, HALF)));
+			fdx.chr(',');
+		    fdx.int16(_int16(Read(addr, HALF)));
 		    addr += 2;
 		}
 	    }
@@ -126,7 +126,7 @@ proc DisSection(ptxt: elfread.pText)
 	    is 3 then {}	// FIXME
 	    addr = (addr + 3) & ~3;	// round end of table up
 	}
-	fde.nl();
+	fdx.nl();
     }
 }
 

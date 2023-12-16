@@ -95,10 +95,10 @@ fde.str(r); fde.nl();
 import my66000def;
 
     const CondNames4: [Conditions][4]_byte =
-    {	'nm',  'nn',  'eq0', 'ne0', 'ge0', 'gt0', 'le0', 'lt0',
-	'fcm', 'fun', 'feq', 'fne', 'fge', 'flt', 'fle', 'fgt',
-	'fde', "",    'fif', "",    'fna', "",    'fneg', "",
-	'in',  'exit',"",    "",    "",    "",    'rfe', 'al'
+    {	'eq0', 'ne0', 'ge0', 'lt0', 'gt0', 'le0', "a",   "n",
+	'deq', 'dne', 'dge', 'dlt', 'dgt', 'dle', 'dor', 'dun',
+	'feq', 'fne', 'fge', 'flt', 'fgt', 'fle', 'for', 'fun',
+	'in',  "",    "",    "",    "",    "",    'rfe', 'ret'
     };
 
     proc GetCond(s: @[]_byte): @[]_byte, _uint
