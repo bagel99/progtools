@@ -20,11 +20,13 @@
     }
 
     proc PWO(wo: Word)
-    {	fdx.chr('<');
-	fdx.uint8((wo>>6)&0x3F);
-	fdx.chr(':');
-	fdx.uint8(wo&0x3F);
-	fdx.chr('>');
+    {
+	fdx.chr('#');
+	fdx.uint8(wo&0x3F);	// offset
+	if ((wo>>6)&0x3F) != 0 then
+	{   fdx.str(",#");
+	    fdx.uint8((wo>>6)&0x3F);
+	}
     }
 
     proc PFmt(inst: Inst, ip: Word, fmt: @[]_byte)
@@ -58,27 +60,26 @@
 		if t8 > 15 then t8 |= ~0xF;
 		fdx.int8(t8);
 	    }
-	    is 'I' then		// signed I5 in Rs1
-	    {   t8 = op.rs1;
-		if t8 > 15 then t8 |= ~0xF;
-		fdx.int8(t8);
-	    }
-	    is 'J' then		// unsigned I5 in Rs2
+	    is 'I' then		// I5 in Rs1
+		fdx.uint8(op.rs1);
+	    is 'J' then		// I5 in Rs2
 		fdx.uint8(op.rs2);
-	    is 'K' then		// unsigned I5 in Rs3
+	    is 'K' then		// I5 in Rs3
 		fdx.uint8(op.rs3);
 	    is 'L' then		// signed I10 in Rs3, Rs2
 	    {   t16 = (op.rs3<<5)|op.rs2;
 		if t16 > 511 then t16 &= ~0x1FF;
 		fdx.int16(t16);
 	    }
-	    is 'N' then		// <w,o> or o for shifts
-	    {	if ((inst>>6)&0x3F) == 0 then
-		    fdx.uint8(inst&0x3F);
-		else
-		    PWO(inst);
+	    is 'M' then		// optional width for dynamic shifts
+	    {	if (inst & 0xFC0) != 0 then
+		{   fdx.str(",#");
+		    fdx.uint8((inst >> 6) & 0x3F);
+		}
 	    }
-	    is 'O' then		// <w,o> for insert
+	    is 'N' then		// #w,#o or #o for status shifts
+		PWO(inst);
+	    is 'O' then		// #w,#o for insert
 		PWO(Word(Read(ip+4, WORD)));
 	    is 'P' then		// signed I16 in dec
 		fdx.int16(_int16(_uint16(inst)));
@@ -126,12 +127,12 @@
 	const OpName: [64]@[]_byte =
 	{ "ldub","lduh","lduw","ldd" ,"ldsb","ldsh","ldsw","la",   // 0b000xxx
 	  "stb", "sth", "stw", "std", "???", "pre", "push","???",  // 0b001xxx
-	  "???", "???", "???", "ldm", "stm", "mm",  "ms",  "???",  // 0b010xxx
+	  "???", "???", "???", "ldm", "stm", "???", "???", "???",  // 0b010xxx
 	  "stb", "sth", "stw", "std", "stb", "sth", "stw", "std",  // 0b011xxx
 	  "???", "???", "???", "calx","???", "???", "???", "cala", // 0b100xxx
 	  "???", "???", "???", "???", "???", "???", "???", "???",  // 0b101xxx
-	  "???", "???", "???", "???", "???", "???", "???", "???",  // 0b110xxx
-	  "???", "???", "???", "???", "???", "???", "???", "???"   // 0b111xxx
+	  "???", "???", "???", "???", "???", "???", "mm",  "ms",   // 0b110xxx
+	  "ms",  "???", "???", "???", "ms",  "???", "???", "???"   // 0b111xxx
 	};
 
 	minor = op.minor;
@@ -159,19 +160,48 @@
 		    fdx.int(_int(Sext(4, op.rd)));
 		fdx.chr(',');
 	    }
-	    is 0b000000.. 0b010111 then	// normal register src/dst
+	    is 0b000000..0b010111 then	// normal register src/dst
 	    {	PReg(op.rd);
 		fdx.chr(',');
+	    }
+	    is 0b110110, 0b110111, 0b111000, 0b111100 then	// MM, MS
+	    {	var cnt: Word;
+		var val: _uint8;
+		var offs: _uint = ip+4;
+		PReg(op.ri); fdx.chr(',');
+		if op.minor == 0b111000 then
+		{   fdx.chr('#');
+		    val = _uint8(Read(offs, WORD));
+		    offs += 4;
+		    fdx.uint8(val);
+		}
+		elif op.minor == 0b111100 then
+		{   fdx.chr('#');
+		    fdx.uint8(op.rd);
+		}
+		else
+		    PReg(op.rd);
+		fdx.chr(',');
+		if op.I != 0 then
+		{   fdx.chr('#');
+		    if op.D == 0 then	// 32-bit
+		    {   cnt = _int32(Read(offs, WORD));
+			fdx.int32(_int32(cnt));
+		    }
+		    else
+		    {   cnt = Read(offs, QUAD);
+			fdx.str("0x");
+			fdx.hex64(cnt);
+		    }
+		}
+		else
+		    PReg(op.rb);
+		return;
 	    }
 	    if minor
 	    is 0b010011, 0b010100 then	// LDM,STM
 	    {	PReg(op.ri); fdx.chr(',');
 		op.ri = 0;	// defeat indexing
-	    }
-	    is 0b010101, 0b010110 then		// MM, MS
-	    {	PReg(op.rb); fdx.chr(',');
-		PReg(op.ri);
-		return;
 	    }
 	    fdx.chr('[');
 	    if op.rb == 0 then PReg(32); else PReg(op.rb);
@@ -211,7 +241,7 @@
 	  "???",  "cvtdu","cvtfu","cvtdf","rnd",  "???",  "???",  "???",
 	  "???",  "???",  "???",  "???",  "???",  "???",  "???",  "???",
 	  "???",  "add",  "mul",  "div",  "cmp",  "???",  "max",  "min",
-	  "or",   "xor",  "and",  "???",  "srl",  "sll",  "bitr", "???",
+	  "or",   "xor",  "and",  "???",  "???",  "???",  "???",  "???",
 	  "???",  "fadd", "fmul", "fdiv", "fcmp", "???",  "fmax", "fmin",
 	  "???",  "csgn", "eadd", "???",  "???",  "pow",  "atan2","???"
 	};
@@ -221,13 +251,13 @@
 	  "???",  "cvtds","cvtfs","cvtfd","rndf", "???",  "???",  "???",
 	  "???",  "???",  "???",  "???",  "???",  "???",  "???",  "???",
 	  "???",  "adds", "muls", "divs", "cmp",  "???",  "maxs", "mins",
-	  "???",  "???",  "???",  "???",  "sra",  "sla",  "???",  "???",
+	  "???",  "???",  "???",  "???",  "???",  "???",  "???",  "???",
 	  "???",  "faddf","fmulf","fdivf","fcmpf","???",  "fmaxf","fminf",
 	  "???",  "csgnf","eaddf","???",  "???",  "powf", "atan2f","???"
 	};
 	const OpFmt: [16]@[]_byte =	// I.D.s1.s2
 	{   "R,S,T",	"R,S,-T",	"R,-S,T",	"R,-S,-T",
-	    "R,S,#G",	"R,#I,T",	"R,-S,#G",	"R,#I,-T",
+	    "R,S,#J",	"R,#I,T",	"R,S,#-J",	"R,#-I,T",
 	    "R,S,#Y",	"R,#Y,T",	"R,-S,#Y",	"R,#Y,-T",
 	    "R,S,#Z",	"R,#Z,T",	"R,-S,#Z",	"R,#Z,-T"
 	};
@@ -275,7 +305,7 @@
     proc disOp3(inst: Inst, ip: Word)
     {   var op: OP3 = OP3(inst);
 	const MuxOpNames: [8]@[]_byte =
-	{ "mux", "cmov","mov", "mov", "mux", "mov", "mux", "mov"
+	{ "mux", "cmov","???", "???", "mux", "???", "mux", "???"
 	};
 	const OpFmt: [8]@[]_byte =
 	{   "R,S,T,U",   "R,S,T,U",   "R,T",       "R,S",
@@ -319,6 +349,8 @@
 	  "cvt", "cvt", "???", "???", "rnd", "???", "???", "???",
 	  "???", "???", "???", "???", "???", "???", "???", "???"
 	};
+	const OpFF1Name: [4]@[]_byte =
+	{ "clz", "fl1", "ft1", "ctz" };
 	const TransName: [32]@[]_byte =
 	{ "fln2",   "fln",  "flog",      "???",
 	  "fexp2",  "fexp", "fexp10",    "???",
@@ -377,7 +409,7 @@
 	{   var opb: OP1b = OP1b(inst);
 	    const OpFmt: [32]@[]_byte =	// I s1 sd S D
 	    {   "R,S",	"R,#I",	"R,S",	"R,#I",
-		"R,S,",	"R,#I",	"R,S",	"R,#I",	// FIXME - sd ignored
+		"R,S",	"R,#I",	"R,S",	"R,#I",	// FIXME - sd ignored
 		"R,-S",	"R,#-I","R,-S",	"R,#-I",
 		"R,-S",	"R,#-I","R,-S",	"R,#-I",
 		"R,#Y",	"R,#Z",	"R,#Y",	"R,#Z",
@@ -400,7 +432,11 @@
 	    {	fdx.str(OpName[opb.minor]);
 		if opb.s != 0 then fdx.chr('f');
 	    }
-	    is 0b01000..0b01111	then	// POP,FF1,...
+	    is 0b01001 then		// FF1 family
+	    {	if opb.func <= 4 then fdx.str(OpFF1Name[opb.func]);
+		else fdx.str("???");
+	    }
+	    is 0b01000, 0b01010..0b01111 then	// POP
 		fdx.str(OpName[opb.minor]);
 	    is 0b11000 then		// TRANS
 	    {   fdx.str(TransName[opb.func]);
@@ -425,6 +461,7 @@
 		return;
 	    }
 	    fdx.chr('\t');
+	    if opb.sd != 0 then fdx.chr('-');
 	    PFmt(inst, ip, OpFmt[(inst >> 11)&0b11111]);
 	}
     }
@@ -441,11 +478,24 @@
 	}
     }
 
+    proc disShfR(inst: Inst, ip: Word)
+    {	var op: OPSHFR = OPSHFR(inst);
+	const ShfROpNames: [16]@[]_byte =
+	{   "???", "???", "???", "???",
+	    "???", "???", "rol", "ror",
+	    "srl", "sra", "sll", "sla",
+	    "bitr","???", "???", "???"
+	};
+
+	fdx.str(ShfROpNames[op.minor]); fdx.chr('\t');
+	PFmt(inst, ip, "R,S,TM");
+    }
+
     proc disPredShf(inst: Inst, ip: Word)
     {	var op: OPSHF = OPSHF(inst);
 	const ShfOpNames: [16]@[]_byte =
 	{   "pb1", "pcnd","???", "???",
-	    "???", "???", "rot", "???",
+	    "???", "???", "rol", "ror",
 	    "srl", "sra", "sll", "sla",
 	    "bitr","???", "???", "???"
 	};
@@ -465,7 +515,7 @@
 	    PShadow(opc.else, opc.then);
 	}
 	else
-	    PFmt(inst, ip, "R,S,#N");
+	    PFmt(inst, ip, "R,S,N");
     }
 
     proc disOpBb(inst: Inst, ip: Word)
@@ -631,6 +681,8 @@
 	    if ((inst >> 5) & 3) == 3 then	// std imm
 		len += 1;
 	}
+	if (inst & 0xFC00_07E0) == 0x2400_0700 then // MS with follwing byte
+	    len += 1;
 	return len * 4;	// words to bytes
     }
 
@@ -654,6 +706,7 @@
 	    fdx.hex32(inst);
 	}
 	is 0b000110, 0b000111 then disPredShf(inst, ip);
+	is 0b001000	      then disShfR(inst, ip);
 	is 0b001001	      then disOpMem(inst, ip);
 	is 0b001010           then disOp2(inst, ip);
 	is 0b001100	      then disOp3(inst, ip);

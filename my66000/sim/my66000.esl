@@ -365,15 +365,35 @@ import disinst;
 	return Word(src);
     }
 
-    proc DoROT(src: Word, w: _uint, o: _uint): Word
+    proc DoROR(src: Word, w: _uint, o: _uint): Word
     {   var dst: Word;
+	var tr, tl: Word;
 
 	if w != 0 then
-	{   dst = _rol(src, 64-o);
-	    dst = dst >> (64-w);
+	{   tr = src << (64-w);		// shift to top
+	    tr = tr  >> (64-o);
+	    tl = src << (64-w+o);
+	    tl = tl  >> (64-w);
+	    dst = tl | tr;
 	}
 	else
 	    dst = _rol(src, o);
+	return dst;
+    }
+
+    proc DoROL(src: Word, w: _uint, o: _uint): Word
+    {   var dst: Word;
+	var tr, tl: Word;
+
+	if w != 0 then
+	{   tr = src << (64-o);
+	    tr = tr  >> (64-w);
+	    tl = src << (64-w);		// shift to top
+	    tl = tl  >> (64-w+o);	// shift in place with zeros at top
+	    dst = tl | tr;
+	}
+	else
+	    dst = _ror(src, o);
 	return dst;
     }
 
@@ -387,14 +407,18 @@ import disinst;
 	msk = (1 << w) - 1;
 //fde.str("BITR w="); fde.uint(w); fde.str(" o="); fde.uint(o);
 //fde.str(" msk="); fde.hex64(msk); fde.nl();
-	dst = 0;
-	n = 64;
-	loop
-	{   dst |= src & msk;
-	  exit n <= w;
-	    dst = dst << w;
-	    src = src >> w;
-	    n -= w;
+	if w == 0 then
+	    dst = src;
+	else
+	{   dst = 0;
+	    n = 64;
+	    loop
+	    {   dst |= src & msk;
+	      exit n <= w;
+		dst = dst << w;
+		src = src >> w;
+		n -= w;
+	    }
 	}
 	if o != 0 then
 	    dst = dst >> o;
@@ -692,11 +716,11 @@ fde.str(" src2="); fde.uint8(src2); fde.nl(); }
     {   var op: OP2 = OP2(inst);
 	var tmp, src1, src2: Word;
 	var inv1, inv2: boolean;
-	type Kind: (INT, LOG, SHF, FLT, MIX, CVT);
+	type Kind: (INT, LOG, FLT, MIX, CVT);
 	var kind: Kind;
 	const kindtab: [32]Kind =
 	{ INT, INT, INT, INT, INT, INT, INT, INT,	// ADD-MIN
-	  LOG, LOG, LOG, LOG, SHF, SHF, SHF, INT,	// OR-XOR,SR,SL,BITR
+	  LOG, LOG, LOG, LOG, INT, INT, INT, INT,	// OR-XOR
 	  FLT, FLT, FLT, FLT, FLT, FLT, FLT, FLT,
 	  FLT, FLT, MIX, FLT, FLT, FLT, FLT, FLT
 	};
@@ -865,20 +889,6 @@ fde.nl();}
 	    tmp = src1 ^ src2;
 	is 0b101010 then	// AND
 	    tmp = src1 & src2;
-	is 0b101100 then	// SR
-	{   if op.S != 0 then	// signed
-		tmp = DoSRA(src1, (src2>>32)&0x3F, src2&0x3F);
-	    else
-		tmp = DoSRL(src1, (src2>>32)&0x3F, src2&0x3F);
-	}
-	is 0b101101 then	// SL
-	{   if op.S != 0 then	// signed
-		tmp = DoSLA(src1, (src2>>32)&0x3F, src2&0x3F);
-	    else
-		tmp = DoSLL(src1, (src2>>32)&0x3F, src2&0x3F);
-	}
-	is 0b101110 then	// BITR
-	    Fault("BITR not yet implemented", inst);
 	is 0b110001 then	// FADD/FSUB
 	{   if op.S != 0 then	// single
 		tmp = Word(_uint32(_float32(_uint32(src1)) + _float32(_uint32(src2))));
@@ -1134,7 +1144,7 @@ if db&16 != 0 then
 
 	if op.minor
 	is 0b001 then	// the varieties of MUX
-	{   if op.I != 0 then	// has immediate
+	{   if op.I != 0 then		// has immediate
 	    {	if op.s1 != 0 then	// 64-bit
 		{   tmp3 = Read(reg[PC], QUAD);
 		    reg[PC] += 8;
@@ -1143,31 +1153,17 @@ if db&16 != 0 then
 		{   tmp3 = Sext(31,Read(reg[PC], WORD));
 		    reg[PC] += 4;
 		}
-		if op.s2 != 0 then	// MOVI
-		    reg[op.rd] = tmp3;
-		else			// MUX
-		    reg[op.rd] = (reg[op.rs1]&reg[op.rs2]) |
-				 (~reg[op.rs1]&tmp3);
 	    }
 	    else
-	    {	tmp3 = reg[op.rs3];
-		if op.s1 == 0 then
-		{   if op.s2 == 0 then	// MUX
-			reg[op.rd] = (reg[op.rs1]&reg[op.rs2]) |
-				     (~reg[op.rs1]&tmp3);
-		    else		// CMOV
-		    {	if reg[op.rs1] != 0 then
-			    reg[op.rd] = reg[op.rs2];
-			else
-			    reg[op.rd] = reg[op.rs3];
-		    }
-		}
-		else			// MOV
-		{   if op.s2 == 0 then
-			reg[op.rd] = reg[op.rs2];
-		    else
-			reg[op.rd] = reg[op.rs3];
-		}
+		tmp3 = reg[op.rs3];
+	    if op.s2 == 0 then	// MUX
+		reg[op.rd] = (reg[op.rs1]&reg[op.rs2]) |
+			     (~reg[op.rs1]&tmp3);
+	    else			// CMOV
+	    {	if reg[op.rs1] != 0 then
+		    reg[op.rd] = reg[op.rs2];
+		else
+		    reg[op.rd] = reg[op.rs3];
 	    }
 	}
 	is 0b010 then			// INS
@@ -1201,7 +1197,9 @@ if db&16 != 0 then
     {   var op: OP1a = OP1a(inst);
 	var opb: OP1b = OP1b(inst);
 	var src: Word;
-	var invert: boolean;
+	var dst: SWord;
+	var inverts: boolean;	// negate source
+	var invertr: boolean;	// negate result
 /*
 	type Kind: (ZEXT, SEXT, FLTX);
 	type Decode:
@@ -1233,7 +1231,8 @@ if db&16 != 0 then
 		reg[PC] += 8;
 	    }
 	}
-	invert = opb.s1 != 0;
+	inverts = opb.s1 != 0;
+	invertr = opb.sd != 0;
 	if op.minor
 	is 0b000000 then			// HR
 	{   if op.func
@@ -1282,9 +1281,11 @@ if db&16 != 0 then
 	is 0b000101 then
 	{   if opb.func == 0 then
 	    {	if opb.s == 0 then
-		    reg[op.rd] = _abs(src);	// ABS
+		    dst = _abs(src);	// ABS
 		else
-		    reg[op.rd] = src;		// MOV
+		    dst = src;		// MOV
+		if invertr then dst = -dst;
+		reg[op.rd] = dst;
 	    }
 	    else
 	    {	if opb.s == 0 then
@@ -1294,10 +1295,9 @@ if db&16 != 0 then
 	    }
 	}
 	is 0b000110 then			// EXPON
-	{   var dst: Word;
-	    if opb.s == 0 then	// double
+	{   if opb.s == 0 then	// double
 	    {	var dbl: _float64;
-		if invert then src ^= 0x8000_0000_0000_0000;
+		if inverts then src ^= 0x8000_0000_0000_0000;
 		dbl = _float64(src);
 		if dbl.isNaN() then
 		    dst = 0;
@@ -1311,7 +1311,7 @@ if db&16 != 0 then
 	    }
 	    else		// single
 	    {	var flt: _float32;
-		if invert then src ^= 0x8000_0000;
+		if inverts then src ^= 0x8000_0000;
 		flt = _float32(_uint32(src));
 		if flt.isNaN() then
 		    dst = 0;
@@ -1327,23 +1327,36 @@ if db&16 != 0 then
 	}
 	is 0b000111 then Fault("Unimplemented FRACT", inst);
 	is 0b001000 then			// POP
-	{   if invert then
+	{   if inverts then
 		src = ~src;
 	    reg[opb.rd] = _pop(src);
 	}
 	is 0b001001 then			// FF1
-	{   if invert then
+	{   if inverts then
 		src = ~src;
-	    if src == 0 then
-		reg[opb.rd] = -1;
-	    else
-	    {	if opb.s != 0 then
-		    reg[opb.rd] = _ctznz(src);
+	    if opb.func
+	    is 0b00000 then	// CLZ
+	    {	if src == 0 then
+		    reg[opb.rd] = 64;
 		else
 		    reg[opb.rd] = _clznz(src);
 	    }
+	    is 0b00001 then	// FL1
+	    {	if src == 0 then
+		    reg[opb.rd] = 64;
+		else
+		    reg[opb.rd] = 63 - _clznz(src);
+	    }
+	    is 0b00010, 0b00011 then	// FT1, CTZ
+	    {	if src == 0 then
+		    reg[opb.rd] = 64;
+		else
+		    reg[opb.rd] = _ctznz(src);
+	    }
+	    else
+		Fault("Unimplemented instruction1", inst);
 	}
-	is 0b011000 then reg[opb.rd] = Transcend(src, opb.func, opb.s != 0, invert);
+	is 0b011000 then reg[opb.rd] = Transcend(src, opb.func, opb.s != 0, inverts);
 	is 0b011101 then 	// long form VEC
 	{   // The I bit should be 1, with a 32-bit immediate
 	    vreg = op.rd;
@@ -1406,6 +1419,24 @@ fde.str(" new="); fde.hex16(shadow); fde.nl(); }
 	UpdateShadow(CheckCondition(Conditions(opc.cond), reg[opc.rs1]), inst);
     }
 
+    proc OpShfR(inst: Inst)
+    {	var ops: OPSHFR = OPSHFR(inst);
+	var src, off: Word;
+
+	src = reg[ops.rs1];
+	off = reg[ops.rs2];
+	if ops.minor
+	is 0b0110 then reg[ops.rd] = DoROL(src, ops.w, off);
+	is 0b0111 then reg[ops.rd] = DoROR(src, ops.w, off);
+	is 0b1000 then reg[ops.rd] = DoSRL(src, ops.w, off);
+	is 0b1001 then reg[ops.rd] = DoSRA(SWord(src), ops.w, off);
+	is 0b1010 then reg[ops.rd] = DoSLL(src, ops.w, off);
+	is 0b1011 then reg[ops.rd] = DoSLA(SWord(src), ops.w, off);
+	is 0b1100 then reg[ops.rd] = DoBITR(src, ops.w, off);	// EXPERIMENTAL
+	else
+	    Fault("Unimplemented shift instruction", inst);
+    }
+
     proc OpPredShf(inst: Inst)
     {	var ops: OPSHF = OPSHF(inst);
 	var src: Word;
@@ -1414,7 +1445,8 @@ fde.str(" new="); fde.hex16(shadow); fde.nl(); }
 	if ops.minor
 	is 0b0000 then DoPb1(inst, src);
 	is 0b0001 then DoPcnd(inst, src);
-	is 0b0110 then reg[ops.rd] = DoROT(src, ops.w, ops.o);
+	is 0b0110 then reg[ops.rd] = DoROL(src, ops.w, ops.o);
+	is 0b0111 then reg[ops.rd] = DoROR(src, ops.w, ops.o);
 	is 0b1000 then reg[ops.rd] = DoSRL(src, ops.w, ops.o);
 	is 0b1001 then reg[ops.rd] = DoSRA(SWord(src), ops.w, ops.o);
 	is 0b1010 then reg[ops.rd] = DoSLL(src, ops.w, ops.o);
@@ -1442,12 +1474,74 @@ fde.str(" new="); fde.hex16(shadow); fde.nl(); }
 	reg[op.rd] = tmp;
     }
 
+    proc OpMMMS(op: OPMEM)
+    {   var i, fm, to: _uint;
+	var tmp: Word;
+
+	if op.minor == 0b111000 then
+	{   tmp = Sext(31,Read(reg[PC], WORD));
+	    reg[PC] += 4;
+	}
+	to = reg[op.ri];
+	if op.I != 0 then
+	{   if op.D != 0 then	// 64-bit immediate
+	    {	i = Read(reg[PC], QUAD);
+		reg[PC] += 8;
+	    }
+	    else		// 32-bit signed immediate
+	    {	i = Sext(31,Read(reg[PC], WORD));
+		reg[PC] += 4;
+	    }
+	}
+	else
+	    i = reg[op.rb];
+	if op.minor
+	is 0b110110 then		// MM
+	{   fm = reg[op.rd];
+if db&32 != 0 then {
+fde.str("MM fm="); fde.hex(fm); fde.str(" to="); fde.hex(to);
+fde.str(" cnt="); fde.uint(i); fde.nl(); }
+	    while i != 0 do
+	    {   Write(to, BYTE, Read(fm, BYTE));
+		to += 1;
+		fm += 1;
+		i -= 1;
+	    }
+	    return;
+	}
+	is 0b110111 then                // MS
+	{   tmp = reg[op.rd];
+        }
+	is 0b111000 then
+	    ;	// already handled
+	is 0b111100 then
+	{   tmp = Sext(4, op.rd);
+	}
+	else
+	{   Fault("Unimplemented memory instruction", Inst(op));
+	    return;
+	}
+	// At this point, finish the MS instruction
+if db&32 != 0 then {
+fde.str("MS val="); fde.hex(tmp); fde.str(" to="); fde.hex(to);
+fde.str(" cnt="); fde.uint(i); fde.nl(); }
+	    while i != 0 do
+	    {   Write(to, BYTE, tmp);
+		to += 1;
+		i -= 1;
+	    }
+    }
+
     proc OpMem(inst: Inst)
     {   var op: OPMEM = OPMEM(inst);
 	var adr, inx: Word;
 	var tmp: Word;
 	var disp, imm: _uint;
 
+	if op.minor >= 0b110000 then
+	{   OpMMMS(op);
+	    return;
+	}
 	if op.rb == 0 then
 	    adr = instpc;
 	else
@@ -1513,28 +1607,6 @@ fde.nl(); }
 	    DoLDM(op.rd, op.ri, adr);
 	is 0b010100 then		// STM
 	    DoSTM(op.rd, op.ri, adr);
-	is 0b010101 then		// MM
-	{   var i, fm, to: _uint;
-	    i = reg[op.rd];	// Rcnt
-	    fm = reg[op.rb];
-	    to = reg[op.ri];
-	    while i != 0 do
-	    {   Write(to, BYTE, Read(fm, BYTE));
-		to += 1;
-		fm += 1;
-		i -= 1;
-	    }
-	}
-       is 0b010110 then                // MS
-       {   i = reg[op.rd];     // Rcnt
-           tmp = reg[op.rb];
-           to = reg[op.ri];
-           while i != 0 do
-           {   Write(to, BYTE, tmp);
-               to += 1;
-               i -= 1;
-           }
-       }
 	is 0b001000, 0b011000, 0b011100 then	// STB
 	    Write(adr, BYTE, tmp);
 	is 0b001001, 0b011001, 0b011101  then	// STH
@@ -1839,6 +1911,7 @@ fde.nl();
 	   0b101111, 0b110000 then	// unallocated
 	    Fault("Unallocated instruction", inst);
 	is 0b000110, 0b000111 then OpPredShf(inst);
+	is 0b001000 	      then OpShfR(inst);
 	is 0b001001	      then OpMem(inst);
 	is 0b001010           then Op2(inst);
 	is 0b001100	      then Op3(inst);

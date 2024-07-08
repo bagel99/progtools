@@ -89,6 +89,16 @@
 	o:	0..0b111111;	// 5..0
     }: packed, msb, bits(32);
 
+    type OPSHFR:
+    {	major:	0..0b111111;	// 31..26
+	rd:	REG;		// 25..21
+	rs1:	REG;		// 20..16
+	minor:	0..0b1111;	// 15..12 low is S bit
+	w:	0..0b111111;	// 11..6;
+	_:	0..1;		// 5
+	rs2:	REG;		// 4..0
+    }: packed, msb, bits(32);
+
     type OPMEM:
     {	major:	0..0b111111;	// 31..26
 	rd:	REG;		// 25..21

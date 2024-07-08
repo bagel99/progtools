@@ -177,24 +177,19 @@ import my66000def;
 	s = SkipComma(s);
 	if s[0] == '#' then
 	{   if op3.minor == 0b010 then	// INS, parse like shift
-	    {	s = SkipWS(s[1:]);
-		if s[0] == '<' then	// immediate definition
-		{   var w, o: _uint;
-		    s = SkipWS(s[1:]);
-		    s, o = lex.Dec(s);
-		    s = SkipWS(s);
-		    w = 0;
-		    if s[0] == ':' then
-		    {	w = o;
-			s = SkipWS(s[1:]);
-			s, o = lex.Dec(s);
-		    }
-		    imm.offs = (w << 6)| o;
-		    imm.op = NONE;
-		    // check for terminating '>'?
+	    {   var w, o: _uint;
+		w = 0;
+		s = SkipWS(s[1:]);
+		s, o = lex.Dec(s);
+		s = SkipComma(s);
+		if s[0] == '#' then
+		{   s = SkipWS(s[1:]);
+		    s, w = lex.Dec(s);
 		}
 		else
-		    Syntax("expecting '<'");
+		    Syntax("width field missing");
+		imm.offs = (w << 6)| o;
+		imm.op = NONE;
 	    }
 	    else
 	    {	s = Expr(s[1:], imm);
@@ -289,23 +284,59 @@ import my66000def;
 
     proc Int1Op(s: @[]_byte, opt: _uint32)
     {   var op: OP1b = OP1b(opt);
+	var imm: expr.ExprT;
 
-	s, op.rd = GetReg(s);
-	s = SkipWS(s[1:]);
 	if s[0] == '-' then
-	{   op.s1 = 1;
+	{   op.sd = 1;
 	    s = SkipWS(s[1:]);
 	}
-	s, op.rs1 = GetReg(s);
-	segment.Put4(_uint32(op));
+	s, op.rd = GetReg(s);
+	s = SkipComma(s);
+	if s[0] == '#' then
+	{   s = Expr(s[1:], imm);
+	    op.I = 1;
+	    if imm.op == NONE then
+	    {	if IsImm32(imm.offs, false) then	// rw
+		{   op.D = 0;
+		    segment.Put4(_uint32(op));
+		    segment.Put4(_uint32(imm.offs));
+		}
+		else
+		{   op.D = 1;
+		    segment.Put4(_uint32(op));		// rd
+		    segment.Put8(_uint64(imm.offs));
+		}
+	    }
+	    else
+	    {	op.D = 1;	// FIXME - only 64-bit fixups?
+		segment.Put4(_uint32(op));
+		segment.FixNew(imm, ABS64, EXPR);
+		segment.Put8(_uint64(imm.offs));
+	    }
+	}
+	else	// rr
+	{   if s[0] == '-' then
+	    {   op.s1 = 1;
+		s = SkipWS(s[1:]);
+	    }
+	    s, op.rs1 = GetReg(s);
+	    segment.Put4(_uint32(op));
+	}
    }
 
     proc MovOp(s: @[]_byte, opt: _uint32)
     {   var rd, rs: _uint;
 	var opim: OPIMM = OPIMM(opt);
-	var op3: OP3;
+	var op: OP1b;
 	var imm: expr.ExprT;
+	var r: @[]_byte;
 
+	r = s;	// save for re-parse
+	op = {.major=0b001101, .minor=0b000101,.I=0,.s=1,.func=0 };
+	if s[0] == '-' then
+	{   op.sd = 1;
+	    s = SkipWS(s[1:]);
+	}
 	s, rd = GetReg(s);
 	s = SkipComma(s);
 	if s[0] == '#' then
@@ -316,35 +347,9 @@ import my66000def;
 		segment.Put4(_uint32(opim));
 		return;
 	    }
-	    op3 = {.major=0b001100, .minor=0b001,.I=1,.s2=1,.rs3=0,.rs2=0 };
-	    op3.rd = rd;
-	    if imm.op == NONE then
-	    {
-		if IsImm32(imm.offs, false) then	// MOVrw
-		{   op3.s1 = 0;
-		    segment.Put4(_uint32(op3));
-		    segment.Put4(_uint32(imm.offs));
-		}
-		else
-		{   op3.s1 = 1;
-		    segment.Put4(_uint32(op3));		// MOVrd
-		    segment.Put8(_uint64(imm.offs));
-		}
-	    }
-	    else
-	    {	op3.s1 = 1;	// FIXME - only 64-bit fixups?
-		segment.Put4(_uint32(op3));
-		segment.FixNew(imm, ABS64, EXPR);
-		segment.Put8(_uint64(imm.offs));
-	    }
 	}
-	else						// MOVrr
-	{   s, rs = GetReg(s);
-	    op3 = {.major=0b001100, .minor=0b001,.I=0,.s1=1,.s2=0,.rs3=0 };
-	    op3.rd = rd;
-	    op3.rs2 = rs;
-	    segment.Put4(_uint32(op3));
-	}
+	// Re-parse as a 1-op
+	Int1Op(r, _uint32(op));
     }
 
     proc Int1rOp(s: @[]_byte, opt: _uint32)
@@ -396,12 +401,15 @@ import my66000def;
 	if r == 0 then
 	{   if func == CVT then
 	    {   // missing arg for CVT/RND use current mode
-		const RM: expr.ExprT = {NONE, RoundingModes.CM, 0, 0 };
+		// unless src1 was immediate, then use R0
 		if immop != 0 then
-		{	fde.str("More than one immediate is illegal\n");
+		{   op2.rs2 = 0;	// reg R0
 		}
-		imm = RM;
-		immop = 2;
+		else
+		{   const RM: expr.ExprT = {NONE, RoundingModes.CM, 0, 0 };
+		    imm = RM;
+		    immop = 2;
+		}
 	    }
 	    else Syntax("',' expected");
 	}
@@ -450,27 +458,7 @@ import my66000def;
 		is INT then imm.offs = -imm.offs;
 		// FIXME - FLT?
 	    }
-	    // check for IMM5 but prefer IMM16 if available
-	    if (altop == 0 ||	// no IMM16 version
-		immop == 1 ||	// operand 1 is immediate
-		reginv) &&	// operand 1 is inverted register
-		imm.offs >= -16 && imm.offs <= 15 then
-	    {	imm.offs = _uint(imm.offs) & 0x1F;
-		if immop == 1 then
-		{   op2.rs1 = imm.offs;
-		    op2.s1 = op2.s2;
-		    op2.s2 = 1;
-		}
-		else
-		{   op2.rs2 = imm.offs;
-		    op2.s2 = 0;
-		}
-		op2.D = 1;
-		segment.Put4(_uint32(op2));
-		return;
-	    }
-	    op2.I = 1;
-	    // Check for 16-bit immediate version
+	    // Check for 16-bit immediate version and prefer it
 	    if altop != 0 &&	// has IMM16 version
 	       immop == 2 &&	// operand 2 is immediate
 	       op2.s1 == 0 &&	// operand 1 is not inverted register
@@ -481,6 +469,23 @@ import my66000def;
 		segment.Put4(_uint32(opim));
 		return;
 	    }
+	    // check for IMM5
+	    if _abs(imm.offs) <= 31 &&		// value fits
+	       !reginv then			// and no reg inversion
+	    {	if immop == 1 then
+		{   op2.rs1 = _abs(imm.offs);
+		    op2.s2 = 1;
+		}
+		else
+		{   op2.rs2 = _abs(imm.offs);
+		    op2.s2 = 0;
+		}
+		op2.s1 = imm.offs < 0;
+		op2.D = 1;
+		segment.Put4(_uint32(op2));
+		return;
+	    }
+	    op2.I = 1;
 	    // Now check size of immediate
 	    if func == FLT then
 	    {   if imm.offs <= 0xFFFF_FFFF then	// FIXME
@@ -508,58 +513,53 @@ import my66000def;
 	}
     }
 
-    proc ShfOp1(s: @[]_byte, opt: _uint32): boolean
-    {	var ops: OPSHF = OPSHF(opt);
+    proc ShfOp(s: @[]_byte, opt: _uint32)
+    {
+	var rd, rs1, rs2: _uint;
 	var w, o: _uint;
-	var sawimm: boolean = false;
+	var dynamic: boolean;
 
-	s, ops.rd = GetReg(s);
+	w = 0;
+	s, rd = GetReg(s);
 	s = SkipComma(s);
 	s = SkipWS(s);
-	if s[0] == '-' || s[0] == '#' then
-	    return false;
-	s, ops.rs1 = GetReg(s);
+	s, rs1 = GetReg(s);
 	s = SkipComma(s);
-	if s[0] == '#' then	// optional for now if "#<"
-	{   s = SkipWS(s[1:]);
-	    sawimm = true;
-	}
-	if s[0] == '<' then	// immediate definition
+	if s[0] == '#' then	// o is immediate
 	{   s = SkipWS(s[1:]);
 	    s, o = lex.Dec(s);
-	    s = SkipWS(s);
-	    w = 0;
-	    if s[0] == ':' then
-	    {	w = o;
-		s = SkipWS(s[1:]);
-		s, o = lex.Dec(s);
+	    dynamic = false;
+	}
+	else			// o in register
+	{   s, rs2 = GetReg(s);
+	    dynamic = true;
+	}
+	s = CheckComma(s);
+	if s != 0 then		// w is present
+	{   if s[0] == '#' then
+	    {   s = SkipWS(s[1:]);
+		s, w = lex.Dec(s);
 	    }
-	    // check for terminating '>'?
+	    else
+		Syntax("width field missing");
+	}
+	if dynamic then
+	{   var opr: OPSHFR = OPSHFR(opt);
+	    opr.major = 0b001000;
+	    opr.rd = rd;
+	    opr.rs1 = rs1;
+	    opr.w = w;
+	    opr.rs2 = rs2;
+	    segment.Put4(_uint32(opr));
 	}
 	else
-	{   if !sawimm then	// register form
-		return false;
-	    w = 0;
-	    s, o = lex.Dec(s);
+	{   var ops: OPSHF = OPSHF(opt);
+	    ops.rd = rd;
+	    ops.rs1 = rs1;
+	    ops.w = w;
+	    ops.o = o;
+	    segment.Put4(_uint32(ops));
 	}
-	ops.w = w;
-	ops.o = o;
-	segment.Put4(_uint32(ops));
-	return true;
-    }
-
-    proc ShfOp(s: @[]_byte, opt: _uint32)
-    {	var op2: OP2;
-
-	if ShfOp1(s, opt) then
-	    return;
-	// Re-parse as an RR version
-	op2 = OP2(opt);
-	op2.I = 0;
-	op2.s1 = 0;
-	op2.s2 = 0;
-	op2.D = 0;
-	IntOp(s, _uint32(op2));
     }
 
     proc Pred(s: @[]_byte, opt: _uint32)
@@ -1245,13 +1245,59 @@ fde.nl();
 
     proc MmOp(s: @[]_byte, opt: _uint32)
     {	var op: OPMEM = OPMEM(opt);
+	var imm: expr.ExprT;
+	var val: expr.ExprT;
+	var isMS: boolean;
+	var hasbyte: boolean;
 
-	s, op.rd = GetReg(s);	// Rcnt
-	s = SkipComma(s);
-	s, op.rb = GetReg(s);	// Rfm
-	s = SkipComma(s);
+	isMS = op.minor == 0b110111;
+	hasbyte = false;
 	s, op.ri = GetReg(s);	// Rto
+	s = SkipComma(s);
+	if s[0] == '#' then	// possible MS with immediate value
+	{   if !isMS then
+		Syntax("immediate value not allowed");
+	    s = Expr(s[1:], val);
+	    if val.op == NONE then
+	    {	if val.offs <= 0x0F || val.offs >= 0xF0 then
+		{   op.rd = val.offs & 0x1F;
+		    op.minor = 0b111100;
+		}
+		else
+		{   hasbyte = true;
+		    op.minor = 0b111000;
+		}
+
+	    }
+	    else
+		Syntax("MS value must be constant");
+	}
+	else
+	    s, op.rd = GetReg(s);	// Rfm
+	s = SkipComma(s);
+	if s[0] == '#' then	// count is immediate
+	{   op.I = 1;
+	    s = Expr(s[1:], imm);
+	    if imm.op == NONE then
+	    {	if IsImm32(imm.offs, false) then	// rw
+		    op.D = 0;
+		else
+		    op.D = 1;
+	    }
+	    else
+		Syntax("count must be constant");
+	}
+	else			// count is register
+	    s, op.rb = GetReg(s);	// Rcnt
 	segment.Put4(_uint32(op));
+	if hasbyte then
+	    segment.Put4(_uint32(val.offs & 0xFF));
+	if op.I != 0 then
+	{   if op.D == 0 then
+		segment.Put4(_uint32(imm.offs));
+	    else
+		segment.Put8(_uint64(imm.offs));
+	}
     }
 
 
@@ -1301,11 +1347,12 @@ fde.nl();
 	{ "stw",   3,  0b101010_00000_00000_00000_001010_00000, MemOp },
 	{ "std",   3,  0b101011_00000_00000_00000_001011_00000, MemOp },
 
-	{ "rot",   3,  0b000111_00000_00000_01100_101100_00000, ShfOp },
 	{ "srl",   3,  0b000111_00000_00000_10000_101100_00000, ShfOp },
 	{ "sra",   3,  0b000111_00000_00000_10010_101100_00000, ShfOp },
 	{ "sll",   3,  0b000111_00000_00000_10100_101101_00000, ShfOp },
 	{ "sla",   3,  0b000111_00000_00000_10110_101101_00000, ShfOp },
+	{ "rol",   3,  0b000111_00000_00000_01100_101011_00000, ShfOp },
+	{ "ror",   3,  0b000111_00000_00000_01110_101011_00000, ShfOp },
 	{ "bitr",  4,  0b000111_00000_00000_11000_101110_00000, ShfOp },
 
 	{ "bb1",   3,  0b01100_000000_00000_0000000000000000, BbOp },
@@ -1371,8 +1418,8 @@ fde.nl();
 	{ "vec",   3,  0b111101_00000_00000_0000000000000000, VecOp },
 	{ "ldm",   3,  0b001001_00000_00000_00000_010011_00000, LdmOp },
 	{ "stm",   3,  0b001001_00000_00000_00000_010100_00000, LdmOp },
-	{ "mm",    2,  0b001001_00000_00000_00000_010101_00000, MmOp },
-	{ "ms",    2,  0b001001_00000_00000_00000_010110_00000, MmOp },
+	{ "mm",    2,  0b001001_00000_00000_00000_110110_00000, MmOp },
+	{ "ms",    2,  0b001001_00000_00000_00000_110111_00000, MmOp },
 	{ "enter", 5,  0b101100_00000_00000_0000000000000000, EnterOp },
 	{ "exit",  4,  0b100111_00000_00000_0000000000000000, EnterOp },
 
@@ -1394,10 +1441,10 @@ fde.nl();
 	{ "fract", 5,  0b001101_00000_00000_00000_000111_00000, Int1Op },
 	{ "fractf",6,  0b001101_00000_00000_00010_000111_00000, Int1Op },
 	{ "pop",   3,  0b001101_00000_00000_00000_001000_00000, Int1Op },
-	{ "ctlz",  4,  0b001101_00000_00000_00000_001001_00000, Int1Op },
-	{ "cttz",  4,  0b001101_00000_00000_00010_001001_00000, Int1Op },
-	{ "ctlo",  4,  0b001101_00000_00000_01000_001001_00000, Int1Op },
-	{ "ctto",  4,  0b001101_00000_00000_01010_001001_00000, Int1Op },
+	{ "clz",   3,  0b001101_00000_00000_00000_001001_00000, Int1Op },
+	{ "ctz",   3,  0b001101_00000_00000_00010_001001_00000, Int1Op },
+	{ "clo",   3,  0b001101_00000_00000_01000_001001_00000, Int1Op },
+	{ "cto",   3,  0b001101_00000_00000_01010_001001_00000, Int1Op },
 	// experimental
 	{ "hrr",   3,  0b001101_00000_00000_00100_000000_00000, HrOp },
 	{ "hrw",   3,  0b001101_00000_00000_01000_000000_00000, HrOp },
