@@ -4,12 +4,10 @@ __crt0:
 	; zero .bss
 	la	r4,[ip,_edata]
 	la	r5,[ip,_end]
-	br	1f
-0:	std	r6,[r4]
-	add	r4,r4,#8
-1:	cmp	r7,r4,r5
-	blo	r7,0b
-	call	main
+	add	r6,r5,-r4
+	beq0	r6,0f
+	ms	r4,#0,r6
+0:	call	main
 	br	exit
-	.inst	0	; halt?
+	.word	0	; halt?
 

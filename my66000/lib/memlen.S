@@ -5,6 +5,6 @@ memlen1:
 	beq0	r3,9f
 	add	r1,r1,#1
 	br	0b
-9:	sub	r1,r1,r2
+9:	add	r1,r1,-r2
 	ret
 

@@ -132,7 +132,7 @@ import my66000def;
     // All 16-bit immediates are sign extended
     proc IsImm16(x: _int64): boolean
     {
-	return _abs(x) <= 32767 || x == 0x8000;
+	return x >= _int16?min && x <= _int16?max;
     }
 
     proc IsImm32(x: _int64, unsigned: boolean): boolean
@@ -371,14 +371,19 @@ import my66000def;
     {	var op2: OP2 = OP2(opt);
 	var opim: OPIMM;
 	var imm: expr.ExprT;
-	var func: (INT, LOG, FLT, CVT);
+	type FuncType: (INT, LOG, SHF, FLT, CVT);
+	var func: FuncType;
 	var immop: 0..2;	// where is immediate operand
 	var r: @[]_byte;
+	const FuncTable: [32]FuncType =
+	{ INT, INT, INT, INT, INT, INT, INT, INT,
+	  LOG, LOG, LOG, LOG, SHF, SHF, SHF, SHF,
+	  FLT, FLT, FLT, FLT, FLT, FLT, FLT, FLT,
+	  FLT, FLT, FLT, FLT, FLT, FLT, FLT, FLT
+	};
 
 	if op2.minor < 0b100000 then func = CVT;
-	elif (opt >> 26) >= 0b111000 then func = LOG;	// logic
-	elif ((opt >> 9) & 1) != 0 then func = FLT;
-	else func = INT;
+	else func = FuncTable[op2.minor & 0x1F];
 	op2.major = 0b001010;	// assume not imm16
 	immop = 0;
 	// op.s2 may be already set to 1 for subtracts
@@ -442,7 +447,7 @@ import my66000def;
 	    {	fde.str("arg non-constant immediate expr=");
 		expr.Dump(fde, imm); fde.nl();
 	    }
-	    var altop: _uint = opt >> 26;	// get alternate opcode
+	    var immval:_uint64  = imm.offs;
 	    var reginv, imminv: boolean;
 	    if immop == 1 then
 	    {	reginv = op2.s2 != 0;
@@ -454,33 +459,34 @@ import my66000def;
 	    }
 	    if imminv then	// if forced inversion of immediate
 	    {   if func
-		is LOG then imm.offs = ~imm.offs;
-		is INT then imm.offs = -imm.offs;
-		// FIXME - FLT?
+		is LOG then immval = ~immval;
+		is INT then immval = -immval;
+		// FIXME - FLT, CVT, SHF?
 	    }
+	    var altop: _uint = opt >> 26;	// get alternate opcode
 	    // Check for 16-bit immediate version and prefer it
 	    if altop != 0 &&	// has IMM16 version
 	       immop == 2 &&	// operand 2 is immediate
 	       op2.s1 == 0 &&	// operand 1 is not inverted register
-	       IsImm16(imm.offs) then
+	       IsImm16(immval) then
 	    {   opim = OPIMM(_uint32(op2));
 		opim.major = altop;	// use alternate opcode
-		opim.imm = _uint16(imm.offs);
+		opim.imm = _uint16(immval);
 		segment.Put4(_uint32(opim));
 		return;
 	    }
 	    // check for IMM5
-	    if _abs(imm.offs) <= 31 &&		// value fits
+	    if _abs(immval) <= 31 &&		// value fits
 	       !reginv then			// and no reg inversion
 	    {	if immop == 1 then
-		{   op2.rs1 = _abs(imm.offs);
+		{   op2.rs1 = _abs(immval);
 		    op2.s2 = 1;
 		}
 		else
-		{   op2.rs2 = _abs(imm.offs);
+		{   op2.rs2 = _abs(immval);
 		    op2.s2 = 0;
 		}
-		op2.s1 = imm.offs < 0;
+		op2.s1 = immval < 0;
 		op2.D = 1;
 		segment.Put4(_uint32(op2));
 		return;
@@ -494,7 +500,7 @@ import my66000def;
 		    op2.D = 1;
 	    }
 	    else
-	    {   if IsImm32(imm.offs, false) then
+	    {   if IsImm32(immval, false) then
 		    op2.D = 0;
 		else
 		    op2.D = 1;
@@ -507,9 +513,9 @@ import my66000def;
 		op2.s2 = 0;
 	    segment.Put4(_uint32(op2));
 	    if op2.D == 0 then
-		segment.Put4(_uint32(imm.offs));
+		segment.Put4(_uint32(immval));
 	    else
-		segment.Put8(_uint64(imm.offs));
+		segment.Put8(_uint64(immval));
 	}
     }
 
@@ -1224,21 +1230,25 @@ fde.nl();
     {	var op: OPMEMIMM = OPMEMIMM(opt);	// close enough model
 	var FS: _uint;
 	var imm: expr.ExprT;
+	var r: @[]_byte;
 
 	s, op.rd = GetReg(s);	// Rstart
 	s = SkipComma(s);
 	s, op.rb = GetReg(s);	// Rstop
 	s = SkipComma(s);
-	if s[0] >= '0' && s[0] <= '7' then
-	    FS = s[0] - '0';
-	else
-	    Syntax("FS bits must be 0..7");
-	s = SkipComma(s[1:]);
 	s = Expr(s, imm);
 	if imm.op != NONE then
 	    Syntax("Displacement must be constant");
 	if (imm.offs & 7) != 0 then
 	    Syntax("Displacement must be multiple of 8");
+	r = CheckComma(s);
+	if r != 0 then
+	{   s = r;
+	    if s[0] >= '0' && s[0] <= '7' then
+		FS = s[0] - '0';
+	    else
+		Syntax("FS bits must be 0..7");
+	}
 	op.imm = (imm.offs & 0xFFF8) | FS;
 	segment.Put4(_uint32(op));
     }
@@ -1371,6 +1381,10 @@ fde.nl();
 	{ "blo",   3,  0b01100_001101_00000_0000000000000000, BbmOp },
 	{ "bhi",   3,  0b01100_001110_00000_0000000000000000, BbmOp },
 	{ "bls",   3,  0b01100_001111_00000_0000000000000000, BbmOp },
+	{ "bsin",  4,  0b01100_011000_00000_0000000000000000, BbmOp },
+	{ "bfin",  4,  0b01100_011001_00000_0000000000000000, BbmOp },
+	{ "bcin",  4,  0b01100_011010_00000_0000000000000000, BbmOp },
+	{ "brin",  4,  0b01100_011011_00000_0000000000000000, BbmOp },
 	// bcnd "macros"
 	{ "beq0",  4,  0b011010_00000_00000_0000000000000000, BcmOp },
 	{ "bne0",  4,  0b011010_00001_00000_0000000000000000, BcmOp },
@@ -1396,6 +1410,10 @@ fde.nl();
 	{ "plo",   3,  0b00011_001101_00000_0000_000000000000, Pred },
 	{ "phi",   3,  0b00011_001110_00000_0000_000000000000, Pred },
 	{ "pls",   3,  0b00011_001111_00000_0000_000000000000, Pred },
+	{ "psin",  4,  0b00011_011000_00000_0000_000000000000, Pred },
+	{ "pfin",  4,  0b00011_011001_00000_0000_000000000000, Pred },
+	{ "pcin",  4,  0b00011_011010_00000_0000_000000000000, Pred },
+	{ "prin",  4,  0b00011_011011_00000_0000_000000000000, Pred },
 	// pcnd "macros"
 	{ "peq0",  4,  0b000110_00000_00000_0001_000000000000, Pred },
 	{ "pne0",  4,  0b000110_00001_00000_0001_000000000000, Pred },
@@ -1414,8 +1432,8 @@ fde.nl();
 	{ "jttw",  4,  0b011011_00010_00000_00000_000000_00000, JtOp },
 	{ "jttd",  4,  0b011011_00011_00000_00000_000000_00000, JtOp },
 
-	{ "carry", 5,  0b111100_00000_00000_0000000000000000, CarryOp },
-	{ "vec",   3,  0b111101_00000_00000_0000000000000000, VecOp },
+	{ "carry", 5,  0b111100_000000_0001_0000000000000000, CarryOp },
+	{ "vec",   3,  0b111101_000000_00000000000000000000, VecOp },
 	{ "ldm",   3,  0b001001_00000_00000_00000_010011_00000, LdmOp },
 	{ "stm",   3,  0b001001_00000_00000_00000_010100_00000, LdmOp },
 	{ "mm",    2,  0b001001_00000_00000_00000_110110_00000, MmOp },
@@ -1473,23 +1491,23 @@ fde.nl();
 	{ "eaddf", 5,  0b000000_00000_00000_00010_111010_00000, IntOp },
 	{ "fmacf", 5,  0b001100_00000_00000_000100_00000_00000, FmacOp },
 	// 64-bit floating point branch conditions
-	{ "bfeq",  4,  0b011010_01000_00000_0000000000000000, BcmOp },
-	{ "bfne",  4,  0b011010_01001_00000_0000000000000000, BcmOp },
-	{ "bfge",  4,  0b011010_01010_00000_0000000000000000, BcmOp },
-	{ "bflt",  4,  0b011010_01011_00000_0000000000000000, BcmOp },
-	{ "bfgt",  4,  0b011010_01100_00000_0000000000000000, BcmOp },
-	{ "bfle",  4,  0b011010_01101_00000_0000000000000000, BcmOp },
-	{ "bfor",  4,  0b011010_01110_00000_0000000000000000, BcmOp },
-	{ "bfun",  4,  0b011010_01111_00000_0000000000000000, BcmOp },
+	{ "bdeq",  4,  0b011010_01000_00000_0000000000000000, BcmOp },
+	{ "bdne",  4,  0b011010_01001_00000_0000000000000000, BcmOp },
+	{ "bdge",  4,  0b011010_01010_00000_0000000000000000, BcmOp },
+	{ "bdlt",  4,  0b011010_01011_00000_0000000000000000, BcmOp },
+	{ "bdgt",  4,  0b011010_01100_00000_0000000000000000, BcmOp },
+	{ "bdle",  4,  0b011010_01101_00000_0000000000000000, BcmOp },
+	{ "bdor",  4,  0b011010_01110_00000_0000000000000000, BcmOp },
+	{ "bdun",  4,  0b011010_01111_00000_0000000000000000, BcmOp },
 	// 32-bit floating point branch conditions
-	{ "bfeqf", 5,  0b011010_10000_00000_0000000000000000, BcmOp },
-	{ "bfnef", 5,  0b011010_10001_00000_0000000000000000, BcmOp },
-	{ "bfgef", 5,  0b011010_10010_00000_0000000000000000, BcmOp },
-	{ "bfltf", 5,  0b011010_10011_00000_0000000000000000, BcmOp },
-	{ "bfgtf", 5,  0b011010_10100_00000_0000000000000000, BcmOp },
-	{ "bflef", 5,  0b011010_10101_00000_0000000000000000, BcmOp },
-	{ "bforf", 5,  0b011010_10110_00000_0000000000000000, BcmOp },
-	{ "bfunf", 5,  0b011010_10111_00000_0000000000000000, BcmOp },
+	{ "bfeq",  4,  0b011010_10000_00000_0000000000000000, BcmOp },
+	{ "bfne",  4,  0b011010_10001_00000_0000000000000000, BcmOp },
+	{ "bfge",  4,  0b011010_10010_00000_0000000000000000, BcmOp },
+	{ "bflt",  4,  0b011010_10011_00000_0000000000000000, BcmOp },
+	{ "bfgt",  4,  0b011010_10100_00000_0000000000000000, BcmOp },
+	{ "bfle",  4,  0b011010_10101_00000_0000000000000000, BcmOp },
+	{ "bfor",  4,  0b011010_10110_00000_0000000000000000, BcmOp },
+	{ "bfun",  4,  0b011010_10111_00000_0000000000000000, BcmOp },
 	// floating point compare bits
 	{ "bneq",  4,  0b01100_000001_00000_0000000000000000, BbmOp },
 	{ "bnne",  4,  0b01100_000011_00000_0000000000000000, BbmOp },
@@ -1503,19 +1521,37 @@ fde.nl();
 	{ "bntor", 5,  0b01100_010011_00000_0000000000000000, BbmOp },
 	{ "bsnan", 5,  0b01100_100000_00000_0000000000000000, BbmOp },
 	{ "bqnan", 5,  0b01100_100001_00000_0000000000000000, BbmOp },
+	// 64-bit floating point predicates
+	{ "pdeq",  4,  0b000110_01000_00000_0001_000000000000, Pred },
+	{ "pdne",  4,  0b000110_01001_00000_0001_000000000000, Pred },
+	{ "pdge",  4,  0b000110_01010_00000_0001_000000000000, Pred },
+	{ "pdlt",  4,  0b000110_01011_00000_0001_000000000000, Pred },
+	{ "pdgt",  4,  0b000110_01100_00000_0001_000000000000, Pred },
+	{ "pdle",  4,  0b000110_01101_00000_0001_000000000000, Pred },
+	{ "pdor",  4,  0b000110_01110_00000_0001_000000000000, Pred },
+	{ "pdun",  4,  0b000110_01111_00000_0001_000000000000, Pred },
+	// 32-bit floating point predicates
+	{ "pfeq",  4,  0b000110_10000_00000_0001_000000000000, Pred },
+	{ "pfne",  4,  0b000110_10001_00000_0001_000000000000, Pred },
+	{ "pfge",  4,  0b000110_10010_00000_0001_000000000000, Pred },
+	{ "pflt",  4,  0b000110_10011_00000_0001_000000000000, Pred },
+	{ "pfgt",  4,  0b000110_10100_00000_0001_000000000000, Pred },
+	{ "pfle",  4,  0b000110_10101_00000_0001_000000000000, Pred },
+	{ "pfor",  4,  0b000110_10110_00000_0001_000000000000, Pred },
+	{ "pfun",  4,  0b000110_10111_00000_0001_000000000000, Pred },
 	// pb1 floating point "macros"
 	{ "pneq",  4,  0b00011_000001_00000_0000_000000000000, Pred },
-	{ "bnne",  4,  0b00011_000011_00000_0000000000000000, BbmOp },
-	{ "bnge",  4,  0b00011_000101_00000_0000000000000000, BbmOp },
-	{ "bnlt",  4,  0b00011_000111_00000_0000000000000000, BbmOp },
-	{ "bngt",  4,  0b00011_001001_00000_0000000000000000, BbmOp },
-	{ "bnle",  4,  0b00011_001011_00000_0000000000000000, BbmOp },
-	{ "bor",   3,  0b00011_010000_00000_0000000000000000, BbmOp },
-	{ "bnor",  4,  0b00011_010001_00000_0000000000000000, BbmOp },
-	{ "btor",  4,  0b00011_010010_00000_0000000000000000, BbmOp },
-	{ "bntor", 5,  0b00011_010011_00000_0000000000000000, BbmOp },
-	{ "bsnan", 5,  0b00011_100000_00000_0000000000000000, BbmOp },
-	{ "bqnan", 5,  0b00011_100001_00000_0000000000000000, BbmOp },
+	{ "pnne",  4,  0b00011_000011_00000_0000000000000000, BbmOp },
+	{ "pnge",  4,  0b00011_000101_00000_0000000000000000, BbmOp },
+	{ "pnlt",  4,  0b00011_000111_00000_0000000000000000, BbmOp },
+	{ "pngt",  4,  0b00011_001001_00000_0000000000000000, BbmOp },
+	{ "pnle",  4,  0b00011_001011_00000_0000000000000000, BbmOp },
+	{ "por",   3,  0b00011_010000_00000_0000000000000000, BbmOp },
+	{ "pnor",  4,  0b00011_010001_00000_0000000000000000, BbmOp },
+	{ "ptor",  4,  0b00011_010010_00000_0000000000000000, BbmOp },
+	{ "pntor", 5,  0b00011_010011_00000_0000000000000000, BbmOp },
+	{ "psnan", 5,  0b00011_100000_00000_0000000000000000, BbmOp },
+	{ "pqnan", 5,  0b00011_100001_00000_0000000000000000, BbmOp },
 	// conversions
 	{ "cvtus",   5, 0b000000_00000_00000_00000_000001_00000, IntOp },
 	{ "cvtsu",   5, 0b000000_00000_00000_00010_000001_00000, IntOp },

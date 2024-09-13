@@ -167,6 +167,15 @@ fde.str("write error "); fde.int(rv); fde.nl();
 		reg[Arg[1]] = SWord(rv);
 	    }
 	}
+	is 5 then	// lseek
+	{   rv = sys.lseek(_int(reg[Arg[1]]), _uint(reg[Arg[2]]),
+			   sys.whence_t(reg[Arg[3]]));
+	    if rv < 0 then
+	    {
+fde.str("lseek error "); fde.int(rv); fde.nl();
+	    }
+	    reg[Arg[1]] = SWord(rv);
+	}
 	else
 	{
 fde.str("Arg[0]="); fde.int(Arg[0]); fde.nl();
@@ -340,6 +349,11 @@ import disinst;
     proc DoSLL(src: Word, w: _uint, o: _uint): Word
     {   var dst: Word;
 
+if db&4 != 0 then {
+fde.str("src=0x"); fde.hex64(src);
+fde.str(" w="); fde.uint(w);
+fde.str(" o="); fde.uint(o);
+fde.nl(); }
 	if w != 0 then	// FIXME - what does this mean with CI or CO
 	{   dst = src << (64 -w);
 	    dst = dst >> (64 -w -o);
@@ -365,7 +379,7 @@ import disinst;
 	return Word(src);
     }
 
-    proc DoROR(src: Word, w: _uint, o: _uint): Word
+    proc DoROL(src: Word, w: _uint, o: _uint): Word
     {   var dst: Word;
 	var tr, tl: Word;
 
@@ -381,7 +395,7 @@ import disinst;
 	return dst;
     }
 
-    proc DoROL(src: Word, w: _uint, o: _uint): Word
+    proc DoROR(src: Word, w: _uint, o: _uint): Word
     {   var dst: Word;
 	var tr, tl: Word;
 
@@ -507,12 +521,18 @@ import disinst;
     proc DoCompare(src1: Word, src2: Word): Word
     {   var cc: CondCode = {};
 
-	cc[EQ] = src1 == src2;
-	cc[NE] = src1 != src2;
-	cc[GE] = SWord(src1) >= SWord(src2);
-	cc[LT] = SWord(src1) < SWord(src2);
-	cc[GT] = SWord(src1) > SWord(src2);
-	cc[LE] = SWord(src1) <= SWord(src2);
+	cc[EQ]  = src1 == src2;
+	cc[NEQ] = !(src1 == src2);
+	cc[NE]  = src1 != src2;
+	cc[NNE] = !(src1 != src2);
+	cc[GE]  = SWord(src1) >= SWord(src2);
+	cc[NGE] = !(SWord(src1) >= SWord(src2));
+	cc[LT]  = SWord(src1) < SWord(src2);
+	cc[NLT] = !(SWord(src1) < SWord(src2));
+	cc[GT]  = SWord(src1) > SWord(src2);
+	cc[NGT] = !(SWord(src1) > SWord(src2));
+	cc[LE]  = SWord(src1) <= SWord(src2);
+	cc[NLE] = !(SWord(src1) <= SWord(src2));
 	cc[HS] = src1 >= src2;
 	cc[LO] = src1 < src2;
 	cc[HI] = src1 > src2;
@@ -522,7 +542,9 @@ import disinst;
 	cc[CIN] = SWord(src1) >= 0 && SWord(src1) <  SWord(src2);
 	cc[RIN] = SWord(src1) >  0 && SWord(src1) <  SWord(src2);
 if db&4 != 0 then {
-  fde.str("DoCompare=0x"); fde.hex64(Word(cc)); fde.nl(); }
+  fde.str("DoCompare=0x"); fde.hex64(src1);
+  fde.str(" : 0x"); fde.hex64(src2);
+  fde.str(" -> 0x"); fde.hex64(Word(cc)); fde.nl(); }
 	return Word(cc);
     }
 
@@ -2104,7 +2126,7 @@ package chip
 	{ 0, 0x02F0_0000, 0x02F0_0FFF, D, 0, 0, 0 },		// ARGS
     };
     const NSegs = MemTab?len;
-    const NELFSegs = 4;
+    const NELFSegs = 8;
 
     proc Init(argc: _uint, argv: @[]@[]_byte)
     {   var i, j, k, n: _uint;

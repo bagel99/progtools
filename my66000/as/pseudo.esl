@@ -206,9 +206,11 @@
     proc SectionOp(s: @[]_byte)
     {   var name, r: @[]_byte;
 	var flags: segment.SegmentFlags;
+	var loaded: boolean;
 	var n: _uint;
 
 	flags = {};
+	loaded = false;
 	if s[0] == '.' then
 	{   r, n = GetSym(s[1:]);
 	    name = s;
@@ -228,12 +230,14 @@
 		r = CheckComma(r);
 		if r != 0 then
 		{   if r[0:9]  == "@progbits" then
-			flags.ALLOC = true;
+		    {	flags.ALLOC = true;
+			loaded = true;
+		    }
 		}
 	    }
 	    else
 		flags = { .ALLOC=true };	// some default
-	    segment.ChangeToName(name, n+1, flags);
+	    segment.ChangeToName(name, n+1, loaded, flags);
 	}
 	else
 	    Syntax("section name doesn't begin with '.'");
@@ -260,6 +264,7 @@
 	{ "byte",		4, 4, 0 },
 	{ "short",		5, 4, 1 },
 	{ "long",		4, 4, 2 },
+	{ "word",		4, 4, 2 },
 	{ "dword",		5, 4, 3 },
 	{ "quad",		4, 4, 3 },
 	{ "jt8",		3,11, 0 },

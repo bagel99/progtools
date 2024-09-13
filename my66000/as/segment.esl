@@ -46,6 +46,7 @@ package segment
 	symnum:  _uint16;	// elf symbol number for relocation
 	secnum:  _uint8;	// elf section number
 	align:   _uint8;	// maximum alignment used
+	loaded:  boolean;
 	flags:   SegmentFlags;
     };
     type Segment: @SegmentT;
@@ -246,7 +247,7 @@ package segment
     }
 
     // Create a new segment
-    proc New(name: @[]_byte, flags: SegmentFlags): Segment
+    proc New(name: @[]_byte, loaded: boolean, flags: SegmentFlags): Segment
     {   var ps: Segment;
 
 	ps = _new(SegmentT);
@@ -255,6 +256,7 @@ package segment
 	ps.bhead = 0;
 	ps.btail = 0;
 	ps.nbloks = 0;
+	ps.loaded = loaded;
 	ps.flags = flags;
 	ps.align =  0;
 	ps.secnum = nxtsecno;
@@ -278,7 +280,7 @@ package segment
     }
 
     // Find segment by name
-    proc ChangeToName(s: @[]_byte, len: _uint, flags: SegmentFlags)
+    proc ChangeToName(s: @[]_byte, len: _uint, loaded: boolean, flags: SegmentFlags)
     {   var seg: Segment;
 	var n: _uint;
 
@@ -297,7 +299,7 @@ package segment
 	name = _new(String(len+1));
 	name[0:len] = s[0:len];
 	name[len] = 0;
-	seg = New(name, flags);
+	seg = New(name, loaded, flags);
 	Change(seg);
     }
 
@@ -314,11 +316,11 @@ package segment
 
     proc Init()
     {
-	usegm = New(".undef",  {}                         );
-	tsegm = New(".text",   {.ALLOC=true, .EXEC=true}  );
-	rsegm = New(".rodata", {.ALLOC=true}              );
-	dsegm = New(".data",   {.ALLOC=true, .WRITE=true} );
-	bsegm = New(".bss",    {             .WRITE=true} );
+	usegm = New(".undef",  false, {}                         );
+	tsegm = New(".text",   true,  {.ALLOC=true, .EXEC=true}  );
+	rsegm = New(".rodata", true,  {.ALLOC=true}              );
+	dsegm = New(".data",   true,  {.ALLOC=true, .WRITE=true} );
+	bsegm = New(".bss",    false, {.ALLOC=true, .WRITE=true} );
 	Change(tsegm);
 	list.prev = tsegm;
     }

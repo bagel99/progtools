@@ -7,7 +7,6 @@ import bufin;
 
 var lineno: _uint;
 var filename: @[]_byte;
-var Mitch: boolean = false;
 type OutFmt: (BIN, ELF);
 var outputformat: OutFmt;
 
@@ -108,8 +107,6 @@ proc main(argc: _uint, argv: @[]@[]_byte): _int
     	}
 	is 'o' then
 	    ofile = argv[i]@[2:];
-	is 'M' then
-	    Mitch = true;
 	i += 1;
     }
     if i > argc then

@@ -5,31 +5,37 @@
 	.globl	exit
 exit:
 	mov	r8,#0
-	.inst	0xFFAA5501
-	.inst	0		; halt?
+	.word	0xFFAA5501
+	.word	0		; halt?
 
 	.globl	open
 open:
 	mov	r8,#1
-	.inst	0xFFAA5501
+	.word	0xFFAA5501
 	ret
 
 	.globl	close
 close:
 	mov	r8,#2
-	.inst	0xFFAA5501
+	.word	0xFFAA5501
 	ret
 
 	.globl	read
 read:
 	mov	r8,#3
-	.inst	0xFFAA5501
+	.word	0xFFAA5501
 	ret
 
 	.globl	write
 write:
 	mov	r8,#4
-	.inst	0xFFAA5501
+	.word	0xFFAA5501
+	ret
+
+	.globl	lseek
+lseek:
+	mov	r8,#5
+	.word	0xFFAA5501
 	ret
 
 
@@ -48,6 +54,10 @@ memalloc:
 	ldd	r1,[r3,0]
 	add	r2,r2,r1
 	std	r2,[r3,0]
+	ret
+
+	.globl	memfree
+memfree:
 	ret
 
 	.data

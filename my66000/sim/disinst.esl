@@ -500,22 +500,25 @@
 	    "bitr","???", "???", "???"
 	};
 
-	fdx.str(ShfOpNames[op.minor]); fdx.chr('\t');
 	if op.minor
 	is 0b0000 then
 	{   var opb: OPPB = OPPB(inst);
-	    fdx.uint8(opb.bit); fdx.chr(',');
+	    fdx.chr('p'); fdx.str(CBitNames[opb.bit]); fdx.chr('\t');
 	    PReg(opb.rs1); fdx.chr(',');
 	    PShadow(opb.else, opb.then);
+	    fdx.str("\t; bit "); fdx.uint8(opb.bit);
 	}
 	is 0b0001 then
 	{   var opc: OPPC = OPPC(inst);
-	    fdx.str(CondNames[opc.cond]); fdx.chr(',');
+	    fdx.chr('p'); fdx.str(CondNames[opc.cond]); fdx.chr('\t');
 	    PReg(opc.rs1); fdx.chr(',');
 	    PShadow(opc.else, opc.then);
 	}
 	else
+	{
+	    fdx.str(ShfOpNames[op.minor]); fdx.chr('\t');
 	    PFmt(inst, ip, "R,S,N");
+	}
     }
 
     proc disOpBb(inst: Inst, ip: Word)
@@ -583,8 +586,8 @@
 	if op.major&0b1111
 	is 0b0111, 0b1100 then	// exit, enter
 	{   PReg(op.rb); fdx.chr(',');
-	    fdx.uint16(op.imm & 7); fdx.chr(',');
-	    fdx.uint16(op.imm & 0xFFF8);
+	    fdx.uint16(op.imm & 0xFFF8); fdx.chr(',');
+	    fdx.uint16(op.imm & 7);
 	}
 	else
 	{   fdx.chr('[');
