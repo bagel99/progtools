@@ -195,12 +195,44 @@
     }
 
     proc SpaceOp(s: @[]_byte)
-    {   var e: expr.ExprT;
+    {   var name, r: @[]_byte;
+	var e: expr.ExprT;
+	var len: _uint;
+	var fill: _byte;
 
 	s = expr.Expr0(s, e);
 	if e.op != NONE then
-	    Syntax("expression is not constant");
-	segment.Space(e.offs);
+	    Syntax("size expression is not constant");
+	len = e.offs;
+	r = CheckComma(s);
+	if r != 0 then
+	{   s = expr.Expr0(r, e);
+	    if e.op != NONE then
+		Syntax("fill expression is not constant");
+	    fill = _byte(e.offs);
+	}
+	segment.Space(len, fill);
+    }
+
+    proc GetSectionName(s: @[]_byte)
+		       (r: @[]_byte, name: @[]_byte, len:_uint)
+    {   var i, j: _uint;
+
+	i = 0;
+	if s[0] == '"' then
+	{   i = 1;  j = 2;
+	    while s[j] != '"' && s[j] != '\n' do
+		j += 1;
+	    r = s[j+1:0];
+	    name = s[i:0];
+	    len = j-i;
+	}
+	else
+	{   r, len = GetSym(s);
+	    name = s;
+	}
+//fde.str("Section name= "); fde.strn(name, len);
+//fde.str(" r[0]='");  fde.chr(r[0]); fde.str("'\n");
     }
 
     proc SectionOp(s: @[]_byte)
@@ -211,36 +243,31 @@
 
 	flags = {};
 	loaded = false;
-	if s[0] == '.' then
-	{   r, n = GetSym(s[1:]);
-	    name = s;
-	    r = CheckComma(r);
-	    if r != 0 then	// there's a comma
-	    {   if r[0] == '"' then
-		{   loop
-		    {	r = r[1:];
-		      exit r[0] == '"' || r[0] == '\n';
-			if r[0]
-			is 'a' then flags.ALLOC = true;
-			is 'x' then flags.EXEC = true;
-			is 'w' then flags.WRITE = true;
-		    }
-		    r = r[1:];
+	r, name, n = GetSectionName(s);
+	r = CheckComma(r);
+	if r != 0 then	// there's a comma
+	{   if r[0] == '"' then
+	    {   loop
+		{	r = r[1:];
+		  exit r[0] == '"' || r[0] == '\n';
+		    if r[0]
+		    is 'a' then flags.ALLOC = true;
+		    is 'x' then flags.EXEC = true;
+		    is 'w' then flags.WRITE = true;
 		}
-		r = CheckComma(r);
-		if r != 0 then
-		{   if r[0:9]  == "@progbits" then
-		    {	flags.ALLOC = true;
-			loaded = true;
-		    }
+		r = r[1:];
+	    }
+	    r = CheckComma(r);
+	    if r != 0 then
+	    {   if r[0:9]  == "@progbits" then
+		{   flags.ALLOC = true;
+		    loaded = true;
 		}
 	    }
-	    else
-		flags = { .ALLOC=true };	// some default
-	    segment.ChangeToName(name, n+1, loaded, flags);
 	}
 	else
-	    Syntax("section name doesn't begin with '.'");
+	    flags = { .ALLOC=true };	// some default
+	segment.ChangeToName(name, n, loaded, flags);
     }
 
     type POpcode:

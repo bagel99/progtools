@@ -682,14 +682,14 @@ fde.str("JT32 OK diff="); fde.int(diff); fde.nl();}
 	}
     }
 
-    proc Space(n: _uint)
+    proc Space(n: _uint, c: _byte)
     {
 	if !curseg.flags.ALLOC then
 	{   curseg.btail.size += n;
 	}
 	else
 	{   while n > 0 do
-	    {	Put1(0);
+	    {	Put1(c);
 		n -= 1;
 	    }
 	}

@@ -140,7 +140,7 @@ import my66000def;
 	if unsigned then
 	    return _uint64(x) <= _uint64(_uint32?max);
 	else
-	    return _abs(x) <= _int32?max || x == 0x8000_0000;
+	    return x >= _int32?min && x <= _int32?max;
     }
 
 /*

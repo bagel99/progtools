@@ -758,18 +758,18 @@ fde.str(" src2="); fde.uint8(src2); fde.nl(); }
 		    if kind == FLT then
 			src2 = FloatImm5(op.rs2, op.S);
 		    else
-			src2 = Sext(4, op.rs2);
-		    inv1 = op.s1 != 0;
-		    inv2 = false;
+			src2 = op.rs2;
+		    inv2 = op.s1 != 0;
+		    inv1 = false;
 		}
 		else
-		{   if kind == FLT then
+		{   src2 = reg[op.rs2];
+		    if kind == FLT then
 			src1 = FloatImm5(op.rs1, op.S);
 		    else
-			src1 = Sext(4, op.rs1);
-		    src2 = reg[op.rs2];
-		    inv1 = false;
-		    inv2 = op.s1 != 0;
+			src1 = op.rs1;
+		    inv2 = false;
+		    inv1 = op.s1 != 0;
 		}
 	    }
 	    else	// both reg
@@ -826,10 +826,6 @@ fde.str(" src2="); fde.uint8(src2); fde.nl(); }
 	    is LOG     then src2 = ~src2;
 	    is FLT     then src2 ^= 0x8000_0000_0000_0000;	// flip sign bit
 	}
-if db&4 != 0 then {
-fde.str("src1="); fde.hex64(src1); fde.str(" inv1="); fde.uint8(_uint8(inv1));
-fde.str(" src2="); fde.hex64(src2); fde.str(" inv2="); fde.uint8(_uint8(inv2));
-fde.nl();}
 	if op.minor
 	is 0b000001 then	// CVTII
 	{   if op.S == 0 then
@@ -898,6 +894,11 @@ fde.nl();}
 	}
 	is 0b100111 then	// MIN
 	{   tmp = src1;	// assume now and fix later
+if db&4 != 0 then
+{  fde.str("MIN 0x"); fde.hex64(tmp);
+   fde.str(" : ");    fde.hex64(src2);
+   fde.nl();
+}
 	    if op.S != 0 then	// signed
 	    {	if SWord(tmp) > SWord(src2) then tmp = src2;
 	    }
