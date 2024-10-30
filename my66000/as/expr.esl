@@ -99,7 +99,7 @@ package expr
 		val.op = SYMADD;
 	    }
 	    else
-	    {   val.sym1 = symbol.Enter(r, i, false);
+	    {   val.sym1 = symbol.Enter(r, i);
 		if val.sym1.flags.def && val.sym1.segm == 0 then
 		{   // absolute, treat like a number
 		    val.offs = val.sym1.offs;

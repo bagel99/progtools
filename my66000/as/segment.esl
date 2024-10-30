@@ -47,6 +47,7 @@ package segment
 	secnum:  _uint8;	// elf section number
 	align:   _uint8;	// maximum alignment used
 	loaded:  boolean;
+	relocs:  boolean;	// needs relocation records
 	flags:   SegmentFlags;
     };
     type Segment: @SegmentT;
@@ -61,17 +62,29 @@ package segment
     var nxtsecno: _uint16 = 0;
     /*
      * Relocation fixups
+     * These must match what binutils-my66000 has defined
      */
     type RKind:
     (	NONE,
-	ABS64, ABS32, ABS16, ABS8,
-	REL64, REL32, REL26, REL16,
-	JT8, JT16, JT32, JT64
+	PCREL8_S2,	// where is this used
+	PCREL16_S2,
+	PCREL26_S2,
+	PCREL32_S2,
+	PCREL64_S2,
+	ABS_8,
+	ABS_16,
+	ABS_32,
+	ABS_64,
+	PCREL32,
+	PCREL64,
+	JT8, JT16, JT32, JT64	// this are internal only
+
     );
     const KindName: [RKind]@[]_byte =
     { "NONE",
-      "ABS64", "ABS32", "ABS16", "ABS8",
-      "REL64", "REL32", "REL26", "REL16",
+      "PCREL8_S2", "PCREL16_S2", "PCREL26_S2", "PCREL32_S2", "PCREL64_S2",
+      "ABS_8", "ABS_16", "ABS_32", "ABS_64",
+      "PCREL32", "PCREL64",
       "JT8", "JT16", "JT32", "JT64"
     };
 
@@ -87,8 +100,7 @@ package segment
 	blok:   Block;
 	symb:   @SymbolT;
 	expr:   expr.ExprT;
-	radd:   _uint32;	// relocation addend FIXME 64-bit?
-	boff:   _uint16;	// offset into block
+	boff:   _uint32;	// offset into block
 	kind:   RKind;
 	valt:   VKind;
     };
@@ -103,7 +115,7 @@ package segment
 	{   fdo.str(ps.name); fdo.str(': ');
 	    fdo.str(KindName[pf.kind]);
 	    fdo.str(" valt="); fdo.str(ValtName[pf.valt]);
-	    fdo.str(" boff="); fdo.uint16(pf.boff);
+	    fdo.str(" boff="); fdo.uint32(pf.boff);
 	    if pf.valt
 	    is EXPR then
 	    {   fdo.chr('(');
@@ -353,7 +365,10 @@ package segment
 	ps = list.head;
 	while ps != 0 do
 	{   // assign addresses within each segment
-	    ps.addr = saddr;
+	    if static then
+		ps.addr = saddr;	// each "loaded" segment in order
+	    else
+		ps.addr = 0;
 	    addr = 0;
 	    pb = ps.bhead;
 	    if pb != 0 then
@@ -381,20 +396,23 @@ package segment
  	var val: _uint64;
  	var addr: _uint64;
  	var diff: _int64;
+	var offs: _int64;
 	var inst: _uint32;
  	var pc: @[]_byte;
-	var change, bound: boolean;
+	var bound: boolean;	// if reloc to symbol, symbol is defined
+	var change: boolean;
+	var relocs: boolean;
 
 	change = false;
-if debug.rel then { fde.str("TryFix: "); fde.str(ps.name); fde.nl(); }
+	relocs = false;
+if debug.rel then { fde.str("TryFix segment "); fde.str(ps.name); fde.nl(); }
 	pf = ps.fhead;
 	while pf != 0 do
 	{   if pf.kind != NONE then
 	    {
-if debug.rel then { fde.str("Fix "); fde.str(KindName[pf.kind]); }
+if debug.rel then { fde.chr('\t'); fde.str(KindName[pf.kind]); }
 		addr = pf.blok.addr + pf.boff;
-if debug.rel then { fde.str(" at "); fde.str(ps.name); fde.chr(':');
-fde.hex32(_uint32(addr)); }
+if debug.rel then { fde.str(" offset="); fde.hex32(_uint32(addr)); }
 		bound, val, seg = expr.Fix(pf.expr);
 		if seg != 0 then val += seg.addr;
 if debug.rel then { fde.str(" bound="); fde.uint8(_uint8(bound));
@@ -403,7 +421,7 @@ fde.str(" tseg="); if seg != 0 then fde.str(seg.name); else fde.str("*UNKN*");
 fde.chr('('); expr.Dump(fde, pf.expr); fde.chr(')');
 fde.nl();}
 		if pf.kind
-		is REL26 then
+		is PCREL26_S2 then
 		{   bound, val, seg = expr.Fix(pf.expr);
 		    if bound && seg == ps then
 		    {   diff = val - (pf.blok.addr+pf.boff);
@@ -412,22 +430,17 @@ fde.nl();}
 			{   inst = _unpkle(pf.blok.code[pf.boff:4]);
 			    inst |= _uint32(diff) & 0x03FF_FFFF;
 if debug.rel  then {
-fde.str("REL26 OK inst="); fde.hex32(inst); fde.nl();}
+fde.str("PCREL26_S2 OK inst="); fde.hex32(inst); fde.nl();}
 			    _packle(pf.blok.code[pf.boff:4], inst);
 			    pf.kind = NONE;
 			    change = true;
 			}
 			else
-			    fde.str("REL26 not in range\n");
+			    fde.str("PCREL26_S2 not in range\n");
 		    }
-		    else
-		    {
-if debug.rel  then {
-fde.str("Fix REL26 at "); fde.hex64(addr);
-fde.str(" <no segment>\n"); }
-		    }
+		    else relocs = true;
 		}
-		is REL16 then
+		is PCREL16_S2 then
 		{
 		    if bound && seg == ps then
 		    {   diff = val - (pf.blok.addr+pf.boff);
@@ -436,61 +449,66 @@ fde.str(" <no segment>\n"); }
 			{   inst = _unpkle(pf.blok.code[pf.boff:4]);
 			    inst |= _uint32(diff) & 0x0000_FFFF;
 if debug.rel  then {
-fde.str("REL16 OK inst="); fde.hex32(inst); fde.nl();}
+fde.str("PCREL16_S2 OK inst="); fde.hex32(inst); fde.nl();}
 			    _packle(pf.blok.code[pf.boff:4], inst);
 			    pf.kind = NONE;
 			    change = true;
 			}
 			else
-			    fde.str("REL16 not in range\n");
+			    fde.str("PCREL16_S2 not in range\n");
 		    }
+		    else relocs = true;
 		}
-		is REL32 then
+		is PCREL32 then
 		{   // FIXME - this assumes instruction just before
 		    // FIXME - need offset into instruction in FixF
 		    // FIXME - for some instructions can use 16-bit offset
 		    // FIXME - and shrink the instruction
-		    if bound then
+		    if bound && (static || seg == ps) then
 		    {   val -= addr-4;	// ip relative
 if debug.rel  then {
-fde.str("REL32 OK word="); fde.hex32(val); fde.nl();}
+fde.str("PCREL32 OK word="); fde.hex32(val); fde.nl();}
 			_packle(pf.blok.code[pf.boff:4], val);
 			pf.kind = NONE;
 			change = true;
 		    }
+		    else relocs = true;
 		}
-		is ABS8 then
+		is ABS_8 then
 		{
-		    if bound then
+		    if bound && static then
 		    {
 if debug.rel  then {
-fde.str("ABS8 OK byte="); fde.int8(_int8(val)); fde.nl();}
+fde.str("ABS_8 OK byte="); fde.int8(_int8(val)); fde.nl();}
 			pf.blok.code[pf.boff] = _uint8(val);
 			pf.kind = NONE;
 			change = true;
 		    }
+		    else relocs = true;
 		}
-		is ABS32 then
+		is ABS_32 then
 		{
-		    if bound then
+		    if bound && static then
 		    {
 if debug.rel  then {
-fde.str("ABS32 OK word="); fde.hex32(val); fde.nl();}
+fde.str("ABS_32 OK word="); fde.hex32(val); fde.nl();}
 			_packle(pf.blok.code[pf.boff:4], _uint32(val));
 			pf.kind = NONE;
 			change = true;
 		    }
+		    else relocs = true;
 		}
-		is ABS64 then
+		is ABS_64 then
 		{
-		    if bound then
+		    if bound && static then
 		    {
 if debug.rel  then {
-fde.str("ABS64 OK dword="); fde.hex32(val); fde.nl();}
+fde.str("ABS_64 OK dword="); fde.hex32(val); fde.nl();}
 			_packle(pf.blok.code[pf.boff:8], val);
 			pf.kind = NONE;
 			change = true;
 		    }
+		    else relocs = true;
 		}
 		is JT8 then
 		{
@@ -513,15 +531,17 @@ fde.str("JT8 OK diff="); fde.int(diff); fde.nl();}
 		is JT16 then
 		{
 		    if bound then
-		    {	diff = _int64(val + 3 - addr) >> 2;
+		    {	offs = _int64(_int16(_unpkle(pf.blok.code[pf.boff:2])));
+			diff = _int64(val + 3 - addr + offs) >> 2;
+if debug.rel  then {
+fde.str("JT16 OK diff="); fde.int(diff);
+fde.str(" offs="); fde.int(offs); fde.nl();}
 			// FIXME - check with range
 			if diff != _int64(_int16(diff)) then
 			{   fde.str(".jt16 out of range: ");
 			    fde.int64(diff);
 			    fde.nl();
 			}
-if debug.rel  then {
-fde.str("JT16 OK diff="); fde.int(diff); fde.nl();}
 			_packle(pf.blok.code[pf.boff:2], _uint16(diff));
 			pf.kind = NONE;
 			change = true;
@@ -545,6 +565,7 @@ fde.str("JT32 OK diff="); fde.int(diff); fde.nl();}
 	    }
 	    pf = pf.next;
 	}
+	ps.relocs = relocs;
 	return change;
     }
 
@@ -572,13 +593,6 @@ fde.str("JT32 OK diff="); fde.int(diff); fde.nl();}
 	    	bound, val, seg = expr.Fix(pf.expr);
 	    else
 	    	fde.str("Unexpected pf.valt\n");
-	    if pf.kind
-	    is REL16 then
-	    {
-	    }
-	    is ABS32 then
-	    {
-	    }
 	    pf = pf.next;
 	}
     }

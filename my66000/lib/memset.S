@@ -1,11 +1,10 @@
-; Really stupid implementations of memset
+; r1 - destination
+; r2 - object
+; r3 - count
+
 	.text
 	.globl	memset
 memset:
-	beq0	r3,9f
-0:	stb	r2,[r1,0]
-	add	r1,r1,#1
-	add	r3,r3,#-1
-	bne0	r3,0b
-9:	ret
+	ms	r1,r2,r3
+	ret
 

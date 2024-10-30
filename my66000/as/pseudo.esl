@@ -56,10 +56,10 @@
 	    if e.op != NONE then
 	    {
 	    if opt
-	    is 0 then segment.FixNew(e, ABS8, EXPR);
-	    is 1 then segment.FixNew(e, ABS16, EXPR);
-	    is 2 then segment.FixNew(e, ABS32, EXPR);
-	    is 3 then segment.FixNew(e, ABS64, EXPR);
+	    is 0 then segment.FixNew(e, ABS_8, EXPR);
+	    is 1 then segment.FixNew(e, ABS_16, EXPR);
+	    is 2 then segment.FixNew(e, ABS_32, EXPR);
+	    is 3 then segment.FixNew(e, ABS_64, EXPR);
 	    else
 		fde.str("unimplemented size data fixup required\n");	// FIXME
 	    }
@@ -76,25 +76,39 @@
 
     proc JTOp(s: @[]_byte, opt: _uint)
     {   var e: expr.ExprT;
+	var offs: _int;		// offset to JT instruction
 
 	s = SkipWS(s[0:]);
+	offs = 4;		// JT instruction is 4 bytes back
 	loop
 	{   s = expr.Expr0(s[0:], e);
 	    if e.op != NONE then
-	    {
-	    if opt
-	    is 0 then segment.FixNew(e, JT8, EXPR);
-	    is 1 then segment.FixNew(e, JT16, EXPR);
-	    is 2 then segment.FixNew(e, JT32, EXPR);
-	    is 3 then segment.FixNew(e, JT64, EXPR);
-	    else
-		fde.str("unimplemented size data fixup required\n");	// FIXME
+	    {	if opt
+		is 0 then
+		{   segment.FixNew(e, JT8, EXPR);
+		    segment.Put1(offs);
+		    offs += 1;
+		}
+		is 1 then
+		{   segment.FixNew(e, JT16, EXPR);
+		    segment.Put2(offs);
+		    offs += 2;
+		}
+		is 2 then
+		{   segment.FixNew(e, JT32, EXPR);
+		    segment.Put4(offs);
+		    offs += 4;
+		}
+		is 3 then
+		{   segment.FixNew(e, JT64, EXPR);
+		    segment.Put8(offs);
+		    offs += 8;
+		}
+		else
+		    fde.str("unimplemented size data fixup required\n");
 	    }
-	    if opt
-	    is 0 then segment.Put1(e.offs);
-	    is 1 then segment.Put2(e.offs);
-	    is 2 then segment.Put4(e.offs);
-	    is 3 then segment.Put8(e.offs);
+	    else
+		Syntax("Illegal immediate value");
 	    s = SkipWS(s[0:]);
 	  exit s[0] != ',';
 	    s = SkipWS(s[1:]);
@@ -106,6 +120,7 @@
     {   var j: _uint;
 	var t: @[]_byte;
 	var scope: symbol.SymbScope;
+	var psym: symbol.Symbol;
 
 	if opt
 	is 0 then scope = EXPORT;
@@ -114,7 +129,8 @@
 	loop
 	{   t, j = GetSym(s[0:]);
 	  exit j == 0;
-	    symbol.SetScope(s[0:j], j, scope);
+	    psym = symbol.Enter(s[0:j], j);
+	    psym.SetScope(scope);
 	    s = SkipWS(t[0:]);
 	  exit s[0] != ',';
 	    s = SkipWS(s[1:]);
@@ -125,6 +141,7 @@
     {   var j: _uint;
 	var t: @[]_byte;
 	var vis: symbol.SymbVis;
+	var psym: symbol.Symbol;
 
 	if opt
 	is 1 then vis = INTERNAL;
@@ -133,7 +150,8 @@
 	loop
 	{   t, j = GetSym(s[0:]);
 	  exit j == 0;
-	    symbol.SetVisibility(s[0:j], j, vis);
+	    psym = symbol.Enter(s[0:j], j);
+	    psym.SetVisibility(vis);
 	    s = SkipWS(t[0:]);
 	  exit s[0] != ',';
 	    s = SkipWS(s[1:]);
@@ -144,6 +162,7 @@
     {	var r,t: @[]_byte;
 	var j,k: _uint;
 	var type: symbol.SymbType;
+	var psym: symbol.Symbol;
 
 	r, j = GetSym(s[0:]);
 	if j == 0 then return;
@@ -160,7 +179,8 @@
 	    type = FILE;
 	else
 	    type = NOTYPE;
-	symbol.SetType(s, j, type);
+	psym = symbol.Enter(s, j);
+	psym.SetType(type);
     }
 
     proc SizeOp(s: @[]_byte)
@@ -168,7 +188,7 @@
 	var j: _uint;
 	var ok: boolean;
 	var size: _uint64;
-
+	var psym: symbol.Symbol;
 	var e: expr.ExprT;
 
 	t, j = GetSym(s[0:]);
@@ -182,7 +202,8 @@
 	{   Syntax("expression is not constant");
 	    expr.Dump(fde,e);
 	}
-	symbol.SetSize(s, j, size);
+	psym = symbol.Enter(s, j);
+	psym.SetSize(size);
     }
 
     proc AlignOp(s: @[]_byte)

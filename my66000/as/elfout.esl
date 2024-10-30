@@ -16,6 +16,74 @@ package elfout
 	return info;
     }
 
+    proc (pf: elfwrite.pFile) OutputRelocations(symlink: _uint)
+    {   var pfix: segment.Fix;
+	var pseg: segment.Segment;
+	var psym: symbol.Symbol;
+	var symnum: _uint32;
+	var addend: _int64;
+	var psec: elfwrite.pSection;
+	var reloc: elf.rel64a;
+	var name: @[]_byte;
+
+	pseg = segment.list.head.next;	// skip .undef segment
+	while pseg != 0 && pseg.relocs do
+	{
+	    name = _new(_memory(_zlen(pseg.name@) + 5 + 1));
+	    name[0:5] = '.rela';
+	    name[5:_zlen(pseg.name@)] = pseg.name[0:];
+	    name[_zlen(pseg.name@) + 5] = 0;
+if debug.rel then {
+fde.str("OutReloc section "); fde.str(pseg.name);
+fde.str(" name="); fde.str(name); fde.nl();
+}
+	    psec = pf.StartSection(name, RELA, {.INFO=true});
+	    pfix = pseg.fhead;
+	    while pfix != 0 do
+	    {
+		if pfix.kind != NONE then
+		{
+		    if pfix.valt == EXPR then
+		    {   psym = pfix.expr.sym1;
+			addend = pfix.expr.offs;
+			if pfix.expr.op == SYMSUB then
+			    addend = -addend;
+		    }
+		    else
+			fde.str("OutputRelocation bad expression type\n");
+		    reloc.offset = pfix.blok.addr + pfix.boff;
+		    reloc.info.type = _uint32(pfix.kind);
+		    if psym.VeryLocal() then	// make it section relative
+		    {	symnum = psym.segm.symnum;
+			addend += psym.FinalValue();
+		    }
+		    else
+			symnum = psym.numb;
+		    reloc.info.sym  = symnum;
+		    if pfix.kind	// LD,ST is 4 bytes back
+		    is PCREL32, PCREL64 then addend += 4;
+		    reloc.addend = addend;
+		    psec.Write(reloc, reloc?size);
+if debug.rel then {
+fde.chr('\t'); fde.str(segment.KindName[pfix.kind]);
+fde.str(" offset="); fde.hex32(pfix.blok.addr + pfix.boff);
+fde.str(" kind="); fde.str(segment.ValtName[pfix.valt]);
+fde.str(" symbol="); fde.str(psym.name);
+fde.str(" symnum="); fde.uint(symnum);
+fde.str(" addend="); fde.int64(addend);
+fde.nl();
+}
+		}
+		pfix = pfix.next;
+	    }
+	    psec.SetLink(symlink);		// link to symtab
+	    psec.SetInfo(pseg.secnum);		// section number target
+	    psec.SetEntrySize(elf.rel64a?size);
+	    psec.FinishSection();
+	    pseg = pseg.next;
+	}
+    }
+
     proc (pf: elfwrite.pFile) OutputSymbols()
     {
 	var ps: elfwrite.pSection;
@@ -23,14 +91,15 @@ package elfout
 	var n, j, k: _uint;
 	var psym: symbol.Symbol;
 
-	symbol.Sort();
 	ps = pf.StartSection(".symtab", SYMTAB, {});
-	k = 0;	// last local
+	_zero(esym);
+	ps.Write(esym, esym?size);	// dummy symbol 0
+	k = 1;	// last local
 	n = 1;	// string offset
-	j = 0;	// symbol index
+	j = 1;	// symbol index
 	psym = symbol.symtable;
 	while psym != 0 do
-	{   if !psym.VeryLocal() then
+	{   if outlocalsym || !psym.VeryLocal() then
 	    {	esym.name = n;
 		esym.value = psym.FinalValue();
 		esym.size  = psym.size;
@@ -53,13 +122,88 @@ package elfout
 	ps.Write("", 1);		// null string
 	psym = symbol.symtable;
 	while psym != 0 do
-	{   if !psym.VeryLocal() then
+	{   if outlocalsym || !psym.VeryLocal() then
 		ps.Write(psym.name, psym.len+1);
 	    psym = psym.next;
 	}
 	ps.FinishSection();
     }
 
+    proc OrderLocals()
+    {   var psym, prev, next: symbol.Symbol;
+	var locals, lprev: symbol.Symbol;
+
+	locals = 0;
+	lprev = 0;
+	psym = symbol.symtable;
+	prev = 0;
+	while psym != 0 do
+	{   next = psym.next;
+	    if !psym.flags.def && psym.flags.scope == LOCAL then
+		psym.flags.scope = IMPORT;
+	    if psym.flags.scope == LOCAL then
+	    {	// put on new list
+		if lprev == 0 then
+		    locals = psym;
+		else
+		    lprev.next = psym;
+		lprev = psym;
+		psym.next = 0;
+		// remove from symtab
+		if prev == 0 then
+		    symbol.symtable = next;
+		else
+		    prev.next = next;
+	    }
+	    else
+		prev = psym;
+	    psym = next;
+	}
+	// Now splice locals on front of symbol table
+	if locals != 0 then
+	{   lprev.next = symbol.symtable;
+	    symbol.symtable = locals;
+	}
+    }
+
+    proc NumberSymbols()
+    {	var j: _uint;
+	var psym: symbol.Symbol;
+
+	j = 1;	// symbol index (0 is a dummy)
+	psym = symbol.symtable;
+	while psym != 0 do
+	{   if outlocalsym || !psym.VeryLocal() then
+	    {	psym.numb = j;	// save for relocation records
+		if psym.flags.type == SECTION then
+		    psym.segm.symnum = j;
+		j += 1;
+	    }
+	    psym = psym.next;
+	}
+// symbol.Dump();
+    }
+
+    proc MakeSectionSymbols()
+    {	var symtabsave: symbol.Symbol;
+	var pseg: segment.Segment;
+	var psym: symbol.Symbol;
+
+	// Put this at the head of the symbol table
+	symtabsave = symbol.symtable;
+	symbol.symtable = 0;
+	pseg = segment.list.head.next;	// skip .undef segment
+	while pseg != 0 do
+	{   // skip empty segments
+	    if pseg.bhead != 0 then
+	    {	segment.curseg = pseg;
+		psym = symbol.Define(pseg.name, _zlen(pseg.name@));
+		psym.SetType(SECTION);
+	    }
+	    pseg = pseg.next;
+	}
+	symbol.symlast.next = symtabsave;
+    }
 
     proc Output(fd: sys.fildes, genprog: boolean)
     {
@@ -74,6 +218,7 @@ package elfout
 	var form: elf.FileTypes;
 	var offset: _uint64;
 	var addr, size, align: _uint64;
+	var symlink: _uint = 1;	// section number of .symtab
 
 	if genprog then form = EXEC; else form = REL;
 	pf = elfwrite.Init(fd, MY66000, CLASS64, LSB2, form);
@@ -99,6 +244,8 @@ package elfout
 	    ps.SetAlign(align);
 	    offset = ps.GetOffset();
 	    ps.FinishSection();
+	    symlink += 1;			// count this section
+	    if pseg.relocs then symlink += 1;	// count .rela section
 	    if genprog then
 	    {	if pseg.flags.EXEC then
 		    pflag = {.X=true};
@@ -118,9 +265,11 @@ package elfout
 	    pseg = pseg.next;
 	}
 
-	//
-	// Output symbols
-	//
+	// do this before relocations so symbols get numbered
+	OrderLocals();
+	MakeSectionSymbols();
+	NumberSymbols();
+	pf.OutputRelocations(symlink);
 	pf.OutputSymbols();
 
 	pf.Finish();

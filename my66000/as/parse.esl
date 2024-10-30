@@ -310,7 +310,7 @@ import my66000def;
 	    else
 	    {	op.D = 1;	// FIXME - only 64-bit fixups?
 		segment.Put4(_uint32(op));
-		segment.FixNew(imm, ABS64, EXPR);
+		segment.FixNew(imm, ABS_64, EXPR);
 		segment.Put8(_uint64(imm.offs));
 	    }
 	}
@@ -555,6 +555,7 @@ import my66000def;
 	    opr.rd = rd;
 	    opr.rs1 = rs1;
 	    opr.w = w;
+	    opr.z = 0;
 	    opr.rs2 = rs2;
 	    segment.Put4(_uint32(opr));
 	}
@@ -859,7 +860,7 @@ fde.nl();
 	s,op.rs1 = GetReg(s);
 	s = SkipComma(s);
 	s = Expr(s, tgt);
-	segment.FixNew(tgt, REL16, EXPR);
+	segment.FixNew(tgt, PCREL16_S2, EXPR);
 	segment.Put4(_uint32(op));
 	segment.Finish(BRC);
     }
@@ -880,14 +881,31 @@ fde.nl();
 	BbmOp(s, _uint32(op));
     }
 
+    proc SvcOp(s: @[]_byte, opt: _uint32)
+    {	var op: OPBC = OPBC(opt);
+	var n: _uint;
+
+	if s[0] == '#' then
+	{   s, n = lex.Dec(s[1:]);
+	    op.rs1 = n;
+	    if Conditions(op.cond) == SVC then
+	    {	s = SkipComma(s);
+		if s[0] == '#' then
+		{	s, n = lex.Dec(s[1:]);
+		    op.imm = n;
+		}
+		else Syntax("# expected");
+	    }
+	    segment.Put4(_uint32(op));
+	}
+	else Syntax("# expected");
+    }
+
     proc BcmOp(s: @[]_byte, opt: _uint32)
     {	var op: OPBC = OPBC(opt);
 	var tgt: expr.ExprT;
 
 	if Conditions(op.cond)
-	is SVC, SVR then
-	{   segment.Put4(_uint32(op));
-	}
 	is RET then
 	{   segment.Put4(_uint32(op));
 	    segment.Finish(UNC);
@@ -896,7 +914,7 @@ fde.nl();
 	{   s,op.rs1 = GetReg(s);
 	    s = SkipComma(s);
 	    s = Expr(s, tgt);
-	    segment.FixNew(tgt, REL16, EXPR);
+	    segment.FixNew(tgt, PCREL16_S2, EXPR);
 	    segment.Put4(_uint32(op));
 	    segment.Finish(BRC);
 	}
@@ -935,7 +953,7 @@ fde.nl();
 	var tgt: expr.ExprT;
 
 	s = Expr(s, tgt);
-	segment.FixNew(tgt, REL26, EXPR);
+	segment.FixNew(tgt, PCREL26_S2, EXPR);
 	segment.Put4(_uint32(op));
 	if op.major & 1 != 0 then
 	    segment.Finish(CALL);
@@ -1126,6 +1144,7 @@ fde.nl();
 	    }
 	    // now check if we can use a short version
 	    if datasize == 0 && op.ri == 0 && imm.op == NONE &&
+		    op.L == 0 &&
 		    IsImm16(imm.offs) && (opt >> 26) != 0 then
 	    {   var opmi: OPMEMIMM = OPMEMIMM(_uint32(op));
 		opmi.major = opt >> 26;	// use alternate opcode
@@ -1150,12 +1169,12 @@ fde.nl();
 	    if op.I != 0 then
 	    {	if op.D == 0 then
 		{   if needreloc then
-			segment.FixNew(imm, REL32, EXPR);
+			segment.FixNew(imm, PCREL32, EXPR);
 		    segment.Put4(_uint32(imm.offs));
 		}
 		else
 		{   if needreloc then
-			segment.FixNew(imm, REL64, EXPR);
+			segment.FixNew(imm, PCREL64, EXPR);
 		    segment.Put8(_uint64(imm.offs));
 		}
 	    }
@@ -1212,12 +1231,12 @@ fde.nl();
 	    if op.I != 0 then
 	    {	if op.D == 0 then
 		{   if needreloc then
-			segment.FixNew(imm, REL32, EXPR);
+			segment.FixNew(imm, PCREL32, EXPR);
 		    segment.Put4(_uint32(imm.offs));
 		}
 		else
 		{   if needreloc then
-			segment.FixNew(imm, REL64, EXPR);
+			segment.FixNew(imm, PCREL64, EXPR);
 		    segment.Put8(_uint64(imm.offs));
 		}
 	    }
@@ -1242,6 +1261,7 @@ fde.nl();
 	if (imm.offs & 7) != 0 then
 	    Syntax("Displacement must be multiple of 8");
 	r = CheckComma(s);
+	FS = 0;		// optional FS field
 	if r != 0 then
 	{   s = r;
 	    if s[0] >= '0' && s[0] <= '7' then
@@ -1605,6 +1625,9 @@ fde.nl();
 	{ "stdl",   4,  0b101011_00000_00000_00010_001011_00000, MemOp },
 	// exotic branch on conditons
 	{ "bin",   3,  0b011010_11000_00000_0000000000000000, BcmOp },
+	{ "pin",   3,  0b000110_11000_00000_0000000000000000, Pred },
+	{ "svc",   3,  0b011010_11101_00000_0000000000000000, SvcOp },
+	{ "svr",   3,  0b011010_11110_00000_0000000000000000, SvcOp },
     };
 
     proc Instruction(s: @[]_byte, n: _uint)

@@ -116,7 +116,70 @@ package my66000
 	return true;
     }
 
-    proc SysCall()
+    proc SysCall(nr: _uint, n: _uint)
+    {	var ok: boolean;
+	var addr: _address;
+	var rv: _int;
+
+	// using the /usr/include/asm/unistd64.h numbering
+	if n
+	is 0 then	// read
+	{   ok, addr = Map(reg[Arg[2]]);
+	    if ok then
+	    {
+		rv = sys.read(_int(reg[Arg[1]]), addr, _uint(reg[Arg[3]]));
+		if rv < 0 then
+		{
+fde.str("read error "); fde.int(rv); fde.nl();
+		}
+		reg[Arg[1]] = SWord(rv);
+	    }
+	}
+	is 1 then	// write
+	{   ok, addr = Map(reg[Arg[2]]);
+	    if ok then
+	    {
+		rv = sys.write(_uint(reg[Arg[1]]), addr, _uint(reg[Arg[3]]));
+		if rv < 0 then
+		{
+fde.str("write error "); fde.int(rv); fde.nl();
+		}
+		reg[Arg[1]] = SWord(rv);
+	    }
+	}
+	is 2 then	// open
+	{   ok, addr = Map(reg[Arg[1]]);
+	    if ok then
+	    {
+		rv = sys.open(addr, _uint(reg[Arg[2]]), _uint(reg[Arg[3]]));
+		reg[Arg[1]] = SWord(rv);
+	    }
+	}
+	is 3 then	// close
+	{   sys.close(_int(reg[Arg[1]]));
+	    reg[Arg[1]] = 0;	// FIXME sys.close
+	}
+	is 8 then	// lseek
+	{   rv = sys.lseek(_int(reg[Arg[1]]), _uint(reg[Arg[2]]),
+			   sys.whence_t(reg[Arg[3]]));
+	    if rv < 0 then
+	    {
+fde.str("lseek error "); fde.int(rv); fde.nl();
+	    }
+	    reg[Arg[1]] = SWord(rv);
+	}
+	is 60 then	// exit
+	{
+	    fault = EXIT;
+	}
+	else
+	{
+fde.str("** Unimplemented system call "); fde.uint(n); fde.nl();
+	}
+    }
+
+    // FIXME - delete when no longer necessary
+    proc SysCallOld()
     {   var n: _uint;
 	var ok: boolean;
 	var addr: _address;
@@ -986,8 +1049,15 @@ if db&16 != 0 then { fde.str("vreg="); fde.uint8(vreg); fde.nl(); }
 
     proc DoLoopCompare(op: OPLOOP, inc: Word, cmp: Word): boolean
     {
+	const SCMP: [8][2]_byte = {'EQ','NE','GE','LT','GT','LE','A ','N '};
+	const UCMP: [8][2]_byte = {'EQ','NE','HS','LO','HI','LS','A ','N '};
+
+if db&16 != 0 then {
+fde.str("compare "); fde.int(inc); fde.chr(' ');
+if op.s != 0 then fde.strn(SCMP[op.cnd],2); else fde.strn(UCMP[op.cnd],2);
+fde.chr(' '); fde.int(cmp); fde.nl();
+}
 	if op.cnd
-	is 6 then return true;
 	is 0 then return inc == cmp;
 	is 1 then return inc != cmp;
 	is 2 then if op.s != 0 then
@@ -1006,22 +1076,14 @@ if db&16 != 0 then { fde.str("vreg="); fde.uint8(vreg); fde.nl(); }
 	         return SWord(inc) <= SWord(cmp);
 	      else
 	         return inc <= cmp;
+	is 6 then return true;
+	is 7 then return false;
     }
 
     proc DoLoop(inst: Inst)
     {   var op: OPLOOP = OPLOOP(inst);
 	var inc, cmp, loop, add: _int;
 
-if db&16 != 0 then {
-fde.hex32(_uint32(reg[PC]));
-fde.str(": LOOP"); fde.uint(op.kind);
-fde.str(" cnd="); fde.uint(op.cnd);
-fde.str(" rs1="); fde.uint(op.rs1);
-fde.str(" rs2="); fde.uint(op.rs2);
-fde.str(" rs3="); fde.uint(op.rs3);
-fde.str(" iss="); fde.uint(op.I); fde.uint(op.s1); fde.uint(op.s2);
-fde.nl();
-}
 	loop = reg[op.rs1];
 	if op.I != 0 then
 	{   if op.s1 == 0 then
@@ -1052,35 +1114,30 @@ fde.nl();
 	}
 	else
 	{   if op.s1 == 0 then
-		inc = reg[op.rs3];
-	    else
-		inc = op.rs3;		// IMM5
-	    if op.s2 == 0 then
 		cmp = reg[op.rs2];
 	    else
 		cmp = op.rs2;		// IMM5
+	    if op.s2 == 0 then
+		inc = reg[op.rs3];
+	    else
+		inc = op.rs3;		// IMM5
 	}
 	var continue: boolean = true;
+if db&16 != 0 then
+{   fde.str("loop"); fde.uint(op.kind);
+    fde.str(" loop="); fde.int64(loop);
+    fde.str(" inc="); fde.int64(cmp);
+    fde.str(" cmp="); fde.int64(cmp);
+    fde.nl();
+}
 	if op.kind
 	is 1 then
 	{
-if db&16 != 0 then
-{   fde.str("loop1 loop="); fde.int64(loop);
-    fde.str(" + "); fde.int64(inc);
-    fde.str(" compare " ); fde.int64(loop); fde.str(" : "); fde.int64(cmp);
-    fde.nl();
-}
 	    loop += inc;
 	    continue = DoLoopCompare(op, loop, cmp);
 	}
 	is 2 then
 	{
-if db&16 != 0 then
-{   fde.str(" loop=0x"); fde.hex64(loop);
-    fde.str(" cmp=0x"); fde.hex64(cmp);
-    fde.str(" inc=0x"); fde.hex64(inc);
-    fde.nl();
-}
 	    if inc == 0 then
 		continue = false;
 	    else
@@ -1090,12 +1147,6 @@ if db&16 != 0 then
 	}
 	is 3 then
 	{
-if db&16 != 0 then
-{   fde.str("loop3 loop="); fde.int64(loop);
-    fde.str(" + 1");
-    fde.str(" compare " ); fde.int64(inc); fde.str(" : "); fde.int64(cmp);
-    fde.nl();
-}
 	    loop += 1;
 	    continue = DoLoopCompare(op, inc, cmp);
 	}
@@ -1526,9 +1577,12 @@ fde.str("MM fm="); fde.hex(fm); fde.str(" to="); fde.hex(to);
 fde.str(" cnt="); fde.uint(i); fde.nl(); }
 	    while i != 0 do
 	    {   Write(to, BYTE, Read(fm, BYTE));
-		to += 1;
-		fm += 1;
-		i -= 1;
+		if fault == NONE then
+		{   to += 1;
+		    fm += 1;
+		    i -= 1;
+		}
+		else i = 0;	// terminate loop
 	    }
 	    return;
 	}
@@ -1550,8 +1604,11 @@ fde.str("MS val="); fde.hex(tmp); fde.str(" to="); fde.hex(to);
 fde.str(" cnt="); fde.uint(i); fde.nl(); }
 	    while i != 0 do
 	    {   Write(to, BYTE, tmp);
-		to += 1;
-		i -= 1;
+		if fault == NONE then
+		{   to += 1;
+		    i -= 1;
+		}
+		else i = 0;	// terminate loop
 	    }
     }
 
@@ -1808,6 +1865,11 @@ fde.nl(); }
 	{   reg[PC] = reg[LR];
 	    return;
 	}
+	is SVC then
+	{   SysCall(op.rs1, inst&0xFFFF);
+	    return;
+	}
+	is SVR then Fault("SVR not yet implemented", inst);
 	else
 	    Fault("Unimplemented branch condition instruction", inst);
 	if take then
@@ -1829,14 +1891,15 @@ fde.str(" index="); fde.uint(index); }
 	}
 	else
 	    addr = reg[PC] + (index << op.sz);
-if db&8 != 0 then { fde.str(" val="); fde.uint64(addr); }
+if db&8 != 0 then { fde.str(" val="); fde.hex32(addr); }
 	if op.sz
 	is 0 then offs = Sext(7,Read(addr, BYTE));
 	is 1 then offs = Sext(15,Read(addr, HALF));
 	is 2 then offs = Sext(31,Read(addr, WORD));
 	is 3 then offs = Read(addr, QUAD);
 if db&8 != 0 then { fde.str(" offs="); fde.hex32(offs); }
-	newpc = (addr & ~3) + (offs << 2);
+//	newpc = (addr & ~3) + (offs << 2);	// PC-rel to container address
+	newpc = instpc + (offs << 2);		// PC-rel to JT inst address
 if db&8 != 0 then { fde.str(" newpc="); fde.hex32(newpc); fde.nl(); }
 	if op.call then
 	{   end = reg[PC] + (op.imm * (1 << op.sz));
@@ -1951,7 +2014,7 @@ fde.nl();
 	is 0b111101           then OpVec(inst);
 	is 0b111111 then	// Syscall hack
 	{   if inst == 0xFFAA5501 then
-		SysCall();
+		SysCallOld();	// FIXME - delete when no longer necessary
 	    elif (inst & 0xFFFFFF00) == breakpoint then
 		fault = BKPT;
 	    else

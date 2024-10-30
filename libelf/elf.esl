@@ -165,6 +165,11 @@ package elf
     {	WRITE:	   boolean;
 	ALLOC:	   boolean;
 	EXEC:      boolean;
+	_:         boolean;
+	MERGE:	   boolean;
+	STRINGS:   boolean;
+	INFO:      boolean;	// INFO_LINK
+	LINK:      boolean;	// LINK_ORDER
     }: packed, lsb, bits(64);
 
     type secthdr:
@@ -251,7 +256,7 @@ package elf
     type RelInfo64:
     {	sym:       Word;
 	type:      Word;
-    };
+    }: packed, msb;
     type rel64:
     {	offset:    Addr64;
 	info:      RelInfo64;

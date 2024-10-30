@@ -288,8 +288,8 @@
 	{   "eq", "ne", "ge", "lt", "gt", "le", "a", "n"
 	};
 	const Fmt2: [8]@[]_byte =
-	{   "S,T,U",  "S,#J,U", "S,T,#K",  "S,#J,#K",
-	    "S,#Y,U", "S,T,#Y", "S,#Y,#W", "S,#Z,#1"
+	{   "S,U,T",  "S,#K,T", "S,U,#J", "S,#K,#J",
+	    "S,U,#Y", "S,#Y,T", "S,U,#Z", "S,#Z,#T"
 	};
 
 	fdx.str("loop"); fdx.uint(op.kind); fdx.chr('\t');
@@ -539,8 +539,14 @@
 
 	if Conditions(op.cond)
 	is RET then fdx.str("ret");
-	is SVR then fdx.str("svr");
-	is SVC then fdx.str("svc");
+	is SVC then
+	{   fdx.str("svc\t");
+	    PFmt(inst, ip, "#I,#P");
+	}
+	is SVR then
+	{   fdx.str("svr\t");
+	    PFmt(inst, ip, "#I");
+	}
 	else
 	{   fdx.str("b");
 	    fdx.str(CondNames[op.cond]); fdx.chr('\t');

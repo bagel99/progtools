@@ -1,6 +1,7 @@
 	.text
 	.p2align 2
-__crt0:
+	.globl	_start
+_start:
 	; zero .bss
 	la	r4,[ip,_edata]
 	la	r5,[ip,_end]

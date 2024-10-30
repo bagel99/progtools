@@ -1,0 +1,63 @@
+package symbol
+{
+    type SymbVis: (DEFAULT, INTERNAL, HIDDEN, PROTECTED);
+    type SymbType: (NOTYPE, OBJECT, FUNC, SECTION, FILE);
+    type SymbScope: (LOCAL, IMPORT, EXPORT, WEAK);
+    type Flags:
+    {	scope:  SymbScope;
+	type:   SymbType;
+	vis:    SymbVis;
+	def:    boolean;
+    }: packed;
+    type SymbolT:
+    {   next:   @SymbolT;
+	hash:   @SymbolT;
+	segm:   @SegmentT;	// forward
+	blok:   @BlockT;	// forward
+	size:	_uint64;
+	offs:   _uint32;
+	numb:	_uint32;	// index in ELF symbol table
+	align:  _uint8;		// log2 of alignment
+	flags:  Flags;
+	len:   _uint8;		// length of name
+	name:   []_byte;
+    };
+    type Symbol: @SymbolT;
+
+    proc Enter(name: @[]_byte, n: _uint): Symbol; // forward
+
+    proc (ps: Symbol) VeryLocal(): boolean
+    {
+	return ps.name[0] == '0' ||	// local numerical symbol
+	       ps.name[0:2] == '.L';	// .L local symbol
+    }
+
+    proc (ps: Symbol) SetAddress(segm: @SegmentT, blok: @BlockT, offs: _uint)
+    {
+	ps.segm = segm;
+	ps.blok = blok;
+	ps.offs = offs;
+    }
+
+    proc (ps: Symbol) SetType(type: SymbType)
+    {
+	ps.flags.type = type;
+    }
+
+    proc (ps: Symbol) SetScope(scope: SymbScope)
+    {
+	ps.flags.scope = scope;
+    }
+
+    proc (ps: Symbol) SetVisibility(vis: SymbVis)
+    {
+	ps.flags.vis = vis;
+    }
+
+    proc (ps: Symbol) SetSize(size: _uint64)
+    {
+	ps.size = size;
+    }
+
+}
+

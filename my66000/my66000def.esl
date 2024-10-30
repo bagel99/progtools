@@ -95,7 +95,7 @@
 	rs1:	REG;		// 20..16
 	minor:	0..0b1111;	// 15..12 low is S bit
 	w:	0..0b111111;	// 11..6;
-	_:	0..1;		// 5
+	z:	0..1;		// 5
 	rs2:	REG;		// 4..0
     }: packed, msb, bits(32);
 
@@ -181,7 +181,7 @@
     (	EQ0, NE0, GE0, LT0, GT0, LE0, A,   N,		// integer
 	DEQ, DNE, DGE, DLT, DGT, DLE, DOR, DUN,		// double
 	FEQ, FNE, FGE, FLT, FGT, FLE, FOR, FUN,		// single
-	IN,  _,   _,    _,   _,  SVR, SVC, RET
+	IN,  _,   _,    _,   _,  SVC, SVR, RET
     );
     const CondNames: [Conditions][5]_byte =
     {	"eq0", "ne0", "ge0", "lt0", "gt0", "le0", "a",   "n",

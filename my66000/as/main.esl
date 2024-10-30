@@ -7,46 +7,49 @@ import bufin;
 
 var lineno: _uint;
 var filename: @[]_byte;
+var errors: _uint = 0;
 type OutFmt: (BIN, ELF);
 var outputformat: OutFmt;
 
 
 // FIXME - move someplace
-proc Syntax(msg: @[]_byte)
+proc Error(msg: @[]_byte)
 {
+    errors += 1;
     fde.uint(lineno);
     fde.str(": ");
     fde.str(msg);
+}
+
+proc Syntax(msg: @[]_byte)
+{
+    Error(msg);
     fde.nl();
 }
 
 proc Syntax2n(msg: @[]_byte, s: @[]_byte, n: _uint)
 {
-    fde.uint(lineno);
-    fde.str(": ");
-    fde.str(msg);
+    Error(msg);
     fde.strn(s, n);
     fde.nl();
 }
 
 proc SyntaxS(msg: @[]_byte, s: @[]_byte)
 {
-    fde.uint(lineno);
-    fde.str(": ");
-    fde.str(msg);
+    Error(msg);
     fde.str(s);
     fde.nl();
 }
 
 proc SyntaxN(msg: @[]_byte, n: _uint)
 {
-    fde.uint(lineno);
-    fde.str(": ");
-    fde.str(msg);
+    Error(msg);
     fde.uint(n);
     fde.nl();
 }
 
+var static: boolean = false;
+var outlocalsym: boolean = false;
 var debug:
 {   sb:  boolean;
     cb:  boolean;
@@ -59,9 +62,12 @@ var debug:
 }: packed;
 
 import exprdef;
+import symb1;
 import segment;
 alias segment.SegmentT as expr.SegmentT;
-import symbol;
+alias segment.SegmentT as symbol.SegmentT;
+alias segment.BlockT as symbol.BlockT;
+import symb2;
 alias symbol.SymbolT as segment.SymbolT;
 alias symbol.SymbolT as expr.SymbolT;
 import lex;
@@ -88,6 +94,10 @@ proc main(argc: _uint, argv: @[]@[]_byte): _int
 	    ofmt = BIN;
 	is 'e' then
 	    ofmt = ELFABS;
+	is 'S' then
+	    static = true;
+	is 'L' then
+	    outlocalsym = true;
 	is 'D' then
 	{   if argv[i]@[2]
 	    is 'r' then debug.rel = true;
@@ -125,15 +135,15 @@ proc main(argc: _uint, argv: @[]@[]_byte): _int
 	}
     }
     segment.End();
-    if debug.sb then symbol.Dump(outputformat);
+    if debug.sb then symbol.Dump();
     if debug.cb then segment.Dump();
 //    if debug.fb then segment.FixDump();
     segment.Relax();
-    if debug.sa then symbol.Dump(outputformat);
+    if debug.sa then symbol.Dump();
     if debug.ca then segment.Dump();
 //    if debug.fa then segment.FixDump();
 
-    if ofile != 0 then
+    if errors == 0 && ofile != 0 then
     {   var fd: sys.fildes;
 	fd = sys.open(ofile, {.ACCESS=WRONLY, .CREAT=true}, 0o644);
 	if fd >= 0 then
