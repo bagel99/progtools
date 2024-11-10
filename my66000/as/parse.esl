@@ -945,6 +945,7 @@ fde.nl();
 	}
 	else
 	    Syntax("'#' expected");
+	segment.FixNew(0, JTT, SEGM);
 	segment.Put4(_uint32(op));
     }
 

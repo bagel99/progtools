@@ -76,33 +76,27 @@
 
     proc JTOp(s: @[]_byte, opt: _uint)
     {   var e: expr.ExprT;
-	var offs: _int;		// offset to JT instruction
 
 	s = SkipWS(s[0:]);
-	offs = 4;		// JT instruction is 4 bytes back
 	loop
 	{   s = expr.Expr0(s[0:], e);
 	    if e.op != NONE then
 	    {	if opt
 		is 0 then
 		{   segment.FixNew(e, JT8, EXPR);
-		    segment.Put1(offs);
-		    offs += 1;
+		    segment.Put1(0);
 		}
 		is 1 then
 		{   segment.FixNew(e, JT16, EXPR);
-		    segment.Put2(offs);
-		    offs += 2;
+		    segment.Put2(0);
 		}
 		is 2 then
 		{   segment.FixNew(e, JT32, EXPR);
-		    segment.Put4(offs);
-		    offs += 4;
+		    segment.Put4(0);
 		}
 		is 3 then
 		{   segment.FixNew(e, JT64, EXPR);
-		    segment.Put8(offs);
-		    offs += 8;
+		    segment.Put8(0);
 		}
 		else
 		    fde.str("unimplemented size data fixup required\n");
@@ -113,7 +107,8 @@
 	  exit s[0] != ',';
 	    s = SkipWS(s[1:]);
 	}
-
+	segment.Align(2);	// align to word (instruction) boundary
+	segment.Finish(UNC);
     }
 
     proc SymbolOp(s: @[]_byte, opt: _uint)

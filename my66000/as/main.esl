@@ -49,6 +49,7 @@ proc SyntaxN(msg: @[]_byte, n: _uint)
 }
 
 var static: boolean = false;
+var relax: boolean = true;
 var outlocalsym: boolean = false;
 var debug:
 {   sb:  boolean;
@@ -96,6 +97,8 @@ proc main(argc: _uint, argv: @[]@[]_byte): _int
 	    ofmt = ELFABS;
 	is 'S' then
 	    static = true;
+	is 'r' then
+	    relax = false;
 	is 'L' then
 	    outlocalsym = true;
 	is 'D' then

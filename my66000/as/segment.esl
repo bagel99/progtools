@@ -77,14 +77,15 @@ package segment
 	ABS_64,
 	PCREL32,
 	PCREL64,
-	JT8, JT16, JT32, JT64	// this are internal only
+	JTT,			// internal only
+	JT8, JT16, JT32, JT64	// deprecated
 
     );
     const KindName: [RKind]@[]_byte =
     { "NONE",
       "PCREL8_S2", "PCREL16_S2", "PCREL26_S2", "PCREL32_S2", "PCREL64_S2",
       "ABS_8", "ABS_16", "ABS_32", "ABS_64",
-      "PCREL32", "PCREL64",
+      "PCREL32", "PCREL64", "JTT",
       "JT8", "JT16", "JT32", "JT64"
     };
 
@@ -142,7 +143,7 @@ package segment
 	pf.valt = v;
 	pf.blok = curseg.btail;
 	pf.boff = curseg.btail.size;
-	pf.expr = e@;		// record copy
+	if e != 0 then pf.expr = e@;		// record copy
 	if curseg.fhead == 0 then
 	    curseg.fhead = pf;
 	else
@@ -390,7 +391,152 @@ package segment
 	}
     }
 
-    proc TryFix(ps: Segment): boolean
+import my66000def;
+
+    proc FixJTT(ps: Segment, final: boolean, pf: Fix): boolean, Fix
+    {   var op: OPTT;
+	var size, njt: _uint;
+	var i: _uint;
+	var seg: Segment;
+	var offset: _uint;
+	var val: _uint64;
+	var addr: _uint64;
+	var offs: _int64;
+	var diff: _int64;
+	var jtpf: Fix;
+	var bound: boolean;	// if reloc to symbol, symbol is defined
+	var change: boolean;
+	var shrink: boolean;
+
+	op = OPTT(_unpkle(pf.blok.code[pf.boff:4]));
+	size = op.sz;
+	njt = op.imm + 1;	// include default entry
+	jtpf = pf;	// save JTT reloc
+if debug.rel  then {
+fde.str("JTT final="); fde.uint8(_uint8(final));
+fde.str(" size="); fde.uint(size);
+fde.str(" njt="); fde.uint(njt); fde.nl(); }
+	shrink = true;
+	change = false;
+	i = njt;
+	offs = 4;	// relative to JTT instruction
+	while i > 0 && pf != 0 do
+	{   pf = pf.next;
+	    addr = pf.blok.addr + pf.boff;
+	    bound, val, seg = expr.Fix(pf.expr);
+	    if !bound then Syntax("Internal JTT error");
+	    diff = _int64(val + 3 - addr + offs) >> 2;
+	    if pf.kind
+	    is JT8 then
+	    {
+if debug.rel  then {
+fde.str("JT8 OK diff="); fde.int(diff);
+fde.str(" offs="); fde.int(offs); fde.nl();}
+		if diff != _int64(_int8(diff)) then
+		{   fde.str(".jt8 out of range: ");
+		    fde.int64(diff);
+		    fde.nl();
+		}
+		shrink = false;	// small as we can get
+		if final then
+		{   pf.blok.code[pf.boff] = _uint8(diff);
+		    pf.kind = NONE;
+		}
+		offs += 1;
+	    }
+	    is JT16 then
+	    {
+if debug.rel  then {
+fde.str("JT16 OK diff="); fde.int(diff);
+fde.str(" offs="); fde.int(offs); fde.nl();}
+		if diff != _int64(_int16(diff)) then
+		{   fde.str(".jt16 out of range: ");
+		    fde.int64(diff);
+		    fde.nl();
+		} else if diff != _int64(_int8(diff)) then
+		    shrink = false;
+		if final then
+		{   _packle(pf.blok.code[pf.boff:2], _uint16(diff));
+		    pf.kind = NONE;
+		}
+		offs += 2;
+	    }
+	    is JT32 then
+	    {
+if debug.rel  then {
+fde.str("JT32 OK diff="); fde.int(diff);
+fde.str(" offs="); fde.int(offs); fde.nl();}
+		if diff != _int64(_int32(diff)) then
+		{   fde.str(".jt32 out of range: ");
+		    fde.int64(diff);
+		    fde.nl();
+		} else if diff != _int64(_int16(diff)) then
+		    shrink = false;
+		if final then
+		{   _packle(pf.blok.code[pf.boff:4], _uint32(diff));
+		    pf.kind = NONE;
+		}
+		offs += 4;
+	    }
+	    is JT64 then
+	    {   Syntax(".jt64 not yet implemented");
+	    }
+	    else i = 1;		// not a JT, shouldn't happen
+	    i -= 1;
+	}
+	if relax && shrink then
+	{   var tpf: Fix;
+	    var delta: _uint;
+	    tpf = jtpf.next;
+if debug.rel then {
+fde.str("JTT shrinking addr="); fde.hex32(_uint32(jtpf.blok.addr));
+fde.str(" njt="); fde.uint(njt); fde.str(" size="); fde.uint(size);
+fde.str(" blok.size="); fde.uint(jtpf.blok.size); fde.nl();}
+	    // Should not get here if size == 0
+	    if size
+	    is 1 then	// shrink h to b
+	    {	for i from 0 to njt-1 do
+		{   tpf.kind = JT8;
+		    tpf.boff -= i;	// each entry is 1 byte smaller
+		    tpf = tpf.next;
+		}
+		delta = (njt + 1) & ~1;	// include shrinking pad, if any
+		op.sz = 0;
+	    }
+	    is 2 then	// shrink w to h
+	    {	for i from 0 to njt-1 do
+		{   tpf.kind = JT16;
+		    tpf.boff -= i * 2;	// each entry is 2 bytes smaller
+		    tpf = tpf.next;
+		}
+		delta = njt * 2;
+		op.sz = 1;
+	    }
+	    is 3 then	// shrink d to w
+	    {
+		// jtpf.blok.size -= njt * 4;
+	    }
+if debug.rel then {
+fde.str("After shrink delta="); fde.uint(delta); }
+	    jtpf.blok.size -= delta;
+	    jtpf.blok.size = (jtpf.blok.size + 3) & ~3;
+if debug.rel then {
+fde.str(" blok.size="); fde.uint(jtpf.blok.size); fde.nl(); }
+	    // Fixup the JTT instruction
+	    _packle(jtpf.blok.code[jtpf.boff:4], _uint32(op));
+	    change = true;
+	}
+	if final then
+	{
+	    jtpf.kind = NONE;
+//fde.str("JTT final addr=");  fde.hex32(_uint32(jtpf.blok.addr));
+//fde.str(" njt="); fde.uint(njt); fde.str(" size="); fde.uint(size);
+//fde.str(" blok.size="); fde.uint(jtpf.blok.size); fde.nl();
+	}
+	return change, pf;
+    }
+
+    proc TryFix(ps: Segment, final: boolean): boolean
     {   var pf: Fix;
  	var seg: Segment;
  	var val: _uint64;
@@ -399,13 +545,17 @@ package segment
 	var offs: _int64;
 	var inst: _uint32;
  	var pc: @[]_byte;
+	var njt: _uint;		// number of JTT entries remaining
+	var jttpf: Fix;
+	var canshrinkjt: boolean;
 	var bound: boolean;	// if reloc to symbol, symbol is defined
 	var change: boolean;
 	var relocs: boolean;
 
 	change = false;
 	relocs = false;
-if debug.rel then { fde.str("TryFix segment "); fde.str(ps.name); fde.nl(); }
+if debug.rel then { fde.str("TryFix segment "); fde.str(ps.name);
+fde.str(" final="); fde.uint8(_uint8(final)); fde.nl(); }
 	pf = ps.fhead;
 	while pf != 0 do
 	{   if pf.kind != NONE then
@@ -429,11 +579,12 @@ fde.nl();}
 			if diff >= MIN26 && diff <= MAX26 then
 			{   inst = _unpkle(pf.blok.code[pf.boff:4]);
 			    inst |= _uint32(diff) & 0x03FF_FFFF;
+			    if final then
+			    {	_packle(pf.blok.code[pf.boff:4], inst);
 if debug.rel  then {
 fde.str("PCREL26_S2 OK inst="); fde.hex32(inst); fde.nl();}
-			    _packle(pf.blok.code[pf.boff:4], inst);
-			    pf.kind = NONE;
-			    change = true;
+				pf.kind = NONE;
+			    }
 			}
 			else
 			    fde.str("PCREL26_S2 not in range\n");
@@ -441,18 +592,18 @@ fde.str("PCREL26_S2 OK inst="); fde.hex32(inst); fde.nl();}
 		    else relocs = true;
 		}
 		is PCREL16_S2 then
-		{
-		    if bound && seg == ps then
+		{   if bound && seg == ps then
 		    {   diff = val - (pf.blok.addr+pf.boff);
 			diff = diff >> 2;	// convert from bytes to words
 			if diff >= _int16?min && diff <= _int16?max then
 			{   inst = _unpkle(pf.blok.code[pf.boff:4]);
 			    inst |= _uint32(diff) & 0x0000_FFFF;
+			    if final then
+			    {	_packle(pf.blok.code[pf.boff:4], inst);
 if debug.rel  then {
 fde.str("PCREL16_S2 OK inst="); fde.hex32(inst); fde.nl();}
-			    _packle(pf.blok.code[pf.boff:4], inst);
-			    pf.kind = NONE;
-			    change = true;
+				pf.kind = NONE;
+			    }
 			}
 			else
 			    fde.str("PCREL16_S2 not in range\n");
@@ -460,104 +611,48 @@ fde.str("PCREL16_S2 OK inst="); fde.hex32(inst); fde.nl();}
 		    else relocs = true;
 		}
 		is PCREL32 then
-		{   // FIXME - this assumes instruction just before
-		    // FIXME - need offset into instruction in FixF
-		    // FIXME - for some instructions can use 16-bit offset
-		    // FIXME - and shrink the instruction
-		    if bound && (static || seg == ps) then
+		{   if bound && (static || seg == ps) then
 		    {   val -= addr-4;	// ip relative
+			if final then
+			{   _packle(pf.blok.code[pf.boff:4], val);
 if debug.rel  then {
 fde.str("PCREL32 OK word="); fde.hex32(val); fde.nl();}
-			_packle(pf.blok.code[pf.boff:4], val);
-			pf.kind = NONE;
-			change = true;
+			    pf.kind = NONE;
+			}
 		    }
 		    else relocs = true;
 		}
 		is ABS_8 then
-		{
-		    if bound && static then
-		    {
+		{   if bound && static && final then
+		    {	pf.blok.code[pf.boff] = _uint8(val);
 if debug.rel  then {
 fde.str("ABS_8 OK byte="); fde.int8(_int8(val)); fde.nl();}
-			pf.blok.code[pf.boff] = _uint8(val);
 			pf.kind = NONE;
-			change = true;
 		    }
 		    else relocs = true;
 		}
 		is ABS_32 then
-		{
-		    if bound && static then
-		    {
+		{   if bound && static && final then
+		    {	_packle(pf.blok.code[pf.boff:4], _uint32(val));
 if debug.rel  then {
 fde.str("ABS_32 OK word="); fde.hex32(val); fde.nl();}
-			_packle(pf.blok.code[pf.boff:4], _uint32(val));
 			pf.kind = NONE;
-			change = true;
 		    }
 		    else relocs = true;
 		}
 		is ABS_64 then
-		{
-		    if bound && static then
-		    {
+		{   if bound && static && final then
+		    {	_packle(pf.blok.code[pf.boff:8], val);
 if debug.rel  then {
 fde.str("ABS_64 OK dword="); fde.hex32(val); fde.nl();}
-			_packle(pf.blok.code[pf.boff:8], val);
 			pf.kind = NONE;
-			change = true;
 		    }
 		    else relocs = true;
 		}
-		is JT8 then
-		{
-		    if bound then
-		    {	diff = _int64(val + 3 - addr) >> 2;
-			// FIXME - check with range
-			if diff != _int64(_int8(diff)) then
-			{   fde.str(".jt8 out of range: ");
-			    fde.int64(diff);
-			    fde.nl();
-			}
-if debug.rel  then {
-fde.str("JT8 OK diff="); fde.int(diff); fde.nl();}
-
-			pf.blok.code[pf.boff] = _uint8(diff);
-			pf.kind = NONE;
-			change = true;
-		    }
-		}
-		is JT16 then
-		{
-		    if bound then
-		    {	offs = _int64(_int16(_unpkle(pf.blok.code[pf.boff:2])));
-			diff = _int64(val + 3 - addr + offs) >> 2;
-if debug.rel  then {
-fde.str("JT16 OK diff="); fde.int(diff);
-fde.str(" offs="); fde.int(offs); fde.nl();}
-			// FIXME - check with range
-			if diff != _int64(_int16(diff)) then
-			{   fde.str(".jt16 out of range: ");
-			    fde.int64(diff);
-			    fde.nl();
-			}
-			_packle(pf.blok.code[pf.boff:2], _uint16(diff));
-			pf.kind = NONE;
-			change = true;
-		    }
-		}
-		is JT32 then
-		{
-		    if bound then
-		    {	diff = _int64(val + 3 - addr) >> 2;
-			// FIXME - check with range
-if debug.rel  then {
-fde.str("JT32 OK diff="); fde.int(diff); fde.nl();}
-			_packle(pf.blok.code[pf.boff:4], _uint16(diff));
-			pf.kind = NONE;
-			change = true;
-		    }
+		is JTT then	// signal that JTT table follows
+		{   var jtchange: boolean;
+		    jtchange, pf = FixJTT(ps, final, pf);
+		    if jtchange then change = true;
 		}
 		else
 		{   SyntaxS("Relocation type not yet handled: ", KindName[pf.kind]);
@@ -569,40 +664,11 @@ fde.str("JT32 OK diff="); fde.int(diff); fde.nl();}
 	return change;
     }
 
-    proc FixUp2(pc: @[]_byte, val: _uint16)
-    {   var tmp: _uint16;
-
-	tmp = _unpkle(pc[0:2]);
-	tmp = tmp | val;
-	_packle(pc[0:2], tmp);
-    }
-
-    proc FinalFix(ps: Segment)
-    {   var pf: Fix;
- 	var seg: Segment;
- 	var val, tmp: _uint32;
- 	var addr: _uint32;
- 	var pc: @[]_byte;
-	var bound: boolean;
-
-	pf = ps.fhead;
-	while pf != 0 do
-	{   addr = pf.blok.addr + pf.boff;
-	    pc = pf.blok.code[pf.boff:];
-	    if pf.valt == EXPR then
-	    	bound, val, seg = expr.Fix(pf.expr);
-	    else
-	    	fde.str("Unexpected pf.valt\n");
-	    pf = pf.next;
-	}
-    }
-
     // Expand branches as necessary
     proc Relax()
     {   var ps: Segment;
 	var change: boolean;
 
-	// Order();
 	do
 	{
 	    AssignAddresses();
@@ -610,14 +676,14 @@ fde.str("JT32 OK diff="); fde.int(diff); fde.nl();}
 	    ps = list.head;
 	    while ps != 0 do
 	    {
-		if TryFix(ps) then change = true;
+		if TryFix(ps, false) then change = true;
 	        ps = ps.next;
 	    }
 	} while change;
 	// Now do final fixups
 	ps = list.head;
 	while ps != 0 do
-	{   FinalFix(ps);
+	{   _ = TryFix(ps, true);
 	    ps = ps.next;
 	}
     }

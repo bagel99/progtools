@@ -111,7 +111,16 @@ proc DisSection(ptxt: elfread.pText)
 	    var j, n: _uint;
 	    n = op.imm;
 	    if op.sz
-	    is 0 then {}	// FIXME
+	    is 0 then
+	    {	for j from 0 to n do
+		{   if (j & 7) == 0 then
+			fdx.str("\n\t\t\t.jt8\t");
+		    else
+			fdx.chr(',');
+		    fdx.int8(_int8(Read(addr, BYTE)));
+		    addr += 1;
+		}
+	    }
 	    is 1 then
 	    {	for j from 0 to n do
 		{   if (j & 7) == 0 then
@@ -122,7 +131,16 @@ proc DisSection(ptxt: elfread.pText)
 		    addr += 2;
 		}
 	    }
-	    is 2 then {}	// FIXME
+	    is 2 then
+	    {	for j from 0 to n do
+		{   if (j & 7) == 0 then
+			fdx.str("\n\t\t\t.jt32\t");
+		    else
+			fdx.chr(',');
+		    fdx.int32(_int32(Read(addr, HALF)));
+		    addr += 4;
+		}
+	    }
 	    is 3 then {}	// FIXME
 	    addr = (addr + 3) & ~3;	// round end of table up
 	}
