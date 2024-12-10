@@ -696,71 +696,71 @@ import my66000def;
 	immop = NONE;
 	// rd is cnd
 	// rs1 is rloop
-	// rs2 is rcmp or imm
 	// rs3 is rinc or imm
+	// rs2 is rcmp or imm
 	s, op.cnd, signed = GetLoopCompare(s);
 	if signed then op.s = 1;
 	s = SkipComma(s);		// 1st comma
 	s, op.rs1 = GetReg(s);		// loop register
 	s = SkipComma(s);		// 2nd comma
-	// rs2 can be '#imm' or 'reg'
-	if s[0] == '#' then
-	{   s = Expr(s[1:], imm2);
-	    if imm2.op != NONE then
-	    {	fde.str("arg non-constant immediate expr=");
-		expr.Dump(fde, imm2); fde.nl();
-	    }
-	    immop = RS2;
-	}
-	else
-	    s, op.rs2 = GetReg(s);
-	s = SkipComma(s);
-	// rs3 can be '#imm' or 'reg'
+	// INC, rs3 can be '#imm' or 'reg'
 	if s[0] == '#' then
 	{   s = Expr(s[1:], imm3);
 	    if imm3.op != NONE then
 	    {	fde.str("arg non-constant immediate expr=");
 		expr.Dump(fde, imm3); fde.nl();
 	    }
-	    if immop != NONE then
-		immop = BOTH;
-	    else
-		immop = RS3;
+	    immop = RS3;
 	}
 	else
 	    s, op.rs3 = GetReg(s);
+	s = SkipComma(s);
+	// CMP, rs2 can be '#imm' or 'reg'
+	if s[0] == '#' then
+	{   s = Expr(s[1:], imm2);
+	    if imm2.op != NONE then
+	    {	fde.str("arg non-constant immediate expr=");
+		expr.Dump(fde, imm2); fde.nl();
+	    }
+	    if immop != NONE then
+		immop = BOTH;
+	    else
+		immop = RS2;
+	}
+	else
+	    s, op.rs2 = GetReg(s);
 	if immop
-	is RS2 then
-	{
-	    if imm2.offs >= 0 && imm2.offs <= 31 then
-	    {	op.s2 = 1;
+	is RS3 then	// INC is immediate
+	{   if imm3.offs >= 0 && imm3.offs <= 31 then
+	    {	op.s2 = 1;	// iss=001
+		op.rs3 = imm3.offs;
+	    }
+	    else
+	    {	op.I = 1;
+		if IsImm32(imm3.offs, false) then
+		    op.s1 = 0;	// iss=100
+		else
+		    op.s1 = 1;	// iss=110
+	    }
+	}
+	is RS2 then	// CMP is immediate
+	{   if imm2.offs >= 0 && imm2.offs <= 31 then
+	    {	op.s1 = 1;	// iss=010
 		op.rs2 = imm2.offs;
 	    }
 	    else
 	    {	op.I = 1;
-		if IsImm32(imm2.offs, false) then
-		    op.s1 = 0;
-		else
-		    op.s1 = 1;
-	    }
-	}
-	is RS3 then
-	{
-	    if imm3.offs >= 0 && imm3.offs <= 31 then
-	    {	op.s1 = 1;
-		op.rs3 = imm3.offs;
-	    }
-	    elif IsImm32(imm3.offs, false) then
-	    {	op.I = 1;
 		op.s2 = 1;
+		if IsImm32(imm2.offs, false) then
+		    op.s1 = 0;	// iss=101
+		else
+		    op.s1 = 1;	// iss=111
 	    }
-	    else
-		fde.str("Immediate value too large for RS3\n");
 	}
 	is BOTH then	// two immediates
 	{
 	    if (imm2.offs >= 0 && imm2.offs <= 31) &&
-	       (imm3.offs >= 0 && imm3.offs <= 31) then
+	       (imm3.offs >= 0 && imm3.offs <= 31) then	// both IMM5
 	    {	op.s2 = 1;
 		op.rs2 = imm2.offs;
 		op.s1 = 1;
@@ -768,13 +768,16 @@ import my66000def;
 	    }
 	    else
 	    {   op.I = 1;
-		op.s1 = 1;
-		if IsImm32(imm2.offs, false) && IsImm32(imm3.offs, false) then
-		    ;
-		elif imm3.offs == 1 then
-		    op.s2 = 1;
+		op.s2 = 1;
+		op.rs2 = 1;	// set low order bit of RS2
+		if IsImm16(imm2.offs) && IsImm16(imm3.offs) then
+		    imm2.offs = (_uint16(imm3.offs) << 16) | _uint16(imm2.offs);
+		elif IsImm32(imm2.offs, false) && IsImm32(imm3.offs, false) then
+		{   imm2.offs = (_uint32(imm3.offs) << 32) | _uint32(imm2.offs);
+		    op.s1 = 1;
+		}
 		else
-		    fde.str("Illegal LOOP immediates\n");
+		    Syntax("Illegal LOOP immediates");
 	    }
 	}
 
@@ -783,6 +786,8 @@ fde.str("kind="); fde.uint(kind);
 fde.str(" comp="); fde.uint(op.cnd);
 fde.str(" signed="); fde.uint8(_uint8(signed));
 fde.str(" iss="); fde.uint(op.I); fde.uint(op.s1); fde.uint(op.s2);
+fde.str(" rs3="); fde.uint(op.rs3);
+fde.str(" rs2="); fde.uint(op.rs2);
 if immop == RS2 || immop == BOTH then
 {  fde.str(" imm2="); fde.int(imm2.offs); }
 if immop == RS3 || immop == BOTH then
@@ -793,16 +798,13 @@ fde.nl();
 	if op.I != 0 then
 	{   if op.s1 == 0 then
 	    {   if op.s2 == 0 then
-		    segment.Put4(_uint32(imm2.offs));
-		else
 		    segment.Put4(_uint32(imm3.offs));
+		else
+		    segment.Put4(_uint32(imm2.offs));
 	    }
 	    else
 	    {	if op.s2 == 0 then
-		{
-		    segment.Put4(_uint32(imm2.offs));
-		    segment.Put4(_uint32(imm3.offs));
-		}
+		    segment.Put8(_uint64(imm3.offs));
 		else
 		    segment.Put8(_uint64(imm2.offs));
 	    }
@@ -1170,12 +1172,22 @@ fde.nl();
 	    if op.I != 0 then
 	    {	if op.D == 0 then
 		{   if needreloc then
-			segment.FixNew(imm, PCREL32, EXPR);
+		    {	if op.rb == 0 then
+			    segment.FixNew(imm, PCREL32, EXPR);
+			else
+			    segment.FixNew(imm, ABS_32, EXPR);
+			imm.offs = 0;	// FixNew copied imm
+		    }
 		    segment.Put4(_uint32(imm.offs));
 		}
 		else
 		{   if needreloc then
-			segment.FixNew(imm, PCREL64, EXPR);
+		    {	if op.rb == 0 then
+			    segment.FixNew(imm, PCREL64, EXPR);
+			else
+			    segment.FixNew(imm, ABS_64, EXPR);
+			imm.offs = 0;	// FixNew copied imm
+		    }
 		    segment.Put8(_uint64(imm.offs));
 		}
 	    }
@@ -1481,9 +1493,9 @@ fde.nl();
 	{ "fractf",6,  0b001101_00000_00000_00010_000111_00000, Int1Op },
 	{ "pop",   3,  0b001101_00000_00000_00000_001000_00000, Int1Op },
 	{ "clz",   3,  0b001101_00000_00000_00000_001001_00000, Int1Op },
-	{ "ctz",   3,  0b001101_00000_00000_00010_001001_00000, Int1Op },
-	{ "clo",   3,  0b001101_00000_00000_01000_001001_00000, Int1Op },
-	{ "cto",   3,  0b001101_00000_00000_01010_001001_00000, Int1Op },
+	{ "ctz",   3,  0b001101_00000_00000_00000_001001_00011, Int1Op },
+	{ "fl1",   3,  0b001101_00000_00000_00000_001001_00001, Int1Op },
+	{ "ft1",   3,  0b001101_00000_00000_00000_001001_00010, Int1Op },
 	// experimental
 	{ "hrr",   3,  0b001101_00000_00000_00100_000000_00000, HrOp },
 	{ "hrw",   3,  0b001101_00000_00000_01000_000000_00000, HrOp },

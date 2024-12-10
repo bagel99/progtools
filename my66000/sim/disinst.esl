@@ -50,6 +50,10 @@
 	    if c
 	    is 'C' then
 		fdx.str(CBitNames[op.rd]);
+	    is 'D' then
+		fdx.int16(Read(ip+4, HALF));
+	    is 'E' then
+		fdx.int16(Read(ip+6, HALF));
 	    is 'G' then		// signed I5 in Rs2
 	    {   t8 = op.rs2;
 		if t8 > 15 then t8 |= ~0xF;
@@ -97,18 +101,14 @@
 		PReg(op.rs3);
 	    is 'V' then
 		;
-	    is 'W' then		// I32 but second extension
-	    {	fdx.str("0x");
-		fdx.hex32(_uint32(Read(ip+8, WORD)));
-	    }
+	    is 'W' then		// signed I32 but second extension
+		fdx.int32(_uint32(Read(ip+8, WORD)));
 	    is 'X' then		// signed I16 in hex
 	    {	fdx.str("0x");
 		fdx.hex16(inst&0xFFFF);
 	    }
 	    is 'Y' then		// signed I32
-	    {	fdx.str("0x");
-		fdx.hex32(_uint32(Read(ip+4, WORD)));
-	    }
+		fdx.int32(_int32(Read(ip+4, WORD)));
 	    is 'Z' then		// I64
 	    {	fdx.str("0x");
 		fdx.hex64(Read(ip+4, QUAD));
@@ -289,7 +289,11 @@
 	};
 	const Fmt2: [8]@[]_byte =
 	{   "S,U,T",  "S,#K,T", "S,U,#J", "S,#K,#J",
-	    "S,U,#Y", "S,#Y,T", "S,U,#Z", "S,#Z,#T"
+	    "S,#Y,T", "S,U,#Y", "S,#Z,T", "S,U,#Z"
+	};
+	const Fmt3: [8]@[]_byte =
+	{   "?",  "?", "?",  "?",
+	    "", "S,#E,#D", "?", "S,#W,#Y"
 	};
 
 	fdx.str("loop"); fdx.uint(op.kind); fdx.chr('\t');
@@ -299,7 +303,10 @@
 	    PFmt(inst, ip, Fmt1s[op.cnd]);
 	fdx.chr(',');
 	var iss: _uint = (inst >> 13) & 0b111;	// The I,s1,s2 bits
-	PFmt(inst, ip, Fmt2[iss]);
+	if (iss == 0b101 || iss == 0b111) && op.rs2 != 0 then
+	    PFmt(inst, ip, Fmt3[iss]);
+	else
+	    PFmt(inst, ip, Fmt2[iss]);
     }
 
     proc disOp3(inst: Inst, ip: Word)

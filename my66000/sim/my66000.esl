@@ -1,3 +1,12 @@
+/*
+ * Use of db (bit map)
+ *  1 - disassemble instruction
+ *  2 - show LD/ST addressw
+ *  4 - info on many instructions
+ *  8 - info on JT
+ * 16 - info on VMM
+ * 32 - info on MM,MS
+ */
 package my66000
 {
     import my66000def;
@@ -174,75 +183,6 @@ fde.str("lseek error "); fde.int(rv); fde.nl();
 	}
 	else
 	{
-fde.str("** Unimplemented system call "); fde.uint(n); fde.nl();
-	}
-    }
-
-    // FIXME - delete when no longer necessary
-    proc SysCallOld()
-    {   var n: _uint;
-	var ok: boolean;
-	var addr: _address;
-	var rv: _int;
-
-	n = _uint(reg[Arg[0]]);
-	if n
-	is 0 then	// exit
-	{
-	    fault = EXIT;
-	}
-	is 1 then	// open
-	{   ok, addr = Map(reg[Arg[1]]);
-	    if ok then
-	    {
-		rv = sys.open(addr, _uint(reg[Arg[2]]), _uint(reg[Arg[3]]));
-		reg[Arg[1]] = SWord(rv);
-	    }
-	}
-	is 2 then	// close
-	{   sys.close(_int(reg[Arg[1]]));
-	    reg[Arg[1]] = 0;	// FIXME sys.close
-	}
-	is 3 then	// read
-	{   ok, addr = Map(reg[Arg[2]]);
-	    if ok then
-	    {
-		rv = sys.read(_int(reg[Arg[1]]), addr, _uint(reg[Arg[3]]));
-		if rv < 0 then
-		{
-fde.str("read error "); fde.int(rv); fde.nl();
-		}
-		reg[Arg[1]] = SWord(rv);
-	    }
-	}
-	is 4 then	// write
-	{   ok, addr = Map(reg[Arg[2]]);
-	    if ok then
-	    {
-//fde.str("write("); fde.uint(_uint(reg[0]));
-//fde.chr(','); fde.hex(_uint(addr));
-//fde.chr(','); fde.uint(_uint(reg[2])); fde.str(")\n");
-		rv = sys.write(_uint(reg[Arg[1]]), addr, _uint(reg[Arg[3]]));
-		if rv < 0 then
-		{
-fde.str("write error "); fde.int(rv); fde.nl();
-		}
-		reg[Arg[1]] = SWord(rv);
-	    }
-	}
-	is 5 then	// lseek
-	{   rv = sys.lseek(_int(reg[Arg[1]]), _uint(reg[Arg[2]]),
-			   sys.whence_t(reg[Arg[3]]));
-	    if rv < 0 then
-	    {
-fde.str("lseek error "); fde.int(rv); fde.nl();
-	    }
-	    reg[Arg[1]] = SWord(rv);
-	}
-	else
-	{
-fde.str("Arg[0]="); fde.int(Arg[0]); fde.nl();
-fde.hex64(n); fde.nl();
 fde.str("** Unimplemented system call "); fde.uint(n); fde.nl();
 	}
     }
@@ -1053,7 +993,7 @@ if db&16 != 0 then { fde.str("vreg="); fde.uint8(vreg); fde.nl(); }
 	const UCMP: [8][2]_byte = {'EQ','NE','HS','LO','HI','LS','A ','N '};
 
 if db&16 != 0 then {
-fde.str("compare "); fde.int(inc); fde.chr(' ');
+fde.str(" compare "); fde.int(inc); fde.chr(' ');
 if op.s != 0 then fde.strn(SCMP[op.cnd],2); else fde.strn(UCMP[op.cnd],2);
 fde.chr(' '); fde.int(cmp); fde.nl();
 }
@@ -1085,50 +1025,58 @@ fde.chr(' '); fde.int(cmp); fde.nl();
 	var inc, cmp, loop, add: _int;
 
 	loop = reg[op.rs1];
-	if op.I != 0 then
-	{   if op.s1 == 0 then
-	    {   if op.s2 == 0 then
-		{   inc = reg[op.rs3];
-		    cmp = Read(reg[PC], WORD);
-		    reg[PC] += 4;
-		}
-		else
-		{   cmp = reg[op.rs2];
-		    inc = Read(reg[PC], WORD);
-		    reg[PC] += 4;
-		}
-	    }
-	    else
-	    {   if op.s2 == 0 then
-		{   cmp = Read(reg[PC], WORD);
-		    reg[PC] += 4;
-		    inc = Read(reg[PC], WORD);
-		    reg[PC] += 4;
-		}
-		else
-		{   inc = 1;
-		    cmp = Read(reg[PC], QUAD);
-		    reg[PC] += 8;
-		}
-	    }
-	}
-	else
-	{   if op.s1 == 0 then
+	if op.I == 0 then			// iss=0xx
+	{   if op.s1 == 0 then			// iss=0x0
 		cmp = reg[op.rs2];
 	    else
 		cmp = op.rs2;		// IMM5
-	    if op.s2 == 0 then
+	    if op.s2 == 0 then			// iss=00x
 		inc = reg[op.rs3];
 	    else
 		inc = op.rs3;		// IMM5
+	}
+	else					// iss=1xx
+	{   if op.s1 == 0 then			// iss=10x
+	    {   if op.s2 == 0 then		// iss=100
+		{   inc = Read(reg[PC], WORD);
+		    cmp = reg[op.rs2];
+		    reg[PC] += 4;
+		}
+		else				// iss=101
+		{   inc = reg[op.rs3];
+		    cmp = Read(reg[PC], WORD);
+		    if op.rs2 != 0 then
+		    {	inc = _int64(_int16(cmp >> 16));
+			cmp = _int64(_int16(cmp));
+if db&16 != 0 then fde.str("loop 2 IMM16\n");
+		    }
+		    reg[PC] += 4;
+		}
+	    }
+	    else				// iss=11x
+	    {   if op.s2 == 0 then		// iss=110
+		{   inc = Read(reg[PC], QUAD);
+		    cmp = reg[op.rs2];
+		    reg[PC] += 8;
+		}
+		else				// iss=111
+		{   inc = reg[op.rs3];
+		    cmp = Read(reg[PC], QUAD);
+		    if op.rs2 != 0 then
+		    {	inc = _int64(_int32(cmp >> 32));
+			cmp = _int64(_int32(cmp));
+if db&16 != 0 then fde.str("loop 2 IMM32\n");
+		    }
+		    reg[PC] += 8;
+		}
+	    }
 	}
 	var continue: boolean = true;
 if db&16 != 0 then
 {   fde.str("loop"); fde.uint(op.kind);
     fde.str(" loop="); fde.int64(loop);
-    fde.str(" inc="); fde.int64(cmp);
+    fde.str(" inc="); fde.int64(inc);
     fde.str(" cmp="); fde.int64(cmp);
-    fde.nl();
 }
 	if op.kind
 	is 1 then
@@ -1663,9 +1611,8 @@ fde.str(" cnt="); fde.uint(i); fde.nl(); }
 		adr += inx;
 	    }
 	}
-if db&4 != 0 then {
-fde.str("\nadr="); fde.hex64(adr);
-fde.nl(); }
+if db&2 != 0 then {
+fde.str("adr="); fde.hex64(adr); fde.nl(); }
 	if op.minor
 	is 0b000000 then		// LDUB
 	    reg[op.rd] = Read(adr, BYTE);
@@ -1923,7 +1870,7 @@ if db&8 != 0 then { fde.str(" newpc="); fde.hex32(newpc); fde.nl(); }
 
 	creg = op.rd;
 	cbits = op.imm;
-if db&4 != 0then {
+if db&4 != 0 then {
 fde.str("creg="); fde.uint8(creg);
 fde.str(" cbits=0x"); fde.hex16(cbits); fde.nl();
 }
@@ -2013,9 +1960,7 @@ fde.nl();
 	is 0b111100	      then OpCarry(inst);
 	is 0b111101           then OpVec(inst);
 	is 0b111111 then	// Syscall hack
-	{   if inst == 0xFFAA5501 then
-		SysCallOld();	// FIXME - delete when no longer necessary
-	    elif (inst & 0xFFFFFF00) == breakpoint then
+	{   if (inst & 0xFFFFFF00) == breakpoint then
 		fault = BKPT;
 	    else
 		Fault("Unallocated instruction", inst);
@@ -2204,16 +2149,15 @@ package chip
 	// generate argument list
 	my66000.memtab[1].adr =
 	    sys.malloc(my66000.memtab[1].end - my66000.memtab[1].beg + 1);
-fde.str("arg list1\n");
 	const ptrsize = 8;	// size of pointer on target
 	my66000.Write(my66000.memtab[1].beg,  QUAD, argc);
-fde.str("arg list2\n");
 	j = ptrsize;		// really size of argc
 	k = j + ptrsize * argc;
 	for n from 0 to argc-1 do
 	{
+if db != 0 then {
 fde.str("argv["); fde.uint(n);
-fde.str("]="); fde.str(argv[n]@); fde.nl();
+fde.str("]="); fde.str(argv[n]@); fde.nl(); }
 	    my66000.Write(my66000.memtab[1].beg+j, QUAD, my66000.memtab[1].beg+k);
 	    i = 0;
 	    loop

@@ -118,7 +118,7 @@ proc Interrupt(which: _int)
 proc main(argc:_uint, argv:@[]@[]_byte):_int //[[global]]
 {
     var fd: sys.fildes;
-    var n: elf.Word;
+    var n: _uint;
     var i: _uint;
     var k: _int;
     var dumpregs: boolean;
@@ -142,7 +142,8 @@ proc main(argc:_uint, argv:@[]@[]_byte):_int //[[global]]
 		n = strtou32(argv[i]@);
 	    }
 	}
-	is 'd' then	db = strtou32(argv[i]@[2:]);
+	is 'd' then db = strtou32(argv[i]@[2:]);
+	is 'q' then n = _uint?max;
 	i += 1;
     }
     if i >= argc then
@@ -154,8 +155,9 @@ proc main(argc:_uint, argv:@[]@[]_byte):_int //[[global]]
 	fde.nl();
 	return 1;
     }
-
-    fde.str("Using chip "); fde.str(chip.name); fde.nl();
+    if db != 0 then
+    {	fde.str("Using chip "); fde.str(chip.name); fde.nl();
+    }
     chip.Init(argc-i, argv[i:]);
 
     if loadmode

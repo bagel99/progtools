@@ -161,6 +161,6 @@ proc main(argc: _uint, argv: @[]@[]_byte): _int
 	    fde.nl();
 	}
     }
-    return 0;
+    return errors;
 }
 
