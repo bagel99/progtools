@@ -564,46 +564,112 @@ import float;
     }
 
     proc DoDoubleCompare(s1: _float64, s2: _float64): Word
-    {   var fcc: CondCode = {};
-	var tmp: Word;
+    {   var fcc: CondCode = {};	// init everything false
+	var t1, t2: Word;
+	var n1, n2: _int64;
+	var sign: _uint;
 
-	if s1.isNaN() || s2.isNaN() then
-	{   fcc[NOR] = true;
+	if s1.isNaN() then
+	{   fcc[NaN] = true;
+	    if (_uint64(s1) & 0x8_0000_0000_0000) != 0 then
+		fcc[QNaN] = 1;
+	    else
+		fcc[SNaN] = 1;
 	}
-	else
-	{   fcc[OR] = true;
-	    // FIXME - probably not correct
-	    if s1 == s2 then { fcc[EQ] = true; }
+	elif !s2.isNaN() then	// ordered
+	{   fcc[OR] = true;		// if s1 and s2 are ordered then they
+	    n1 = _int64(_uint64(s1));	// are lexicographically ordered
+	    n2 = _int64(_uint64(s2));	// so we can compare them as integers
+	    // FIXME - should -0.0 == +0.0
+	    if n1 == n2 then { fcc[EQ] = true; }
 			else { fcc[NE] = true; }
-	    if s1 >= s2 then { fcc[GE] = true; }
+	    if n1 >= n2 then { fcc[GE] = true; }
 			else { fcc[LT] = true; }
-	    if s1 <= s2 then { fcc[LE] = true; }
+	    if n1 <= n2 then { fcc[LE] = true; }
 			else { fcc[GT] = true; }
-	    // FIXME - wait there's more
+	    if _abs(n1) >= _abs(n2) then fcc[HS] = true;
+	    if _abs(n1) <  _abs(n2) then fcc[LO] = true;
+	    if _abs(n1) >  _abs(n2) then fcc[HI] = true;
+	    if _abs(n1) <= _abs(n2) then fcc[LS] = true;
+	    sign = s1.getSign();
+	    if s1.isInf() then
+	    {	fcc[NI] = sign;
+		fcc[PI] = sign^1;
+	    }
+	    elif s1.getExp() == 0 then
+	    {	if s1.getFrac() == 0 then
+		{   fcc[NZ] = sign;
+		    fcc[PZ] = sign^1;
+		}
+		else
+		{   fcc[ND] = sign;
+		    fcc[PD] = sign^1;
+		}
+	    }
+	    else
+	    {	fcc[NN] = sign;
+		fcc[PN] = sign^1;
+	    }
 	}
+	t1 = Word(fcc);
+	t2 = (~t1 & 0b1010000010101010101) << 1;// select bits to invert and shift
+	t1 |= t2;
 if db&4 != 0 then {
-  fde.str("DoDoubleCompare=0x"); fde.hex64(Word(fcc)); fde.nl(); }
-	return Word(fcc);
+  fde.str("DoDoubleCompare=0x"); fde.hex64(t1); fde.nl(); }
+	return Word(t1);
     }
 
     proc DoSingleCompare(s1: _float32, s2: _float32): Word
-    {   var fcc: CondCode = {};
-	var tmp: Word;
+    {   var fcc: CondCode = {};	// init everything false
+	var t1, t2: Word;
+	var n1, n2: _int32;
+	var sign: _uint;
 
-	if s1.isNaN() || s2.isNaN() then
-	{   fcc[NOR] = true;
+	if s1.isNaN() then
+	{   fcc[NaN] = true;
+	    if (_uint32(s1) & 0x40_0000) != 0 then
+		fcc[QNaN] = 1;
+	    else
+		fcc[SNaN] = 1;
 	}
-	else
-	{   fcc[OR] = true;
-	    // FIXME - probably not correct
+	elif !s2.isNaN() then	// ordered
+	{   fcc[OR] = true;		// if s1 and s2 are ordered then they
+	    n1 = _int32(_uint32(s1));	// are lexicographically ordered
+	    n2 = _int32(_uint32(s2));	// so we can compare them as integers
+	    // FIXME - should -0.0 == +0.0
 	    if s1 == s2 then { fcc[EQ] = true; }
 			else { fcc[NE] = true; }
 	    if s1 >= s2 then { fcc[GE] = true; }
 			else { fcc[LT] = true; }
 	    if s1 <= s2 then { fcc[LE] = true; }
 			else { fcc[GT] = true; }
-	    // FIXME - wait there's more
+	    if _abs(n1) >= _abs(n2) then fcc[HS] = true;
+	    if _abs(n1) <  _abs(n2) then fcc[LO] = true;
+	    if _abs(n1) >  _abs(n2) then fcc[HI] = true;
+	    if _abs(n1) <= _abs(n2) then fcc[LS] = true;
+	    sign = s1.getSign();
+	    if s1.isInf() then
+	    {	fcc[NI] = sign;
+		fcc[PI] = sign^1;
+	    }
+	    elif s1.getExp() == 0 then
+	    {	if s1.getFrac() == 0 then
+		{   fcc[NZ] = sign;
+		    fcc[PZ] = sign^1;
+		}
+		else
+		{   fcc[ND] = sign;
+		    fcc[PD] = sign^1;
+		}
+	    }
+	    else
+	    {	fcc[NN] = sign;
+		fcc[PN] = sign^1;
+	    }
 	}
+	t1 = Word(fcc);
+	t2 = (~t1 & 0b1010000010101010101) << 1;// select bits to invert and shift
+	t1 |= t2;
 if db&4 != 0 then {
   fde.str("DoSingleCompare=0x"); fde.hex64(Word(fcc)); fde.nl(); }
 	return Word(fcc);
@@ -961,7 +1027,7 @@ if db&4 != 0 then
 		{   old = dbl.getExp();
 		    new = old + src2;
 		    frac = dbl.getFrac();
-		    tmp = Word(float64_make(dbl.getSign(),_uint(new),frac));
+		    tmp = Word(float64Make(dbl.getSign(),_uint(new),frac));
 		}
 	    }
 	    else		// single
@@ -1073,14 +1139,11 @@ if db&16 != 0 then fde.str("loop 2 IMM32\n");
 	}
 	var continue: boolean = true;
 if db&16 != 0 then
-{   fde.str("loop"); fde.uint(op.kind);
-    fde.str(" loop="); fde.int64(loop);
-    fde.str(" inc="); fde.int64(inc);
-    fde.str(" cmp="); fde.int64(cmp);
-}
+{   fde.str("loop"); fde.uint(op.kind); fde.str(" loop="); fde.int64(loop); }
 	if op.kind
 	is 1 then
 	{
+if db&16 != 0 then { fde.str(" inc="); fde.int64(inc); }
 	    loop += inc;
 	    continue = DoLoopCompare(op, loop, cmp);
 	}
@@ -1095,6 +1158,7 @@ if db&16 != 0 then
 	}
 	is 3 then
 	{
+if db&16 != 0 then { fde.str(" inc="); fde.int64(1); }
 	    loop += 1;
 	    continue = DoLoopCompare(op, inc, cmp);
 	}
@@ -1888,11 +1952,11 @@ fde.str(" cbits=0x"); fde.hex16(cbits); fde.nl();
 		xlength += (inst >> 13)&1;	// s1 bit
 	    else
 		xlength += (inst >> 12)&1;	// s2 bit
-	    if (inst & 0x1C000780) == 0x04000300 then // store imm long
-	    {	xlength += 1;
-		if ((inst >> 5) & 3) == 3 then	// std imm
-		    xlength += 1;
-	    }
+	}
+	if (inst & 0x1C000780) == 0x04000300 then // store imm not I5
+	{	xlength += 1;
+	    if ((inst >> 5) & 3) == 3 then	// std imm
+		xlength += 1;
 	}
 if db&4 != 0 then {
 fde.str("ExtraLen="); fde.uint(xlength); fde.nl();

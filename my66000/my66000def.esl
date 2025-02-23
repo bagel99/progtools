@@ -56,13 +56,14 @@
 
     type OPLOOP:
     {	major:	0..0b111111;	// 31..26
-	cnd:	0..0b11111;	// 25..21
+	kind:	0..0b11;	// 25..24
+	cnd:	0..0b111;	// 23..21
 	rs1:	REG;		// 20..16
 	I:	0..1;		// 15
 	s1:	0..1;		// 14
 	s2:	0..1;		// 13
 	s:      0..1;		// 12
-	kind:	0..0b11;	// 11..10
+	_:	0..0b11;	// 11..10
 	rs3:	REG;		// 9..5
 	rs2:	REG;		// 4..0
     }: packed, msb, bits(32);
@@ -193,9 +194,8 @@
     (	EQ=0, NEQ, NE, NNE, GE, NGE, LT, NLT,		// 0-7
 	GT=8, NGT, LE, NLE, HS, LO,  HI, LS,		// 8-15
 	OR=16, NOR, TO, NTO,				// 16-23
-	SIN=24, FIN, CIN, RIN,				// 24-31
-	SNaN=32, QNaN, MINF, MNOR, MDE, MZE, PZE, PDE,	// 32-39
-	PNOR=40, NINF,					// 40-47
+	SIN=24, FIN, CIN, RIN, NaN=31,			// 24-31
+	SNaN=32, QNaN, NI, NN, ND, NZ, PZ, PD, PN, PI,	// 32-41
 	_=63
     );
     const CBitNames: [CBits][5]_byte =
