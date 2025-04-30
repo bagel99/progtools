@@ -28,14 +28,14 @@ package elfload
     {   var i: elf.Half;
         i = 0;
 if db > 1 then {
-fderr.str("elf.findseg addr="); fderr.hex64(addr); fderr.nl();
+fde.str("elf.findseg addr="); fde.hex64(addr); fde.nl();
 }
 	while i < memory.nsegs do
 	{
-//fderr.str("\tseg["); fderr.uint16(i);
-//fderr.str("] beg="); fderr.hex64(memory.seg[i].beg);
-//fderr.str(" end="); fderr.hex64(memory.seg[i].end);
-//fderr.nl();
+//fde.str("\tseg["); fde.uint16(i);
+//fde.str("] beg="); fde.hex64(memory.seg[i].beg);
+//fde.str(" end="); fde.hex64(memory.seg[i].end);
+//fde.nl();
 	  exit memory.seg[i].beg <= addr && addr <= memory.seg[i].end;
 	    i += 1;
 	}
@@ -64,7 +64,7 @@ fderr.str("elf.findseg addr="); fderr.hex64(addr); fderr.nl();
 	   pfh@.magic[2] == elf.magic2 && pfh@.magic[3] == elf.magic3 then
 	{   // we have an ELF file, do some more checks
 	    // convert endian if necessary
-if db > 2 then fderr.str("ELF: got magic\n");
+if db > 2 then fde.str("ELF: got magic\n");
 	    if pfh@.class == CLASS64 &&
 	       pfh@.data == LSB2 &&
 	       pfh@.machine == arch then
@@ -72,11 +72,11 @@ if db > 2 then fderr.str("ELF: got magic\n");
 		memory.entry = pfh@.entry;
 		nphdr = pfh@.phnum;
 		nshdr = pfh@.shnum;
-if db > 2 then fderr.str("ELF: got machine\n");
+if db > 2 then fde.str("ELF: got machine\n");
 if _defined(DYNAMIC) then n = 0;
 		if !ignoreproghdr && nphdr > 0 then	// have program sections
 		{
-if db > 2 then {fderr.str("nphdr="); fderr.uint32(nphdr); fderr.nl(); }
+if db > 2 then {fde.str("nphdr="); fde.uint32(nphdr); fde.nl(); }
 		    offs = pfh@.phoff;
 		    hdrsize = pfh@.phentsize;
 		    n = 0;
@@ -86,13 +86,13 @@ if db > 2 then {fderr.str("nphdr="); fderr.uint32(nphdr); fderr.nl(); }
 			offs += hdrsize;
 			pph = pseg(buf[0:elf.proghdr64?size]);
 if db > 2 then {
-fderr.str("vaddr="); fderr.hex64(pph.vaddr);
-fderr.str(" paddr="); fderr.hex64(pph.paddr); fderr.nl();
-fderr.str("fsize="); fderr.hex64(pph.fsize);
-fderr.str(" msize="); fderr.hex64(pph.msize); fderr.nl();
-fderr.str("type="); fderr.hex32(_uint32(pph.type));
-fderr.str("flags="); fderr.hex32(_uint32(pph.flags));
-fderr.str(" offs="); fderr.hex64(pph.offset); fderr.nl();
+fde.str("vaddr="); fde.hex64(pph.vaddr);
+fde.str(" paddr="); fde.hex64(pph.paddr); fde.nl();
+fde.str("fsize="); fde.hex64(pph.fsize);
+fde.str(" msize="); fde.hex64(pph.msize); fde.nl();
+fde.str("type="); fde.hex32(_uint32(pph.type));
+fde.str("flags="); fde.hex32(_uint32(pph.flags));
+fde.str(" offs="); fde.hex64(pph.offset); fde.nl();
 }
 			// convert endian if necessary
 			if pph@.type == LOAD && pph@.fsize > 0 then
@@ -101,8 +101,8 @@ fderr.str(" offs="); fderr.hex64(pph.offset); fderr.nl();
 if _defined(DYNAMIC) then {
 			    if n >= memory.nsegs then
 			    {
-fderr.str("Not enough allocated segments: n="); fde.uint16(n);
-fderr.str(" max="); fde.uint16(memory.nsegs); fde.nl();
+fde.str("Not enough allocated segments: n="); fde.uint16(n);
+fde.str(" max="); fde.uint16(memory.nsegs); fde.nl();
 				return false;
 			    }
 			    memory.seg[n].mem = sys.malloc(pph@.fsize);
@@ -115,8 +115,8 @@ fderr.str(" max="); fde.uint16(memory.nsegs); fde.nl();
 			    n = findseg(pph.paddr, memory);
 			    if n >= memory.nsegs then
 			    {
-fderr.str("No segment for address ");  fderr.hex64(pph.vaddr);
-fderr.str(" size "); fderr.uint(pph@.fsize); fderr.nl();
+fde.str("No segment for address ");  fde.hex64(pph.vaddr);
+fde.str(" size "); fde.uint(pph@.fsize); fde.nl();
 				return false;
 			    }
 			    sys.read(fd,
@@ -133,8 +133,8 @@ fderr.str(" size "); fderr.uint(pph@.fsize); fderr.nl();
 		    offs = pfh@.shoff;
 		    hdrsize = pfh@.shentsize;
 if db > 2 then {
-fderr.str("shnum="); fderr.uint32(nshdr);
-fderr.nl();
+fde.str("shnum="); fde.uint32(nshdr);
+fde.nl();
 }
 		    for i from 0 to nshdr-1 do
 		    {   sys.lseek(fd, sys.off_t(start+offs), SET);
@@ -142,27 +142,27 @@ fderr.nl();
 			offs += hdrsize;
 			psh = psec(buf[0:elf.secthdr64?size]);
 if db > 2 then {
-fderr.str("shnum=");  fderr.uint32(i);
-fderr.str(" addr="); fderr.hex64(psh@.addr);
-fderr.str(" size="); fderr.uint64(psh@.size);
-fderr.str(" type="); fderr.uint64(_uint64(psh@.type));
-fderr.str(" flags="); fderr.hex64(_uint64(psh@.flags));
-fderr.nl();
+fde.str("shnum=");  fde.uint32(i);
+fde.str(" addr="); fde.hex64(psh@.addr);
+fde.str(" size="); fde.uint64(psh@.size);
+fde.str(" type="); fde.uint64(_uint64(psh@.type));
+fde.str(" flags="); fde.hex64(_uint64(psh@.flags));
+fde.nl();
 }
 			// convert endian if necessary
 		        if (psh@.type == PROGBITS || psh@.type == NOBITS)
 			    && psh@.size != 0 then
 			{
-fderr.str("seqn="); fderr.uint(n);
-fderr.str(" shnum=");  fderr.uint32(i);
-fderr.str(" addr="); fderr.hex64(psh@.addr);
-fderr.nl();
+fde.str("seqn="); fde.uint(n);
+fde.str(" shnum=");  fde.uint32(i);
+fde.str(" addr="); fde.hex64(psh@.addr);
+fde.nl();
 			    sys.lseek(fd, sys.off_t(start+psh@.offset), SET);
 if _defined(DYNAMIC) then {
 			    if n >= memory.nsegs then
 			    {
-fderr.str("Not enough allocated segments: n="); fde.uint16(n);
-fderr.str(" max="); fde.uint16(memory.nsegs); fde.nl();
+fde.str("Not enough allocated segments: n="); fde.uint16(n);
+fde.str(" max="); fde.uint16(memory.nsegs); fde.nl();
 				return false;
 			    }
 			    memory.seg[n].mem = sys.malloc(psh@.size);
@@ -184,8 +184,8 @@ fderr.str(" max="); fde.uint16(memory.nsegs); fde.nl();
 			    n = findseg(psh@.addr, memory);
 			    if n >= memory.nsegs then
 			    {
-fderr.str("No segment for address ");  fderr.hex64(pph.vaddr);
-fderr.str(" size "); fderr.uint(pph@.fsize); fderr.nl();
+fde.str("No segment for address ");  fde.hex64(pph.vaddr);
+fde.str(" size "); fde.uint(pph@.fsize); fde.nl();
 				return false;
 			    }
 			    if psh@.addr + psh@.size - 1 > memory.seg[n].end then

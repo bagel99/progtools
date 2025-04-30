@@ -70,13 +70,13 @@ package srec
 	    is '9' then Start(data[1:], 2);	 // start, 16-bit address
 	    else
 	    {
-fderr.str("Unimplemented format: "); fderr.chr(line[1]); fderr.nl();
+fde.str("Unimplemented format: "); fde.chr(line[1]); fde.nl();
 	    }
 	}
 	else
 	{
-fderr.str("Missing leading 'S'\n");
-fderr.strn(line, _min(len,48));
+fde.str("Missing leading 'S'\n");
+fde.strn(line, _min(len,48));
 	}
     }
 
@@ -103,7 +103,7 @@ fderr.strn(line, _min(len,48));
 	  exit k <= 0;
 	    n += _uint(k);
 	    i = 0;	// start at beginning of buffer
-//fderr.str("S i,n="); fderr.uint(i); fderr.chr(','); fderr.uint(n); fderr.nl();
+//fde.str("S i,n="); fde.uint(i); fde.chr(','); fde.uint(n); fde.nl();
 	    loop
 	    {
 		j = FindEOL(buf[i:n], n) + 1;
@@ -115,7 +115,7 @@ fderr.strn(line, _min(len,48));
 	    	n -= j;
 	      exit n == 0;
 	    }
-//fderr.str("E i,n="); fderr.uint(i); fderr.chr(','); fderr.uint(n); fderr.nl();
+//fde.str("E i,n="); fde.uint(i); fde.chr(','); fde.uint(n); fde.nl();
 	}
     }
 }

@@ -1,8 +1,8 @@
 import sys;
 import out;
 const fdi: sys.fildes = 0;
-const fdo: out.OutFD = 1;
-const fde: out.OutFD = 2;
+alias out.fdo as fdo;
+alias out.fde as fde;
 import bufin;
 
 var lineno: _uint;

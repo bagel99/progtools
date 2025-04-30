@@ -46,7 +46,7 @@ package comd
 	    if r < cpu.regname?len then
 	    	return cpu.reg[r];
 	    else
-	    {	fderr.str("Illegal register name\n");
+	    {	fde.str("Illegal register name\n");
 	    	return 0;
 	    }
 	}
@@ -61,10 +61,10 @@ package comd
 	{   if args[1][0] == '$' then
 	    {   val = GetValue(args[1]);
 		if cpu.Word?bits == 64 then
-		    fderr.hex64(val);
+		    fde.hex64(val);
 		else
-		    fderr.hex32(val);
-		fderr.nl();
+		    fde.hex32(val);
+		fde.nl();
 	    }
 	}
 	else
@@ -101,14 +101,14 @@ package comd
 	while n > 0 do
 	{   if i == 0 then
 	    {   if cpu.Addr?bits == 64 then
-		    fderr.hex64(addr);
+		    fde.hex64(addr);
 		else
-		    fderr.hex32(addr);
-		fderr.str(": ");
+		    fde.hex32(addr);
+		fde.str(": ");
 	    }
 	    b = cpu.Read(addr, BYTE);
-	    fderr.hex8(b);
-	    fderr.chr(' ');
+	    fde.hex8(b);
+	    fde.chr(' ');
 	    if b < ' ' || b > '~' then b = '.';
 	    c[i] = b;
 	    i += 1;
@@ -116,9 +116,9 @@ package comd
 	    n -= 1;
 	    if (addr & 0xF) == 0 || n == 0 then
 	    {   c[i] = 0;
-		fderr.str("    ");
-		fderr.str(c);
-		fderr.nl();
+		fde.str("    ");
+		fde.str(c);
+		fde.nl();
 		i = 0;
 	    }
 	}
@@ -136,23 +136,23 @@ package comd
 	while n > 0 do
 	{   if i == 0 then
 	    {   if cpu.Addr?bits == 64 then
-		    fderr.hex64(addr);
+		    fde.hex64(addr);
 		else
-		    fderr.hex32(addr);
-		fderr.str(": ");
+		    fde.hex32(addr);
+		fde.str(": ");
 	    }
 	    h = cpu.Read(addr, HALF);
-	    fderr.hex16(h);
-	    fderr.chr(' ');
+	    fde.hex16(h);
+	    fde.chr(' ');
 	    addr += 2;
 	    i += 1;
 	    if (addr & 0xF) == 0 then
-	    {   fderr.nl();
+	    {   fde.nl();
 		i = 0;
 	    }
 	    n -= 1;
 	}
-	if (addr & 0xF) != 0 then fderr.nl();
+	if (addr & 0xF) != 0 then fde.nl();
 	logit = logsave;
     }
 
@@ -167,23 +167,23 @@ package comd
 	while n > 0 do
 	{   if i == 0 then
 	    {   if cpu.Addr?bits == 64 then
-		    fderr.hex64(addr);
+		    fde.hex64(addr);
 		else
-		    fderr.hex32(addr);
-		fderr.str(": ");
+		    fde.hex32(addr);
+		fde.str(": ");
 	    }
 	    w = cpu.Read(addr, WORD);
-	    fderr.hex32(w);
-	    fderr.chr(' ');
+	    fde.hex32(w);
+	    fde.chr(' ');
 	    addr += 4;
 	    i += 1;
 	    if (addr & 0xF) == 0 then
-	    {   fderr.nl();
+	    {   fde.nl();
 		i = 0;
 	    }
 	    n -= 1;
 	}
-	if (addr & 0xF) != 0 then fderr.nl();
+	if (addr & 0xF) != 0 then fde.nl();
 	logit = logsave;
     }
 
@@ -199,27 +199,27 @@ package comd
 	    while n > 0 do
 	    {   if i == 0 then
 		{   if cpu.Addr?bits == 64 then
-			fderr.hex64(addr);
+			fde.hex64(addr);
 		    else
-			fderr.hex32(addr);
-		    fderr.str(": ");
+			fde.hex32(addr);
+		    fde.str(": ");
 		}
 		w = cpu.Read(addr, QUAD);
-		fderr.hex64(w);
-		fderr.chr(' ');
+		fde.hex64(w);
+		fde.chr(' ');
 		addr += 8;
 		i += 1;
 		if (addr & 0xF) == 0 then
-		{   fderr.nl();
+		{   fde.nl();
 		    i = 0;
 		}
 		n -= 1;
 	    }
-	    if (addr & 0xF) != 0 then fderr.nl();
+	    if (addr & 0xF) != 0 then fde.nl();
 	    logit = logsave;
 	}
 	else	// cpu.Word?size != 64
-	    fderr.str("mdd not implemented\n");
+	    fde.str("mdd not implemented\n");
     }
 
     proc MemDisplayB(narg: _uint, args: @[]@[]_byte)
@@ -320,7 +320,7 @@ package comd
 	    }
 	}
 	else	// cpu.Word?size != 64
-	    fderr.str("mmd not implemented\n");
+	    fde.str("mmd not implemented\n");
     }
 
     const NumBP = 8;
@@ -356,8 +356,8 @@ package comd
 	for i from 0 to NumBP-1 do
 	{   if bptab[i].active then
 	    {
-		fderr.uint(i);  fderr.str(": ");
-		fderr.hex32(bptab[i].addr);  fderr.nl();
+		fde.uint(i);  fde.str(": ");
+		fde.hex32(bptab[i].addr);  fde.nl();
 	    }
 	}
     }
@@ -371,23 +371,23 @@ package comd
 	else
 	    addr = cpu.reg[cpu.PC];
 	if !AddBreakpoint(addr, false) then
-	    fderr.str("No breakpoints available\n");
+	    fde.str("No breakpoints available\n");
     }
 
     proc SetTempBreakpoint(narg: _uint, args: @[]@[]_byte)
     {
 	if narg < 2 then
-        {   fderr.str("Missing argument\n");
+        {   fde.str("Missing argument\n");
 	    return;
 	}
 	if !AddBreakpoint(GetValue(args[1]), true) then
-	    fderr.str("No breakpoints available\n");
+	    fde.str("No breakpoints available\n");
     }
 
     proc FinishBreakpoint(narg: _uint, args: @[]@[]_byte) // args unused
     {
 	if !AddBreakpoint(cpu.reg[cpu.LR], true) then
-	    fderr.str("No breakpoints available\n");
+	    fde.str("No breakpoints available\n");
     }
 
     proc DelBreakpoint(narg: _uint, args: @[]@[]_byte)
@@ -423,9 +423,9 @@ package comd
 	    }
 	}
 	else
-	{   fderr.str("Breakpoint at ");
-	    fderr.hex32(addr);
-	    fderr.str(" not found\n");
+	{   fde.str("Breakpoint at ");
+	    fde.hex32(addr);
+	    fde.str(" not found\n");
 	}
     }
 
@@ -442,12 +442,12 @@ package comd
 	if cpu.fault
 	is BKPT then
 	{
-	    fderr.str("At breakpoint\n");
+	    fde.str("At breakpoint\n");
 	    atbp = true;
 	}
 	is SVC then
 	{
-	    fderr.str("At SVC\n");
+	    fde.str("At SVC\n");
 	}
     }
 
@@ -472,7 +472,7 @@ package comd
 //	cpu.Dump();
 	if cpu.fault == BKPT then
 	{
-	    fderr.str("At breakpoint\n");
+	    fde.str("At breakpoint\n");
 	    atbp = true;
 	}
     }
@@ -482,7 +482,7 @@ package comd
 	if _defined(cpu.BackTrace) then
 	    cpu.BackTrace();
 	else
-	    fderr.str("Backtrace not implemented\n");
+	    fde.str("Backtrace not implemented\n");
     }
 
     proc SetDebug(narg: _uint, args: @[]@[]_byte)
@@ -512,12 +512,12 @@ package comd
     proc PrintChar(c: _byte)
     {
 	if c
-	is '\n' then fderr.str("\\n");
-	is '\r' then fderr.str("\\r");
-	is '\t' then fderr.str("\\t");
-	is '\\' then fderr.str("\\\\");
-	is '"'  then fderr.str("\"");
-	else fderr.chr(c);
+	is '\n' then fde.str("\\n");
+	is '\r' then fde.str("\\r");
+	is '\t' then fde.str("\\t");
+	is '\\' then fde.str("\\\\");
+	is '"'  then fde.str("\"");
+	else fde.chr(c);
     }
 
     proc Strings(narg: _uint, args: @[]@[]_byte)
@@ -529,7 +529,7 @@ package comd
 	min = 4;
 	align = 4;
         if narg < 3 then
-        {   fderr.str("Missing arguments\n");
+        {   fde.str("Missing arguments\n");
             return;
         }
         beg = GetValue(args[1]);
@@ -551,11 +551,11 @@ package comd
 	        n += 1;
 	    }
 	    if n >= min && b == 0 then
-	    {   fderr.hex32(beg);
-		fderr.str(": \"");
+	    {   fde.hex32(beg);
+		fde.str(": \"");
 		for i from 0 to n do
 		    PrintChar(_byte(cpu.Read(beg+i, BYTE)));
-		fderr.str("\"\n");
+		fde.str("\"\n");
 	    }
 	    beg += n+1;
 	}
@@ -584,7 +584,7 @@ package comd
 	if _defined(chip.SetPin) then
 	    chip.SetPin(unit, pin, val);
 	else
-	    fderr.str("Command not implemented\n");
+	    fde.str("Command not implemented\n");
     }
 
     proc DumpGPIO(narg: _uint, args: @[]@[]_byte)
@@ -598,7 +598,7 @@ package comd
 //	if _defined(chip.DumpGPIO) then
 //	    chip.DumpGPIO(fm, to);
 //	else
-	    fderr.str("Command not implemented\n");
+	    fde.str("Command not implemented\n");
     }
 
     proc Help(narg: _uint, args: @[]@[]_byte);	// forward
@@ -644,10 +644,10 @@ package comd
     {   var i: _uint;
 
 	for i from 0 to cmdtab?len-1 do
-	{   fderr.str(cmdtab[i].name);
-	    fderr.chr('\t');
-	    fderr.str(cmdtab[i].help);
-	    fderr.nl();
+	{   fde.str(cmdtab[i].name);
+	    fde.chr('\t');
+	    fde.str(cmdtab[i].help);
+	    fde.nl();
 	}
     }
 
@@ -695,8 +695,8 @@ package comd
 	last[0] = '\n';
 	loop
 	{
-	    fderr.str("> ");
-	    rv = sys.read(fdin, buf, buf?len);
+	    fde.str("> ");
+	    rv = sys.read(fdi, buf, buf?len);
 	  exit rv <= 0;
 	    k = rv;
 	    if k == 1 && buf[0] == '\n' then
@@ -729,7 +729,7 @@ package comd
 	    	    return;
 	    }
 	    else
-	    	fderr.str("Illegal command, use \"h\" for help.\n");
+		fde.str("Illegal command, use \"h\" for help.\n");
 	}
 
     }
