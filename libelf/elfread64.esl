@@ -35,6 +35,12 @@ package elfread
     type pSymbolTable: @[]elf.symbol64;
     type pStringTable: @[]_byte;
 
+    proc (pf: pFile) GetSection(ps: pSectHdr, which: _uint)
+    {
+	sys.lseek(pf.fd, pf.fh.shoff + (which * pf.fh.shentsize), SET);
+	sys.read(pf.fd, ps, elf.secthdr64?size);
+    }
+
     // returns 0 if not found, section_number+1 if found
     proc (pf: pFile) FindSection(ps: pSectHdr, which: elf.SectTypes,
 				 start: _uint): _uint
@@ -98,22 +104,29 @@ fde.str("StringTable size="); fde.uint(secthdr.size); fde.nl();
 	return pstrtab;
     }
 
-    proc (pf: pFile) GetSymbolSection(): pSymbols
+    proc (pf: pFile) GetSymbols() (psymtab: pSymbols, pstrtab: pStrings)
     {   var nsymtab: _uint;
-	var psymtab: pSymbols;
 	var nsymbol: _uint;
-	var secthdr: elf.secthdr64;
+	var symshdr: elf.secthdr64;
+	var strshdr: elf.secthdr64;
 
-	nsymtab = pf.FindSection(secthdr, SYMTAB, 0);
+	nsymtab = pf.FindSection(symshdr, SYMTAB, 0);
 	if nsymtab == 0 then
-	    return 0;
-	nsymbol = secthdr.size / secthdr.entsize;
+	{   psymtab = 0;
+	    return;
+	}
+	nsymbol = symshdr.size / symshdr.entsize;
 fde.str("SymbolTable nentries="); fde.uint(nsymbol); fde.nl();
 	psymtab = pSymbols(_new(Symbols(nsymbol)));
-	sys.lseek(pf.fd, secthdr.offset, SET);
-	sys.read(pf.fd, psymtab.sym, secthdr.size);
+	sys.lseek(pf.fd, symshdr.offset, SET);
+	sys.read(pf.fd, psymtab.sym, symshdr.size);
 	psymtab.num = nsymbol;
-	return psymtab;
+	pf.GetSection(strshdr, symshdr.link);
+fde.str("StringTable size="); fde.uint(strshdr.size); fde.nl();
+	pstrtab = pStrings(_new(Strings(strshdr.size)));
+	pstrtab.size = strshdr.size;
+	sys.lseek(pf.fd, strshdr.offset, SET);
+	sys.read(pf.fd, pstrtab.str, strshdr.size);
     }
 
 

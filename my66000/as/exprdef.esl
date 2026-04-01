@@ -9,7 +9,7 @@ package expr
     };
     type Expr: @ExprT;
 
-    proc Dump(fd: out.OutFD, e: Expr);			// forward
+    proc Dump(bd: fmt.pDesc, e: Expr);			// forward
     proc Fix(e: Expr): boolean, _uint, @SegmentT;	// forward
 
 }

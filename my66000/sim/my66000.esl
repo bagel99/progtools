@@ -53,7 +53,8 @@ package my66000
 
     var   reg:    [33]Word;	// includes PC
     // ThreadHeader word 0
-    var   instpc: Inst;		// value of PC for this instruction
+    var   instpc: Addr;		// value of PC for this instruction
+    var   nextpc: Addr;
     // ThreadHeader word 1, but not packed
     var   cbits:  _uint16 = 0;	// carry bits
     var   creg:   0..31;	// carry register
@@ -88,15 +89,8 @@ package my66000
 
     proc Fault(s:@[]_byte, info: Word)
     {
-	fde.str("\nFault cycle ");
-	fde.uint(cycles);
-	fde.str(" at ");
-	fde.hex64(instpc);
-	fde.str(" : ");
-	fde.str(s);
-	fde.str(" : ");
-	fde.hex64(info);
-	fde.nl();
+	print bde, "\nFault cycle [d] at [08x] : [s] : [x]\n",
+	    cycles, instpc, s, info;
 	fault = OTHER;
     }
 
@@ -138,9 +132,7 @@ package my66000
 	    {
 		rv = sys.read(_int(reg[Arg[1]]), addr, _uint(reg[Arg[3]]));
 		if rv < 0 then
-		{
-fde.str("read error "); fde.int(rv); fde.nl();
-		}
+		    print bde, "read error [d]\n", rv;
 		reg[Arg[1]] = SWord(rv);
 	    }
 	}
@@ -150,9 +142,7 @@ fde.str("read error "); fde.int(rv); fde.nl();
 	    {
 		rv = sys.write(_uint(reg[Arg[1]]), addr, _uint(reg[Arg[3]]));
 		if rv < 0 then
-		{
-fde.str("write error "); fde.int(rv); fde.nl();
-		}
+		    print bde, "write error [d]\n", rv;
 		reg[Arg[1]] = SWord(rv);
 	    }
 	}
@@ -172,9 +162,7 @@ fde.str("write error "); fde.int(rv); fde.nl();
 	{   rv = sys.lseek(_int(reg[Arg[1]]), _uint(reg[Arg[2]]),
 			   sys.whence_t(reg[Arg[3]]));
 	    if rv < 0 then
-	    {
-fde.str("lseek error "); fde.int(rv); fde.nl();
-	    }
+		print bde, "lseek error [d]\n", rv;
 	    reg[Arg[1]] = SWord(rv);
 	}
 	is 60 then	// exit
@@ -182,17 +170,14 @@ fde.str("lseek error "); fde.int(rv); fde.nl();
 	    fault = EXIT;
 	}
 	else
-	{
-fde.str("** Unimplemented system call "); fde.uint(n); fde.nl();
-	}
+	    print bde, "** Unimplemented system call [d]\n", n;
     }
 
     proc Read(addr: Addr, w: Width): Word
     {   var i: _uint;
 	var rv: Word;
 
-//fde.str("Read  sz="); fde.uint8(_uint8(w));
-//fde.str(" ["); fde.hex64(addr); fde.str("] = ");
+//print bde, "Read  sz=[d] [[[x]] = ", _uint8(w), addr;
         i = rlast;
         while !(addr >= memtab[i].beg && addr <= memtab[i].end) do
 	{   i += 1;
@@ -221,16 +206,14 @@ fde.str("** Unimplemented system call "); fde.uint(n); fde.nl();
 	}
 	else
 	    rv = memtab[i].read@(addr, w);
-//fde.hex64(rv); fde.nl();
+//print bde, "[x]\n", rv;
 	return rv;
     }
 
     proc Write(addr: Addr, w: Width, v: Word)
     {   var i: _uint;
 
-//fde.str("Write sz="); fde.uint8(_uint8(w));
-//fde.str(" ["); fde.hex64(addr);
-//fde.str("] = "); fde.hex64(v); fde.nl();
+//print bde, "Write sz=[d] [[[x]] = [x]\n", _uint8(w) addr, v;
         i = rlast;
         while !(addr >= memtab[i].beg && addr <= memtab[i].end) do
 	{   i += 1;
@@ -299,7 +282,7 @@ fde.str("** Unimplemented system call "); fde.uint(n); fde.nl();
 
     type CondCode: [CBits]boolean: packed;
 
-alias fde as fdx;
+alias bde as bdx;
 import disinst;
 
     proc DoLDM(fm: _uint, to: _uint, adr: Word)
@@ -339,24 +322,20 @@ import disinst;
     }
 
     proc DoSRA(src: SWord, w: _uint, o: _uint): Word
-    {
+    {   var dst: SWord;
+
 	if w != 0 then
-	{   src = src << (64 -w -o);
-	    src = src >> (64 -w);
+	{   dst = src << (64 -w -o);
+	    dst = dst >> (64 -w);
 	}
 	else
-	    src = src >> o;
-	return Word(src);
+	    dst = src >> o;
+	return Word(dst);
     }
 
     proc DoSLL(src: Word, w: _uint, o: _uint): Word
     {   var dst: Word;
 
-if db&4 != 0 then {
-fde.str("src=0x"); fde.hex64(src);
-fde.str(" w="); fde.uint(w);
-fde.str(" o="); fde.uint(o);
-fde.nl(); }
 	if w != 0 then	// FIXME - what does this mean with CI or CO
 	{   dst = src << (64 -w);
 	    dst = dst >> (64 -w -o);
@@ -422,8 +401,7 @@ fde.nl(); }
 
 	assert w != 0;
 	msk = (1 << w) - 1;
-//fde.str("BITR w="); fde.uint(w); fde.str(" o="); fde.uint(o);
-//fde.str(" msk="); fde.hex64(msk); fde.nl();
+//print bde,"BITR w=[d] o=[d] msk=[x]\n", w, o, msk;
 	if w == 0 then
 	    dst = src;
 	else
@@ -514,7 +492,7 @@ fde.nl(); }
 	is LT0 then return SWord(src) <  0;
 	is A   then return true;
 	is N   then return false;
-	fde.str("Unimplemented condition "); fde.uint8(_uint8(cond)); fde.nl();
+	print bde, "Unimplemented condition [d]\n", _uint8(cond);
 	return false;
     }
 
@@ -545,23 +523,12 @@ fde.nl(); }
 	cc[CIN] = SWord(src1) >= 0 && SWord(src1) <  SWord(src2);
 	cc[RIN] = SWord(src1) >  0 && SWord(src1) <  SWord(src2);
 if db&4 != 0 then {
-  fde.str("DoCompare=0x"); fde.hex64(src1);
-  fde.str(" : 0x"); fde.hex64(src2);
-  fde.str(" -> 0x"); fde.hex64(Word(cc)); fde.nl(); }
+print bde, "DoCompare=[!x] : [!x] -> [!x]\n", src1, src2, Word(cc); }
 	return Word(cc);
     }
 
-import float;
+    import float;
 
-    // Convert IMM5 -16..15 operand to floating point immediate
-    proc FloatImm5(value: _uint, short: _uint): Word
-    {	var tmp: _int;
-	tmp = Sext(4, value);
-	if short != 0 then
-	    return Word(_uint32(_float32*(tmp)));
-	else
-	    return Word(_float64*(tmp));
-    }
 
     proc DoDoubleCompare(s1: _float64, s2: _float64): Word
     {   var fcc: CondCode = {};	// init everything false
@@ -614,8 +581,7 @@ import float;
 	t1 = Word(fcc);
 	t2 = (~t1 & 0b1010000010101010101) << 1;// select bits to invert and shift
 	t1 |= t2;
-if db&4 != 0 then {
-  fde.str("DoDoubleCompare=0x"); fde.hex64(t1); fde.nl(); }
+if db&4 != 0 then { print bde, "DoDoubleCompare=[!x]\n", t1; }
 	return Word(t1);
     }
 
@@ -670,8 +636,7 @@ if db&4 != 0 then {
 	t1 = Word(fcc);
 	t2 = (~t1 & 0b1010000010101010101) << 1;// select bits to invert and shift
 	t1 |= t2;
-if db&4 != 0 then {
-  fde.str("DoSingleCompare=0x"); fde.hex64(Word(fcc)); fde.nl(); }
+if db&4 != 0 then { print bde, "DoDSingleCompare=[!x]\n", t1; }
 	return Word(fcc);
     }
 
@@ -679,8 +644,7 @@ if db&4 != 0 then {
 
     proc Transcend(src: Word, func: _uint, isf32: boolean, invert: boolean): Word
     {
-if db&4 != 0 then {
-fde.str("trans "); fde.hex8(_uint8(func)); }
+if db&4 != 0 then { print bde, "trans [d]\n", func; }
 	if isf32 then
 	{   if invert then src ^= 0x8000_0000;
 	    var flt: _float32 = _float32(_uint32(src));
@@ -742,10 +706,7 @@ fde.str("trans "); fde.hex8(_uint8(func)); }
     type CvtType: (U, S, F, D);
     proc Convert(src: Word, fm: CvtType, to: CvtType): Word
     {
-if db&4 != 0 then {
-fde.str("cvt ");
-fde.str(" src="); fde.hex64(src); fde.nl(); }
-
+if db&4 != 0 then { print bde, "cvt src=[x]\n", src; }
 	if to
 	is U then	// unsigned result
 	{   var unsigned: _uint64;
@@ -753,7 +714,7 @@ fde.str(" src="); fde.hex64(src); fde.nl(); }
 	    is D then unsigned = _uint64*(_float64(src));
 	    is S then unsigned = _uint64(_int64(src));
 	    is F then unsigned = _uint64*(_float32(_uint32(src)));
-	    else fde.str("unimplemented cvt mode\n");
+	    else print bde, "unimplemented cvt mode\n";
 	    return Word(unsigned);
 	}
 	is S then	// signed result
@@ -762,7 +723,7 @@ fde.str(" src="); fde.hex64(src); fde.nl(); }
 	    is D then signed = _int64*(_float64(src));
 	    is U then signed = _int64(_uint64(src));
 	    is F then signed = _int64*(_float32(_uint32(src)));
-	    else fde.str("unimplemented cvt mode\n");
+	    else print bde, "unimplemented cvt mode\n";
 	    return Word(signed);
 	}
 	is D then	// double result
@@ -771,7 +732,7 @@ fde.str(" src="); fde.hex64(src); fde.nl(); }
 	    is U then double = _float64*(_uint64(src));
 	    is F then double = _float32(_uint32(src));
 	    is S then double = _float64*(_int64(src));
-	    else fde.str("unimplemented cvt mode\n");
+	    else print bde, "unimplemented cvt mode\n";
 	    return Word(double);
 	}
 	is F then	// float result
@@ -780,392 +741,599 @@ fde.str(" src="); fde.hex64(src); fde.nl(); }
 	    is U then float = _float32*(_uint64(src));
 	    is D then float = _float64(src);
 	    is S then float = _float32*(_int64(src));
-	    else fde.str("unimplemented cvt mode\n");
+	    else print bde, "unimplemented cvt mode\n";
 	    return Word(_uint32(float));
 	}
     }
 
     proc RoundD(src: Word, src2: Word): Word
     {
-if db&4 != 0 then {
-fde.str("rnd ");
-fde.str(" src="); fde.hex64(src);
-fde.str(" src2="); fde.uint8(src2); fde.nl(); }
+if db&4 != 0 then { print bde, "rnd src=[x] src2=[d]\n", src, src2; }
 	return src;	// FIXME - temp
     }
 
     proc RoundF(src: Word, src2: Word): Word
     {
-if db&4 != 0 then {
-fde.str("rndf ");
-fde.str(" src="); fde.hex64(src);
-fde.str(" src2="); fde.uint8(src2); fde.nl(); }
+if db&4 != 0 then { print bde, "rndf src=[x] src2=[d]\n", src, src2; }
 	return src;	// FIXME - temp
     }
 
-    proc Op2(inst: Inst)
+    /*
+     * Returns src1, src2, and nnxx
+     *                         1---  src1 negated
+     *                         -1--  src2 negated
+     *                         --1-  src1 expanded from IMM5 (for FP)
+     *                         ---1  src2 expanded from IMM5 (for FP)
+     */
+    proc get2Operands(inst: Inst) (src1:Word, src2:Word, nnxx: 0..0b1111)
+    {   var op: OP2 = OP2(inst);
+	var nnID: 0..0b1111;
+
+	nnID = (inst>>5) & 0b1111;
+	nnxx = nnID;
+	src1 = reg[op.rs1];
+	src2 = reg[op.rs2];
+	if nnID			// nnxx
+	is 0b0000,		// 0000 REG,REG
+	   0b0100,		// 0100 REG,-REG
+	   0b1000,		// 1000 REG,REG
+	   0b1100 then		// 1100 -REG,-REG
+	{
+	}
+	is 0b0001 then		// 0001 REG,+IMM5
+	{   nnxx = 0b0001;
+	    src2 = op.rs2;
+	}
+	is 0b0101 then		// 0010 +IMM5,REG
+	{   nnxx = 0b0010;
+	    src1 = op.rs1;
+	}
+	is 0b1001 then		// 0101 REG,-IMM5
+	{   nnxx = 0b0101;
+	    src2 = op.rs2;
+	}
+	is 0b1101 then		// 0110 +IMM5,-REG
+	{   nnxx = 0b0110;
+	    src1 = op.rs1;
+	}
+	is 0b0010,		// 0000 REG,IMM32
+	   0b1010 then		// 1000 -REG,IMM32
+	{   nnxx &= 0b1000;
+	    src2 = Sext(31, Read(instpc+4, WORD));
+	}
+	is 0b0110,		// 0000 IMM32,REG
+	   0b1110 then		// 0100 IMM32,-REG
+	{   nnxx &= (nnxx>>1) & 0b0100;
+	    src1 = Sext(31, Read(instpc+4, WORD));
+	}
+	is 0b0011,		// 0000 REG,IMM64
+	   0b1011 then		// 1000 -REG,IMM64
+	{   nnxx &= 0b1000;
+	    src2 = Read(instpc+4, QUAD);
+	}
+	is 0b0111,		// 0000 IMM64,REG
+	   0b1111 then		// 0100 IMM64,-REG
+	{   nnxx &= (nnxx>>1) & 0b0100;
+	    src1 = Read(instpc+4, QUAD);
+	}
+    }
+
+    /*
+     * The XOP1 integer 2 operand
+     */
+    proc Op2Int(inst: Inst)
     {   var op: OP2 = OP2(inst);
 	var tmp, src1, src2: Word;
-	var inv1, inv2: boolean;
-	type Kind: (INT, LOG, FLT, MIX, CVT);
-	var kind: Kind;
-	const kindtab: [32]Kind =
-	{ INT, INT, INT, INT, INT, INT, INT, INT,	// ADD-MIN
-	  LOG, LOG, LOG, LOG, INT, INT, INT, INT,	// OR-XOR
-	  FLT, FLT, FLT, FLT, FLT, FLT, FLT, FLT,
-	  FLT, FLT, MIX, FLT, FLT, FLT, FLT, FLT
-	};
+	var nnxx: 0..0b1111;
+	var islogical: boolean;
+	var minor: _uint;
 
-	if op.minor < 0b100000 then
-	    kind = CVT;
-	else
-	    kind = kindtab[op.minor&0x1F];
-	if op.I == 0 then
-	{   if op.D != 0 then	// IMM5
-	    {	if op.s2 == 0 then
-		{   src1 = reg[op.rs1];
-		    if kind == FLT then
-			src2 = FloatImm5(op.rs2, op.S);
-		    else
-			src2 = op.rs2;
-		    inv2 = op.s1 != 0;
-		    inv1 = false;
-		}
-		else
-		{   src2 = reg[op.rs2];
-		    if kind == FLT then
-			src1 = FloatImm5(op.rs1, op.S);
-		    else
-			src1 = op.rs1;
-		    inv2 = false;
-		    inv1 = op.s1 != 0;
-		}
-	    }
-	    else	// both reg
-	    {   src1 = reg[op.rs1];
-		src2 = reg[op.rs2];
-		inv1 = op.s1 != 0;
-		inv2 = op.s2 != 0;
-	    }
-	}
-	else	// immediate used
-	{   if op.D == 0 then	// 32-bit
-	    {	tmp = Read(reg[PC], WORD);
-		if kind == FLT then
-		{   if op.S == 0 then	// expect 64-bit
-		    {   // 32-bit floats are converted to 64-bit float
-			var f64: _float64;
-			var f32: _float32;
-			f32 = _float32(_uint32(tmp));
-			f64 = f32;
-			tmp = Word(f64);
-		    }
-		}
-		else
-		    tmp = Sext(31, tmp);
-		reg[PC] += 4;
-	    }
-	    else		// 64-bit
-	    {	tmp = Read(reg[PC], QUAD);
-		reg[PC] += 8;
-	    }
-	    if op.s2 == 0 then
-	    {	src1 = reg[op.rs1];
-		src2 = tmp;
-		inv1 = op.s1 != 0;
-		inv2 = false;
-	    }
+	islogical = op.minor >= 0b1000;
+	src1, src2, nnxx = get2Operands(inst);
+	if (nnxx & 0b1000) != 0 then	// negate src1
+	{   if islogical then
+		src1 = ~src1;
 	    else
-	    {	src1 = tmp;
-		src2 = reg[op.rs2];
-		inv1 = false;
-		inv2 = op.s1 != 0;
-	    }
+		src1 = -src1;
 	}
-
-	if inv1 then
-	{   if kindtab[op.minor&0b011111]
-	    is INT     then src1 = -src1;
-	    is LOG     then src1 = ~src1;
-	    is FLT,MIX then src1 ^= 0x8000_0000_0000_0000;	// flip sign bit
-	}
-	if inv2 then
-	{   if kindtab[op.minor&0b011111]
-	    is INT,MIX then src2 = -src2;
-	    is LOG     then src2 = ~src2;
-	    is FLT     then src2 ^= 0x8000_0000_0000_0000;	// flip sign bit
-	}
-	if op.minor
-	is 0b000001 then	// CVTII
-	{   if op.S == 0 then
-		tmp = Convert(src1, U, S);
+	if (nnxx & 0b0100) != 0 then	// negate src2
+	{   if islogical then
+		src2 = ~src2;
 	    else
-		tmp = Convert(src1, S, U);
+		src2 = -src2;
 	}
-	is 0b000010 then	// CVTSF
-	{   if op.S == 0 then
-		tmp = Convert(src1, S, D);
-	    else
-		tmp = Convert(src1, S, F);
-	}
-	is 0b000011 then	// CVTUF
-	{   if op.S == 0 then
-		tmp = Convert(src1, U, D);
-	    else
-		tmp = Convert(src1, U, F);
-	}
-	is 0b010001 then	// CVTDI
-	{   if op.S == 0 then
-		tmp = Convert(src1, D, U);
-	    else
-		tmp = Convert(src1, D, S);
-	}
-	is 0b010010 then	// CVTFI
-	{   if op.S == 0 then
-		tmp = Convert(src1, F, U);
-	    else
-		tmp = Convert(src1, F, S);
-	}
-	is 0b010011 then	// CVTFF
-	{   if op.S == 0 then
-		tmp = Convert(src1, D, F);
-	    else
-		tmp = Convert(src1, F, D);
-	}
-	is 0b010100 then	// RND
-	{   if op.S == 0 then
-		tmp = RoundD(src1,src2);
-	    else
-		tmp = RoundF(src1,src2);
-	}
-	is 0b100001 then	// ADD
+	minor = (inst >> 9) & 0b1111_1_11;
+if db&4 != 0 then {
+print bde, "Op2 logical=[t] minor=[07b] src1=[016x] src2=[016x]\n",
+islogical, minor, src1, src2;
+}
+	if minor
+	// The 64-bit operations
+	is 0b0001_0_00 then	// ADD
+	    tmp = DoAdd(src1,src2);
+	is 0b0001_1_00 then	// ADDS
 	{   tmp = DoAdd(src1,src2);
 	    // FIXME - check signed overflow if S-bit set
 	}
-	is 0b100010 then	// MUL
+	is 0b0010_0_00 then	// MUL
+	    tmp = DoMul(src1,src2);
+	is 0b0010_1_00 then	// MULS
 	{   tmp = DoMul(src1,src2);
 	    // FIXME - check signed
 	}
-	is 0b100011 then	// DIV
+	is 0b0011_0_00 then	// DIV
+	    tmp = DoDiv(src1,src2);
+	is 0b0011_1_00 then	// DIVS
 	{   tmp = DoDiv(src1,src2);
 	    // FIXME - check signed
 	}
-	is 0b100100 then	// CMP
+	is 0b0100_0_00 then	// CMP
 	    tmp = DoCompare(src1,src2);
-	is 0b100110 then	// MAX
+	is 0b0110_0_00 then	// MAX
 	{   tmp = src1;	// assume now and fix later
-	    if op.S != 0 then	// signed
-	    {	if SWord(tmp) < SWord(src2) then tmp = src2;
-	    }
-	    else
-	    {	if tmp < src2 then tmp = src2;
-	    }
+	    if tmp < src2 then tmp = src2;
 	}
-	is 0b100111 then	// MIN
+	is 0b0110_1_00 then	// MAXS
 	{   tmp = src1;	// assume now and fix later
-if db&4 != 0 then
-{  fde.str("MIN 0x"); fde.hex64(tmp);
-   fde.str(" : ");    fde.hex64(src2);
-   fde.nl();
-}
-	    if op.S != 0 then	// signed
-	    {	if SWord(tmp) > SWord(src2) then tmp = src2;
-	    }
-	    else
-	    {	if tmp > src2 then tmp = src2;
-	    }
+	    if SWord(tmp) < SWord(src2) then tmp = src2;
 	}
-	is 0b101000 then	// OR
+	is 0b0111_0_00 then	// MIN
+	{   tmp = src1;	// assume now and fix later
+	    if tmp > src2 then tmp = src2;
+	}
+	is 0b0111_1_00 then	// MINS
+	{   tmp = src1;	// assume now and fix later
+	    if SWord(tmp) > SWord(src2) then tmp = src2;
+	}
+	is 0b1000_0_00 then	// OR
 	    tmp = src1 | src2;
-	is 0b101001 then	// XOR
+	is 0b1001_0_00 then	// XOR
 	    tmp = src1 ^ src2;
-	is 0b101010 then	// AND
+	is 0b1010_0_00 then	// AND
 	    tmp = src1 & src2;
-	is 0b110001 then	// FADD/FSUB
-	{   if op.S != 0 then	// single
-		tmp = Word(_uint32(_float32(_uint32(src1)) + _float32(_uint32(src2))));
-	    else
-		tmp = Word(_float64(src1) + _float64(src2));
+
+	// The 32-bit operations
+	is 0b0001_0_01 then	// ADDW
+	    tmp = Word(_uint32(DoAdd(src1,src2)));
+	is 0b0001_1_01 then	// ADDSW
+	{   tmp = Word(Sext(31, DoAdd(src1,src2)));
+	    // FIXME - check signed overflow
 	}
-	is 0b110010 then	// FMUL
-	{   if op.S != 0 then	// single
-		tmp = Word(_uint32(_float32(_uint32(src1)) * _float32(_uint32(src2))));
-	    else
-		tmp = Word(_float64(src1) * _float64(src2));
+	is 0b0010_0_01 then	// MULW
+	    tmp = Word(_uint32(DoMul(src1,src2)));
+	is 0b0010_1_01 then	// MULSW
+	{   tmp = Word(Sext(31, DoMul(src1,src2)));
+	    // FIXME - check signed overflow
 	}
-	is 0b110011 then	// FDIV
-	{   if op.S != 0 then	// single
-		tmp = Word(_uint32(_float32(_uint32(src1)) / _float32(_uint32(src2))));
-	    else
-		tmp = Word(_float64(src1) / _float64(src2));
+	is 0b0011_0_01 then	// DIVW
+	    tmp = Word(_uint32(DoDiv(src1,src2)));
+	is 0b0011_1_01 then	// DIVSW
+	{   tmp = Word(Sext(31, DoDiv(src1,src2)));
+	    // FIXME - check signed overflow?
 	}
-	is 0b110100 then	// FCMP
-	{   if op.S != 0 then	// single
-		tmp = DoSingleCompare(_float32(_uint32(src1)), _float32(_uint32(src2)));
-	    else
-		tmp = DoDoubleCompare(_float64(src1), _float64(src2));
-	}
-	is 0b110110 then	// FMAX
-	    Fault("FMAX not yet implemented", inst);
-	is 0b110111 then	// FMIN
-	    Fault("FMIN not yet implemented", inst);
-	is 0b111001 then	// CSGN
-	{   if op.S != 0 then	// single
-		tmp = (src1 & 0x7FFF_FFFF) | (src2 & 0x8000_0000);
-	    else
-		tmp = (src1 & 0x7FFFFFFF_FFFF_FFFF) | (src2 & 0x80000000_00000000);
-	}
-	is 0b111010 then	// EADD
-	{   if op.S == 0 then	// double
-	    {	var dbl: _float64;
-		var old, new: _int;
-		var frac: _uint64;
-		dbl = _float64(src1);
-		if dbl.isNaN() || dbl.isInf() then
-		    tmp = src1;
-		else
-		{   old = dbl.getExp();
-		    new = old + src2;
-		    frac = dbl.getFrac();
-		    tmp = Word(float64Make(dbl.getSign(),_uint(new),frac));
-		}
-	    }
-	    else		// single
-	    {
-		Fault("EADD single not yet implemented", inst);
-	    }
-	}
-	is 0b111101 then	// POW
-	    Fault("POW not yet implemented", inst);
-	is 0b111110 then	// ATAN2
-	    Fault("ATAN2 not yet implemented", inst);
+	is 0b0100_0_01 then	// CMPW
+	    tmp = DoCompare(_uint32(src1),_uint32(src2));
+	is 0b0110_0_01 then	// MAXW
+	    tmp = _max(_uint32(src1),_uint32(src2));
+	is 0b0110_1_01 then	// MAXSW
+	    tmp = Word(Sext(31, _max(_int32(src1),_int32(src2))));
+	is 0b0111_0_01 then	// MINW
+	    tmp = _min(_uint32(src1),_uint32(src2));
+	is 0b0111_1_01 then	// MINSW
+	    tmp = Word(Sext(31, _min(_int32(src1),_int32(src2))));
+	is 0b1000_0_01 then	// ORW
+	    tmp = Word(_uint32(src1 | src2));
+	is 0b1001_0_01 then	// XORW
+	    tmp = Word(_uint32(src1 ^ src2));
+	is 0b1010_0_01 then	// ANDW
+	    tmp = Word(_uint32(src1 & src2));
 	else
 	    Fault("Unimplemented instruction2", inst);
 	reg[op.rd] = tmp;
+    }
+
+    // Convert IMM5 0..15.5 operand to floating point immediate
+    proc FloatImm5(value: _uint, short: boolean): Word
+    {
+       if short then
+           return Word(_uint32(_float32*(value)/2.0));
+       else
+           return Word(_float64*(value)/2.0);
+    }
+
+    /*
+     * The XOP3 floating point 2 operand
+     */
+    proc Op2FP(inst: Inst)
+    {   var op: OP2 = OP2(inst);
+	var tmp, src1, src2: Word;
+	var nnxx: 0..0b1111;
+	var is32bit: boolean;
+	var minor: _uint;
+
+	is32bit = op.size != 0;		// FIXME 16-bit?
+	src1, src2, nnxx = get2Operands(inst);
+	// Expand IMM5
+	if (nnxx & 0b0010) != 0 then	// expand src1
+	    src1 = FloatImm5(src1, is32bit);
+	if (nnxx & 0b0001) != 0 then	// expand src2
+	    src2 = FloatImm5(src2, is32bit);
+	if (nnxx & 0b1000) != 0 then	// negate src1
+	    src1 ^= 0x8000_0000_0000_0000;	// flip sign bit
+	if (nnxx & 0b0100) != 0 then	// negate src2
+	    src2 ^= 0x8000_0000_0000_0000;	// flip sign bit
+
+	minor = (inst >> 9) & 0b1111_1_11;
+	if minor
+	is 0b0001_0_00 then	// FADD/FSUB
+	    tmp = Word(_float64(src1) + _float64(src2));
+	is 0b0010_0_00 then	// FMUL
+	    tmp = Word(_float64(src1) * _float64(src2));
+	is 0b0011_0_00 then	// FDIV
+	    tmp = Word(_float64(src1) / _float64(src2));
+	is 0b0100_0_00 then	// FCMP
+	    tmp = DoDoubleCompare(_float64(src1), _float64(src2));
+	is 0b0110_0_00 then	// FMAX
+	    tmp = Word(_max(_float64(src1), _float64(src2)));
+	is 0b0111_0_00 then	// FMIN
+	    tmp = Word(_min(_float64(src1), _float64(src2)));
+	is 0b1000_0_00 then	// CSGN
+	    tmp = (src1 & 0x7FFFFFFF_FFFF_FFFF) | (src2 & 0x80000000_00000000);
+	is 0b1001_0_00 then	// EADD
+	{	var dbl: _float64;
+	    var old, new: _int;
+	    var frac: _uint64;
+	    dbl = _float64(src1);
+	    if dbl.isNaN() || dbl.isInf() then
+		tmp = src1;
+	    else
+	    {   old = dbl.getExp();
+		new = old + src2;
+		frac = dbl.getFrac();
+		tmp = Word(float64Make(dbl.getSign(),_uint(new),frac));
+	    }
+	}
+	is 0b1101_0_00 then	// HYPOT
+	    Fault("HYPOT not yet implemented", inst);
+	is 0b1110_0_00 then	// FPOW
+	    Fault("POW not yet implemented", inst);
+	is 0b1111_0_00 then	// FATAN2
+	    Fault("ATAN2 not yet implemented", inst);
+
+	is 0b0001_0_01 then	// FADDF/FSUBF
+	    tmp = Word(_uint32(_float32(_uint32(src1)) + _float32(_uint32(src2))));
+	is 0b0010_0_01 then	// FMULF
+	    tmp = Word(_uint32(_float32(_uint32(src1)) * _float32(_uint32(src2))));
+	is 0b0011_0_01 then	// FDIVF
+	    tmp = Word(_uint32(_float32(_uint32(src1)) / _float32(_uint32(src2))));
+	is 0b0100_0_01 then	// FCMPF
+	    tmp = DoSingleCompare(_float32(_uint32(src1)), _float32(_uint32(src2)));
+	is 0b0110_0_01 then	// FMAXF
+	    tmp = Word(_uint32(_max(_float32(_uint32(src1)), _float32(_uint32(src2)))));
+	is 0b0111_0_01 then	// FMINF
+	    tmp = Word(_uint32(_min(_float32(_uint32(src1)), _float32(_uint32(src2)))));
+	is 0b1000_0_01 then	// CSGNF
+	    tmp = (src1 & 0x7FFF_FFFF) | (src2 & 0x8000_0000);
+	is 0b1001_0_01 then	// EADDF
+	    Fault("EADDF not yet implemented", inst);
+	is 0b1101_0_01 then	// HYPOT
+	    Fault("HYPOTF not yet implemented", inst);
+	is 0b1110_0_01 then	// FPOW
+	    Fault("POWF not yet implemented", inst);
+	is 0b1111_0_01 then	// FATAN2
+	    Fault("ATAN2F not yet implemented", inst);
+	else
+	    Fault("Unimplemented instruction2", inst);
+	reg[op.rd] = tmp;
+    }
+
+    proc Op1(inst: Inst)
+    {   var op: OP1 = OP1(inst);
+	var src: Word;
+	var dst: SWord;
+	var inv: boolean;	// negate source
+
+	if op.I == 0 then
+	{   if op.D != 0 then	// IMM5
+		src = Sext(4, op.rs2);
+	    else
+		src = reg[op.rs2];
+	}
+	else	// immediate used
+	{   if op.D == 0 then	// 32-bit
+		src = Sext(31,Read(reg[PC], WORD));
+	    else		// 64-bit
+		src = Read(instpc+4, QUAD);
+	}
+	inv = op.s2 != 0;
+if db&4 != 0 then {
+print bde, "Op1 minor=[04b] func=[05b] inv=[t] src=[016x]\n",
+op.minor, op.func, inv, src;
+}
+	if op.minor
+	is 0b0000 then					// HR
+	{   var R: boolean = (op.size & 0b10) != 0;
+	    var W: boolean = (op.size & 0b01) != 0;
+	    if op.func
+	    is 0 then		// IP (aka PC)
+	    {   if R then		// R
+		    reg[op.rd] = reg[PC];
+		if W then		// W
+		    nextpc = src;
+	    }
+//	    is 1 then		// Modes
+	    is 2 then		// Active
+	    {   if R then		// R
+		    reg[op.rd] = raised;
+		if W then		// W
+		    raised = src;
+	    }
+	    is 3 then		// Enabled
+	    {   if R then		// R
+		    reg[op.rd] = enabled;
+		if W then		// W
+		    enabled = src;
+	    }
+	    is 4 then		// Shadow
+	    {   if R then		// R
+		    reg[op.rd] = shadow;
+		if W then		// W
+		    shadow = src;
+	    }
+	    is 5 then		// Flags
+	    {   if R then		// R
+		    reg[op.rd] = flags;
+		if W then		// W
+		    flags = src;
+	    }
+	    is 6 then		// Rounding Modes
+	    {   if R then		// R
+		    reg[op.rd] = roundm;
+		if W then		// W
+		    roundm = src;
+		// FIXME - if rounding modes set, set them on host too
+	    }
+//	    is 7 then		// Why
+	    else
+	        Fault("Unimplemented HR function", inst);
+	}
+	is 0b0001 then					// VEC
+	{   // The I bit should be 1, with a 32-bit immediate
+	    vreg = op.rd;
+if db&16 != 0 then { print bde, "vreg=[d]\n", vreg; }
+	    reg[op.rd] = reg[PC];
+	    vmode = true;
+	}
+	is 0b0110 then					// CLZ, ...
+	{   if inv then
+		src = ~src;
+if db&4 != 0 then {
+print bde, "\tsrc=[016x]\n", src;
+}
+	    if op.func
+	    is 0b00000 then	// CLZ
+	    {	if src == 0 then
+		    reg[op.rd] = 64;
+		else
+		    reg[op.rd] = _clznz(src);
+	    }
+	    is 0b00001 then	// FL1
+	    {	if src == 0 then
+		    reg[op.rd] = 64;
+		else
+		    reg[op.rd] = 63 - _clznz(src);
+	    }
+	    is 0b00010, 0b00011 then	// FT1, CTZ
+	    {	if src == 0 then
+		    reg[op.rd] = 64;
+		else
+		    reg[op.rd] = _ctznz(src);
+	    }
+	    else
+		Fault("Unimplemented instruction1", inst);
+	}
+	is 0b0111 then					// POP
+	{   if inv then
+		src = ~src;
+	    reg[op.rd] = _pop(src);
+	}
+	is 0b1000 then					//
+	{   if op.func
+	    is 0b00000 then
+	    {	if op.S == 0 then
+		    reg[op.rd] = src;		// MOV
+		else
+		    reg[op.rd] = _abs(src);	// ABS
+	    }
+	    is 0b00001 then		// FABS
+	    {	if op.size == 0 then
+		    reg[op.rd] = src & 0x7FFF_FFFF_FFFF_FFFF;
+		else
+		    reg[op.rd] = src & 0xFFFF_FFFF_7FFF_FFFF;
+	    }
+	    is 0b00010 then		// EXPON
+	    {   if op.size == 0 then
+		{   var dbl: _float64;
+		    if inv then src ^= 0x8000_0000_0000_0000;
+		    dbl = _float64(src);
+		    if dbl.isNaN() then
+			dst = 0;
+		    elif dbl.isNInf() then
+			dst = _int64?min;
+		    elif dbl.isPInf() then
+			dst = _int64?max;
+		    // FIXME - denorms
+		    else
+			dst = dbl.getTrueExp();
+		}
+		else
+		{   var flt: _float32;
+		    if inv then src ^= 0x8000_0000;
+		    flt = _float32(_uint32(src));
+		    if flt.isNaN() then
+			dst = 0;
+		    elif flt.isNInf() then
+			dst = _int64?min;
+		    elif flt.isPInf() then
+			dst = _int64?max;
+		    // FIXME - denorms
+		    else
+			dst = flt.getTrueExp();
+		}
+		reg[op.rd] = dst;
+	    }
+	    is 0b00011 then		// FRACT
+	    {
+		Fault("Unimplemented FRACT", inst);
+	    }
+	}
+	else
+	    Fault("Unimplemented instruction1", inst);
     }
 
     proc OpVec(inst: Inst)
     {   var op: OPVEC = OPVEC(inst);
 
 	vreg = op.rd;
-if db&16 != 0 then { fde.str("vreg="); fde.uint8(vreg); fde.nl(); }
-	reg[op.rd] = reg[PC];
+if db&16 != 0 then { print bde, "vreg=[d]\n", vreg; }
+	reg[vreg] = nextpc;
 	vmode = true;
     }
 
     proc DoLoopCompare(op: OPLOOP, inc: Word, cmp: Word): boolean
-    {
-	const SCMP: [8][2]_byte = {'EQ','NE','GE','LT','GT','LE','A ','N '};
-	const UCMP: [8][2]_byte = {'EQ','NE','HS','LO','HI','LS','A ','N '};
+    {   var cnd: _uint;
+	const CMP: [10][2]_byte =
+	{'EQ','NE','HS','LO','HI','LS','GE','LT','GT','LE'};
 
+	cnd = op.kcnd % 11;
 if db&16 != 0 then {
-fde.str(" compare "); fde.int(inc); fde.chr(' ');
-if op.s != 0 then fde.strn(SCMP[op.cnd],2); else fde.strn(UCMP[op.cnd],2);
-fde.chr(' '); fde.int(cmp); fde.nl();
+print bde, " compare [d] [c][c] [d]\n", inc, CMP[cnd][0], CMP[cnd][1], cmp;
 }
-	if op.cnd
+	if cnd
 	is 0 then return inc == cmp;
 	is 1 then return inc != cmp;
-	is 2 then if op.s != 0 then
-	         return SWord(inc) >= SWord(cmp);
-	      else
-	         return inc >= cmp;
-	is 3 then if op.s != 0 then
-	         return SWord(inc) < SWord(cmp);
-	      else
-	         return inc < cmp;
-	is 4 then if op.s != 0 then
-	         return SWord(inc) > SWord(cmp);
-	      else
-	         return inc > cmp;
-	is 5 then if op.s != 0 then
-	         return SWord(inc) <= SWord(cmp);
-	      else
-	         return inc <= cmp;
-	is 6 then return true;
-	is 7 then return false;
+	is 2 then return inc >= cmp;
+	is 3 then return inc < cmp;
+	is 4 then return inc > cmp;
+	is 5 then return inc <= cmp;
+	is 6 then return SWord(inc) >= SWord(cmp);
+	is 7 then return SWord(inc) < SWord(cmp);
+	is 8 then return SWord(inc) > SWord(cmp);
+	is 9 then return SWord(inc) <= SWord(cmp);
+	return false;
     }
 
-    proc DoLoop(inst: Inst)
-    {   var op: OPLOOP = OPLOOP(inst);
-	var inc, cmp, loop, add: _int;
 
-	loop = reg[op.rs1];
-	if op.I == 0 then			// iss=0xx
-	{   if op.s1 == 0 then			// iss=0x0
-		cmp = reg[op.rs2];
+    /*
+	nnId   Rinc  Rcmp
+	0000   REG   REG
+	0001   REG   IMM5
+	0010   REG   IMM32
+	0011   REG   IMM64
+	0101   IMM5  REG
+	0110   IMM32 REG
+	0111   IMM64 REG
+	1101   IMM5  IMM5     different from 2OP
+	1110   IMM16 IMM16    split IMM32
+	1111   IMM32 IMM32    split IMM64
+     */
+    proc GetLoopOperands(inst: Inst)
+			(increg:boolean, cmpreg: boolean, inc:Word, cmp:Word)
+    {   var op: OPLOOP = OPLOOP(inst);
+	var tmp: Word;
+	var nnID: 0..0b1111;
+
+	nnID = (inst>>5) & 0b1111;
+	if op.I != 0 then
+	{   if op.D != 0 then
+		tmp = Read(instpc+4, QUAD);
 	    else
-		cmp = op.rs2;		// IMM5
-	    if op.s2 == 0 then			// iss=00x
-		inc = reg[op.rs3];
-	    else
-		inc = op.rs3;		// IMM5
+		tmp = Read(instpc+4, WORD);
 	}
-	else					// iss=1xx
-	{   if op.s1 == 0 then			// iss=10x
-	    {   if op.s2 == 0 then		// iss=100
-		{   inc = Read(reg[PC], WORD);
-		    cmp = reg[op.rs2];
-		    reg[PC] += 4;
-		}
-		else				// iss=101
-		{   inc = reg[op.rs3];
-		    cmp = Read(reg[PC], WORD);
-		    if op.rs2 != 0 then
-		    {	inc = _int64(_int16(cmp >> 16));
-			cmp = _int64(_int16(cmp));
-if db&16 != 0 then fde.str("loop 2 IMM16\n");
-		    }
-		    reg[PC] += 4;
-		}
-	    }
-	    else				// iss=11x
-	    {   if op.s2 == 0 then		// iss=110
-		{   inc = Read(reg[PC], QUAD);
-		    cmp = reg[op.rs2];
-		    reg[PC] += 8;
-		}
-		else				// iss=111
-		{   inc = reg[op.rs3];
-		    cmp = Read(reg[PC], QUAD);
-		    if op.rs2 != 0 then
-		    {	inc = _int64(_int32(cmp >> 32));
-			cmp = _int64(_int32(cmp));
-if db&16 != 0 then fde.str("loop 2 IMM32\n");
-		    }
-		    reg[PC] += 8;
-		}
-	    }
+	inc = reg[op.rs1];
+	cmp = reg[op.rs2];
+	increg = false;
+	cmpreg = false;
+	if nnID
+	is 0b0000 then
+	{   increg = true;
+	    cmpreg = true;
 	}
+	is 0b0001 then
+	{   increg = true;
+	    cmp = Sext(4, op.rs2);
+	}
+	is 0b0010, 0b0011 then
+	{   increg = true;
+	    cmp = tmp;
+	}
+	is 0b0101 then
+	{   inc = Sext(4, op.rs1);
+	    cmpreg = true;
+	}
+	is 0b0110, 0b0111 then
+	{   inc = tmp;
+	    cmpreg = true;
+	}
+	is 0b1100 then
+	{   inc = Sext(4, op.rs1);
+	    cmp = Sext(4, op.rs2);
+	}
+	is 0b1110 then
+	{   cmp = Sext(15, _uint16(tmp));
+	    inc = Sext(15, _uint16(tmp>>16));
+	}
+	is 0b1111 then
+	{   cmp = Sext(31, _uint32(tmp));
+	    inc = Sext(31, _uint32(tmp>>16));
+	}
+    }
+
+    proc OpLoop(inst: Inst)
+    {   var op: OPLOOP = OPLOOP(inst);
+	var inc, cmp: Word;
+	var increg, cmpreg: boolean;
+	var kind: _uint;
 	var continue: boolean = true;
-if db&16 != 0 then
-{   fde.str("loop"); fde.uint(op.kind); fde.str(" loop="); fde.int64(loop); }
-	if op.kind
+
+	increg, cmpreg, inc, cmp = GetLoopOperands(inst);
+	kind = (op.kcnd / 11) + 1;
+	if kind
 	is 1 then
-	{
-if db&16 != 0 then { fde.str(" inc="); fde.int64(inc); }
-	    loop += inc;
-	    continue = DoLoopCompare(op, loop, cmp);
+	{   // add Rloop,Rloop,INC; cmp Rt,Rloop,CMP; bcnd Rt,VEC+4
+if db&16 != 0 then {
+print bde, "loop1 loop=[d], inc=[d], cmp=[d]", reg[op.rd], inc, cmp;
+}
+	    reg[op.rd] += inc;
+	    if cmpreg then cmp = reg[op.rs2];	// in case rd == rs2
+	    continue = DoLoopCompare(op, reg[op.rd], cmp);
 	}
 	is 2 then
-	{
+	{   // pne0 INC,TTT; add Rloop,Rloop,#1; cmp Rt,Rloop,CMP; bcnd Rt,VEC+4
+if db&16 != 0 then {
+print bde, "loop2 loop=[d], inc=[d], cmp=[d]", reg[op.rd], inc, cmp;
+}
 	    if inc == 0 then
 		continue = false;
 	    else
-	    {	loop += 1;
-		continue = DoLoopCompare(op, loop, cmp);
+	    {	reg[op.rd] += 1;
+		if cmpreg then cmp = reg[op.rs2];	// in case rd == rs2
+		continue = DoLoopCompare(op, reg[op.rd], cmp);
 	    }
 	}
 	is 3 then
-	{
-if db&16 != 0 then { fde.str(" inc="); fde.int64(1); }
-	    loop += 1;
+	{   // add Rloop,Rloop,#1; cmp Rt,INC,CMP; bcnd	Rt,VEC+4
+if db&16 != 0 then {
+print bde, "loop3 loop=[d], inc=[d], cmp=[d]", reg[op.rd], inc, cmp;
+}
+	    reg[op.rd] += 1;
+	    if cmpreg then cmp = reg[op.rs2];	// in case rd == rs2
+	    if increg then inc = reg[op.rs1];	// in case rd == rs1
 	    continue = DoLoopCompare(op, inc, cmp);
 	}
-	reg[op.rs1] = loop;
 	vmode = continue;
 	if continue then
-	    reg[PC] = reg[vreg];
+	    nextpc = reg[vreg];
     }
 
     proc DoFmacD(op: OP3)
@@ -1176,11 +1344,9 @@ if db&16 != 0 then { fde.str(" inc="); fde.int64(1); }
 	if op.I != 0 then	// has immediate
 	{   if op.s1 != 0 then	// 64-bit
 	    {   tmp = _float64(Read(reg[PC], QUAD));
-		reg[PC] += 8;
 	    }
 	    else		// 32-bit, convert to 64
 	    {   tmp = _float32(_uint32(Read(reg[PC], WORD)));
-		reg[PC] += 4;
 	    }
 	    if op.s2 != 0 then
 		src2 = tmp;
@@ -1204,11 +1370,9 @@ if db&16 != 0 then { fde.str(" inc="); fde.int64(1); }
 	if op.I != 0 then	// has immediate
 	{   if op.s1 != 0 then	// 64-bit weird
 	    {   tmp = _float32*(_float64(Read(reg[PC], QUAD)));
-		reg[PC] += 8;
 	    }
 	    else		// 32-bit
 	    {   tmp = _float32(_uint32(Read(reg[PC], WORD)));
-		reg[PC] += 4;
 	    }
 	    if op.s2 != 0 then
 		src2 = tmp;
@@ -1224,44 +1388,37 @@ if db&16 != 0 then { fde.str(" inc="); fde.int64(1); }
 	reg[op.rd] = Word(_uint32((_float32(_uint32(reg[op.rs1])) * src2) + src3));
     }
 
-    proc Op3(inst: Inst)
+    proc OpMux(inst: Inst)
     {   var op: OP3 = OP3(inst);
+	var src1, src2: Word;
+	var nnxx: 0..0b1111;
+
+	src1, src2, nnxx = get2Operands(inst);
+	if (nnxx & 0b1000) != 0 then	// negate src1
+	    src1 = -src1;
+	if (nnxx & 0b0100) != 0 then	// negate src2
+	    src2 = -src2;
+if db&4 != 0 then {
+print bde, "CMOV [04b] - [d] ? [x] : [x]\n", nnxx, reg[op.rs3], src1, src2;
+}
+	if reg[op.rs3] != 0 then
+	    reg[op.rd] = src1;
+	else
+	    reg[op.rd] = src2;
+    }
+
+    proc OpIns(inst: Inst)
+    {   var op: OP3 = OP3(inst);
+	var w,o: _uint;
 	var tmp3: Word;
 
-	if op.minor
-	is 0b001 then	// the varieties of MUX
-	{   if op.I != 0 then		// has immediate
-	    {	if op.s1 != 0 then	// 64-bit
-		{   tmp3 = Read(reg[PC], QUAD);
-		    reg[PC] += 8;
-		}
-		else			// 32-bit FIXME - signed?
-		{   tmp3 = Sext(31,Read(reg[PC], WORD));
-		    reg[PC] += 4;
-		}
-	    }
-	    else
-		tmp3 = reg[op.rs3];
-	    if op.s2 == 0 then	// MUX
-		reg[op.rd] = (reg[op.rs1]&reg[op.rs2]) |
-			     (~reg[op.rs1]&tmp3);
-	    else			// CMOV
-	    {	if reg[op.rs1] != 0 then
-		    reg[op.rd] = reg[op.rs2];
-		else
-		    reg[op.rd] = reg[op.rs3];
-	    }
-	}
-	is 0b010 then			// INS
-	{   var w,o: _uint;
+	// FIXME immediates
 	    if op.I != 0 then	// has immediate
 	    {	if op.s1 != 0 then	// 64-bit (never used?)
 		{   tmp3 = Read(reg[PC], QUAD);
-		    reg[PC] += 8;
 		}
 		else			// 32-bit FIXME - unsigned?
 		{   tmp3 = Read(reg[PC], WORD);
-		    reg[PC] += 4;
 		}
 		w = (tmp3 >> 6) & 0b111111;
 		o = tmp3 & 0b111111;
@@ -1272,186 +1429,15 @@ if db&16 != 0 then { fde.str(" inc="); fde.int64(1); }
 	    }
 	    o = tmp3 & 0b111111;
 	    reg[op.rd] = DoINS(reg[op.rs1], reg[op.rs2], w, o);
-	}
-	is 0b000 then DoFmacD(op);	// FMAC
-	is 0b100 then DoFmacF(op);	// FMACF
-	else
-	    Fault("Unimplemented instruction3", inst);
     }
 
-    proc Op1(inst: Inst)
-    {   var op: OP1a = OP1a(inst);
-	var opb: OP1b = OP1b(inst);
-	var src: Word;
-	var dst: SWord;
-	var inverts: boolean;	// negate source
-	var invertr: boolean;	// negate result
-/*
-	type Kind: (ZEXT, SEXT, FLTX);
-	type Decode:
-	(ILL, HR, ABS, EXPON, FRACT, POP, FF1, CVT0, CVT1, RND, TRAN, VEC);
-	const insttab: [32]Decode =
-	{ HR,	ILL,	ILL,	ILL,	ILL,	ABS,	EXPON,	FRACT,
-	  POP,	FF1,	ILL,	ILL,	ILL,	ILL,	ILL,	ILL,
-	  CVT0,	CVT1,	ILL,	ILL,	RND,	ILL,	ILL,	ILL,
-	  TRAN,	ILL,	ILL,	ILL,	ILL,	VEC,	ILL,	ILL
-	};
-	var opcode: Decode;
-
-	opcode = insttab[op.minor];
-*/
-	if opb.I == 0 then
-	{   if opb.D != 0 then	// IMM5
-		src = Sext(4, opb.rs1);	// FIXME - how should this be extended
-	    else
-		src = reg[op.rs1];
-	}
-	else	// immediate used
-	{   if opb.D == 0 then	// 32-bit
-	    {	src = Sext(31,Read(reg[PC], WORD));
-		// FIXME - how should this be extended
-		reg[PC] += 4;
-	    }
-	    else		// 64-bit
-	    {	src = Read(reg[PC], QUAD);
-		reg[PC] += 8;
-	    }
-	}
-	inverts = opb.s1 != 0;
-	invertr = opb.sd != 0;
-	if op.minor
-	is 0b000000 then			// HR
-	{   if op.func
-	    is 0 then		// IP (aka PC)
-	    {   if op.r != 0 then		// R
-		    reg[op.rd] = reg[PC];
-		if op.w != 0 then		// W
-		    reg[PC] = src;
-	    }
-//	    is 1 then		// Modes
-	    is 2 then		// Active
-	    {   if op.r != 0 then		// R
-		    reg[op.rd] = raised;
-		if op.w != 0 then		// W
-		    raised = src;
-	    }
-	    is 3 then		// Enabled
-	    {   if op.r != 0 then		// R
-		    reg[op.rd] = enabled;
-		if op.w != 0 then		// W
-		    enabled = src;
-	    }
-	    is 4 then		// Shadow
-	    {   if op.r != 0 then		// R
-		    reg[op.rd] = shadow;
-		if op.w != 0 then		// W
-		    shadow = src;
-	    }
-	    is 5 then		// Flags
-	    {   if op.r != 0 then		// R
-		    reg[op.rd] = flags;
-		if op.w != 0 then		// W
-		    flags = src;
-	    }
-	    is 6 then		// Rounding Modes
-	    {   if op.r != 0 then		// R
-		    reg[op.rd] = roundm;
-		if op.w != 0 then		// W
-		    roundm = src;
-		// FIXME - if rounding modes set, set them on host too
-	    }
-//	    is 7 then		// Why
-	    else
-	        Fault("Unimplemented HR function", inst);
-	}
-	is 0b000101 then
-	{   if opb.func == 0 then
-	    {	if opb.s == 0 then
-		    dst = _abs(src);	// ABS
-		else
-		    dst = src;		// MOV
-		if invertr then dst = -dst;
-		reg[op.rd] = dst;
-	    }
-	    else
-	    {	if opb.s == 0 then
-		    reg[op.rd] = src & 0x7FFF_FFFF_FFFF_FFFF;
-		else
-		    reg[op.rd] = src & 0xFFFF_FFFF_7FFF_FFFF;
-	    }
-	}
-	is 0b000110 then			// EXPON
-	{   if opb.s == 0 then	// double
-	    {	var dbl: _float64;
-		if inverts then src ^= 0x8000_0000_0000_0000;
-		dbl = _float64(src);
-		if dbl.isNaN() then
-		    dst = 0;
-		elif dbl.isNInf() then
-		    dst = _int64?min;
-		elif dbl.isPInf() then
-		    dst = _int64?max;
-		// FIXME - denorms
-		else
-		    dst = dbl.getTrueExp();
-	    }
-	    else		// single
-	    {	var flt: _float32;
-		if inverts then src ^= 0x8000_0000;
-		flt = _float32(_uint32(src));
-		if flt.isNaN() then
-		    dst = 0;
-		elif flt.isNInf() then
-		    dst = _int64?min;
-		elif flt.isPInf() then
-		    dst = _int64?max;
-		// FIXME - denorms
-		else
-		    dst = flt.getTrueExp();
-	    }
-	    reg[op.rd] = dst;
-	}
-	is 0b000111 then Fault("Unimplemented FRACT", inst);
-	is 0b001000 then			// POP
-	{   if inverts then
-		src = ~src;
-	    reg[opb.rd] = _pop(src);
-	}
-	is 0b001001 then			// FF1
-	{   if inverts then
-		src = ~src;
-	    if opb.func
-	    is 0b00000 then	// CLZ
-	    {	if src == 0 then
-		    reg[opb.rd] = 64;
-		else
-		    reg[opb.rd] = _clznz(src);
-	    }
-	    is 0b00001 then	// FL1
-	    {	if src == 0 then
-		    reg[opb.rd] = 64;
-		else
-		    reg[opb.rd] = 63 - _clznz(src);
-	    }
-	    is 0b00010, 0b00011 then	// FT1, CTZ
-	    {	if src == 0 then
-		    reg[opb.rd] = 64;
-		else
-		    reg[opb.rd] = _ctznz(src);
-	    }
-	    else
-		Fault("Unimplemented instruction1", inst);
-	}
-	is 0b011000 then reg[opb.rd] = Transcend(src, opb.func, opb.s != 0, inverts);
-	is 0b011101 then 	// long form VEC
-	{   // The I bit should be 1, with a 32-bit immediate
-	    vreg = op.rd;
-if db&16 != 0 then { fde.str("vreg="); fde.uint8(vreg); fde.nl(); }
-	    reg[op.rd] = reg[PC];
-	    vmode = true;
-	}
+    proc OpMac(inst: Inst)
+    {   var op: OP3 = OP3(inst);
+	if op.size
+	is 0b00 then DoFmacD(op);	// FMAC
+	is 0b01 then DoFmacF(op);	// FMACF
 	else
-	    Fault("Unimplemented instruction1", inst);
+	    Fault("Unimplemented instruction3", inst);
     }
 
     proc UpdateShadow(take: boolean, inst: Inst)
@@ -1464,12 +1450,10 @@ if db&16 != 0 then { fde.str("vreg="); fde.uint8(vreg); fde.nl(); }
 	new  = ((1 << op.else) - 1) << op.then;
 	if !take then new = ~new;
 	mask = 0xFFFF >> (16 - cnt);
-if db&4 != 0 then {
-fde.str("\tUpdateShadow: ip="); fde.hex32(_uint32(reg[PC]));
-fde.str(" take="); fde.uint8(_uint8(take));
-fde.str(" cnt="); fde.uint8(cnt);
-fde.str(" new="); fde.hex16(new);
-fde.str(" mask="); fde.hex16(mask); }
+if db&128 != 0 then {
+print bde, "UpdateShadow: ip=[x] take=[t], cnt=[d], new=[16b] mask=[16b]\n",
+reg[PC], take, cnt, new, mask;
+}
 	new &= mask;
 	if pcnt == 0 then
 	    pcnt = cnt;
@@ -1477,18 +1461,17 @@ fde.str(" mask="); fde.hex16(mask); }
 	{   // in shadow, pcnt remains the same and not increase
 	    if cnt > pcnt then
 	    {	// Shadow must not increase FIXME - a fault?
-fde.str("Shadow bad cnt: old="); fde.uint8(pcnt);
-fde.str(" new="); fde.uint8(cnt);
-fde.str(" at ip="); fde.hex32(_uint32(reg[PC])); fde.nl();
+print bde, "Shadow bad cnt: old=[d] new=[d] at ip=[x]\n", pcnt, cnt, reg[PC];
 		return;
 	    }
 	}
-if db&4 != 0 then {
-fde.str(" old="); fde.hex16(shadow);
-fde.str(" this="); fde.hex16(new); }
+if db&128 != 0 then {
+print bde, "old=[16b] this=[16b]", shadow, new;
+}
 	shadow = new | (shadow & ~mask);
-if db&4 != 0 then {
-fde.str(" new="); fde.hex16(shadow); fde.nl(); }
+if db&128 != 0 then {
+print bde, " new=[16b] pcnt=[d]\n", shadow, pcnt;
+}
     }
 
     proc DoPb1(inst: Inst, src: Word)
@@ -1505,41 +1488,106 @@ fde.str(" new="); fde.hex16(shadow); fde.nl(); }
 	UpdateShadow(CheckCondition(Conditions(opc.cond), reg[opc.rs1]), inst);
     }
 
-    proc OpShfR(inst: Inst)
-    {	var ops: OPSHFR = OPSHFR(inst);
-	var src, off: Word;
+    proc OpPred(inst: Inst)
+    {   var opc: OPPC = OPPC(inst);	// assume pred on condition
+	var src: Word;
 
-	src = reg[ops.rs1];
-	off = reg[ops.rs2];
-	if ops.minor
-	is 0b0110 then reg[ops.rd] = DoROL(src, ops.w, off);
-	is 0b0111 then reg[ops.rd] = DoROR(src, ops.w, off);
-	is 0b1000 then reg[ops.rd] = DoSRL(src, ops.w, off);
-	is 0b1001 then reg[ops.rd] = DoSRA(SWord(src), ops.w, off);
-	is 0b1010 then reg[ops.rd] = DoSLL(src, ops.w, off);
-	is 0b1011 then reg[ops.rd] = DoSLA(SWord(src), ops.w, off);
-	is 0b1100 then reg[ops.rd] = DoBITR(src, ops.w, off);	// EXPERIMENTAL
+	src = reg[opc.rs1];
+	if opc.minor
+	is 0b0000 then DoPb1(inst, src);
+	is 0b0001 then DoPcnd(inst, src);
+	else
+	    Fault("Unimplemented pred instruction", inst);
+    }
+
+    proc OpPredShf(inst: Inst)
+    {	var op: OPSHFR = OPSHFR(inst);
+	var src: Word;
+
+	src = reg[op.rs1];
+if db&4 != 0 then {
+if op.minor != 0b0000 then
+print bde, "Shift1 op=[04b] o=[d] w=[d] src=[x]\n", op.minor, op.o, 0, src;
+}
+	if op.minor
+	is 0b0000 then DoPb1(inst, src);
+	is 0b0100 then reg[op.rd] = DoBITR(src, 0, op.o);	// EXPERIMENTAL
+	is 0b1000 then reg[op.rd] = DoSRL(src, 0, op.o);
+	is 0b1001 then reg[op.rd] = DoSRA(SWord(src), 0, op.o);
+	is 0b1010 then reg[op.rd] = DoSLL(src, 0, op.o);
+	is 0b1011 then reg[op.rd] = DoSLA(SWord(src), 0, op.o);
+	is 0b1100 then reg[op.rd] = DoROR(src, 0, op.o);
+	is 0b1101 then reg[op.rd] = DoROL(src, 0, op.o);
 	else
 	    Fault("Unimplemented shift instruction", inst);
     }
 
-    proc OpPredShf(inst: Inst)
-    {	var ops: OPSHF = OPSHF(inst);
-	var src: Word;
+    proc OpShfR(inst: Inst)
+    {	var op: OP2 = OP2(inst);
+	var src1, src2: Word;
+	var nnxx: 0..0b1111;
+	var offset, width: _uint;
 
-	src = reg[ops.rs1];
-	if ops.minor
-	is 0b0000 then DoPb1(inst, src);
-	is 0b0001 then DoPcnd(inst, src);
-	is 0b0110 then reg[ops.rd] = DoROL(src, ops.w, ops.o);
-	is 0b0111 then reg[ops.rd] = DoROR(src, ops.w, ops.o);
-	is 0b1000 then reg[ops.rd] = DoSRL(src, ops.w, ops.o);
-	is 0b1001 then reg[ops.rd] = DoSRA(SWord(src), ops.w, ops.o);
-	is 0b1010 then reg[ops.rd] = DoSLL(src, ops.w, ops.o);
-	is 0b1011 then reg[ops.rd] = DoSLA(SWord(src), ops.w, ops.o);
-	is 0b1100 then reg[ops.rd] = DoBITR(src, ops.w, ops.o);	// EXPERIMENTAL
+	src1, src2, nnxx = get2Operands(inst);
+	if (nnxx & 0b1000) != 0 then	// negate src1
+	    src1 = -src1;
+	if (nnxx & 0b0100) != 0 then	// negate src2
+	    src2 = -src2;
+	offset = _uint32(src2);		// lo bits
+	width  = _uint32(src2 >> 32);	// hi bits
+if db&4 != 0 then {
+print bde, "Shift2 op=[04b] o=[d] w=[d] src=[x]\n",
+	    op.minor, offset, width, src1;
+}
+	if op.minor
+	is 0b1000 then reg[op.rd] = DoSRL(src1, width, offset);
+	is 0b1001 then reg[op.rd] = DoSRA(SWord(src1), width, offset);
+	is 0b1010 then reg[op.rd] = DoSLL(src1, width, offset);
+	is 0b1011 then reg[op.rd] = DoSLA(SWord(src1), width, offset);
+	is 0b1100 then reg[op.rd] = DoROR(src1, width, offset);
+	is 0b1101 then reg[op.rd] = DoROL(src1, width, offset);
 	else
 	    Fault("Unimplemented shift instruction", inst);
+    }
+
+    proc OpShfOW(inst: Inst)
+    {	var op: OPSHF = OPSHF(inst);
+	var src: Word;
+
+	src = reg[op.rs1];
+if db&4 != 0 then {
+print bde, "Shift3 op=[04b] o=[d] w=[d] src=[x]\n", op.minor, op.o, op.w, src;
+}
+	if op.minor
+	is 0b1000 then reg[op.rd] = DoSRL(src, op.w, op.o);
+	is 0b1001 then reg[op.rd] = DoSRA(SWord(src), op.w, op.o);
+	is 0b1010 then reg[op.rd] = DoSLL(src, op.w, op.o);
+	is 0b1011 then reg[op.rd] = DoSLA(SWord(src), op.w, op.o);
+	is 0b1100 then reg[op.rd] = DoROR(src, op.w, op.o);
+	is 0b1101 then reg[op.rd] = DoROL(src, op.w, op.o);
+	else
+	    Fault("Unimplemented shift instruction", inst);
+    }
+
+    proc OpMov(inst: Inst)
+    {	var op: OPIMM = OPIMM(inst);
+	var tmp: Word;
+	var fp16: _uint64;
+
+	if (op.rs1 >> 3)
+	is 3	then tmp = Word(_int64(op.imm));  // extend signed 16-bits
+	is 2	then tmp = Word(_uint64(op.imm)); // extend unsigned 16-bits
+	is 1	then // extend FP16 to FP32
+	{   fp16 = _uint64(op.imm);
+	    tmp =  (fp16 & 0xC000) << 16;
+	    tmp |= (fp16 & 0x3FFF) << 13;
+	}
+	is 0	then // extend FP16 to FP64
+	{   fp16 = _uint64(op.imm);
+	    tmp =  (fp16 & 0xC000) << 48;
+	    tmp |= (fp16 & 0x3FFF) << 42;
+	}
+	reg[op.rd] = tmp;
     }
 
     proc OpImm(inst: Inst)
@@ -1556,164 +1604,148 @@ fde.str(" new="); fde.hex16(shadow); fde.nl(); }
 	is 0b1000 then tmp = src | tmp;		// or
 	is 0b1001 then tmp = src ^ tmp;		// xor
 	is 0b1010 then tmp = src & tmp;		// and
-	is 0b1011 then ;			// mov
 	reg[op.rd] = tmp;
     }
 
-    proc OpMMMS(op: OPMEM)
-    {   var i, fm, to: _uint;
-	var tmp: Word;
+    proc DoMM(inst: Inst)
+    {   var op: OP2 = OP2(inst);
+	var to, fm: Addr;
+	var cnt: Word;
 
-	if op.minor == 0b111000 then
-	{   tmp = Sext(31,Read(reg[PC], WORD));
-	    reg[PC] += 4;
-	}
-	to = reg[op.ri];
-	if op.I != 0 then
+	to = reg[op.rs1];
+	fm = reg[op.rd];
+	if op.I != 0 then	// we have a following immediate
 	{   if op.D != 0 then	// 64-bit immediate
-	    {	i = Read(reg[PC], QUAD);
-		reg[PC] += 8;
-	    }
+		cnt = Read(instpc+4,, QUAD);
 	    else		// 32-bit signed immediate
-	    {	i = Sext(31,Read(reg[PC], WORD));
-		reg[PC] += 4;
-	    }
+		cnt = Sext(31,Read(instpc+4, WORD));
 	}
+	else if op.D != 0 then
+	    cnt = op.rs2;
 	else
-	    i = reg[op.rb];
-	if op.minor
-	is 0b110110 then		// MM
-	{   fm = reg[op.rd];
+	    cnt = reg[op.rs2];
 if db&32 != 0 then {
-fde.str("MM fm="); fde.hex(fm); fde.str(" to="); fde.hex(to);
-fde.str(" cnt="); fde.uint(i); fde.nl(); }
-	    while i != 0 do
-	    {   Write(to, BYTE, Read(fm, BYTE));
-		if fault == NONE then
-		{   to += 1;
-		    fm += 1;
-		    i -= 1;
-		}
-		else i = 0;	// terminate loop
-	    }
-	    return;
+print bde, "MM @[x] fm=[x] to=[x] cnt=[d]\n", instpc, fm, to, cnt; }
+	while cnt != 0 do
+	{   Write(to, BYTE, Read(fm, BYTE));
+	    if fault != NONE then
+		return;
+	    to += 1;
+	    fm += 1;
+	    cnt -= 1;
 	}
-	is 0b110111 then                // MS
-	{   tmp = reg[op.rd];
-        }
-	is 0b111000 then
-	    ;	// already handled
-	is 0b111100 then
-	{   tmp = Sext(4, op.rd);
-	}
-	else
-	{   Fault("Unimplemented memory instruction", Inst(op));
-	    return;
-	}
-	// At this point, finish the MS instruction
-if db&32 != 0 then {
-fde.str("MS val="); fde.hex(tmp); fde.str(" to="); fde.hex(to);
-fde.str(" cnt="); fde.uint(i); fde.nl(); }
-	    while i != 0 do
-	    {   Write(to, BYTE, tmp);
-		if fault == NONE then
-		{   to += 1;
-		    i -= 1;
-		}
-		else i = 0;	// terminate loop
-	    }
     }
+
+    proc DoMS(inst: Inst, val: Word)
+    {   var op: OP2 = OP2(inst);
+	var to: Addr;
+	var cnt: Word;
+
+	val&= 0xFF;
+	to = reg[op.rs1];
+	if op.I != 0 then	// we have a following immediate
+	{   if op.D != 0 then	// 64-bit immediate
+		cnt = Read(instpc+4,, QUAD);
+	    else		// 32-bit signed immediate
+		cnt = Sext(31,Read(instpc+4, WORD));
+	}
+	else if op.D != 0 then
+	    cnt = op.rs2;
+	else
+	    cnt = reg[op.rs2];
+if db&32 != 0 then {
+print bde, "MS @[x] nnID=[d][d][d][d] val=[x] to=[x] cnt=[d]\n",
+instpc, op.s1, op.s2, op.I, op.D, val, to, cnt; }
+	while cnt != 0 do
+	{   Write(to, BYTE, val);
+	    if fault != NONE then
+		return;
+	    to += 1;
+	    cnt -= 1;
+	}
+    }
+
 
     proc OpMem(inst: Inst)
     {   var op: OPMEM = OPMEM(inst);
-	var adr, inx: Word;
+	var minor: _uint;
+	var base, disp, adr, inx, imm: Word;
 	var tmp: Word;
-	var disp, imm: _uint;
+	var width: Width;
+	const size2width: [4]Width = { QUAD, WORD, HALF, BYTE };
 
-	if op.minor >= 0b110000 then
-	{   OpMMMS(op);
-	    return;
-	}
-	if op.rb == 0 then
-	    adr = instpc;
-	else
-	    adr = reg[op.rb];
-	// displacement, if any, comes first
+	disp = 0;		// displacement, if any
 	if op.I != 0 then	// we have a following dispacement
 	{   if op.D != 0 then	// 64-bit immediate
-	    {	adr += Read(reg[PC], QUAD);
-		reg[PC] += 8;
-	    }
+		disp = Read(instpc+4,, QUAD);
 	    else		// 32-bit signed immediate
-	    {	adr += Sext(31,Read(reg[PC], WORD));
-		reg[PC] += 4;
-	    }
+		disp = Sext(31,Read(instpc+4, WORD));
 	}
-	if op.minor & 0b001000 != 0 then	// store
-	{   if op.minor & 0b010000 != 0 then	// store immediate
-	    {	if op.minor & 0b111
-		is 0b000..0b010 then	// STB,STH,STW long immediate
-		{   tmp = Sext(31,Read(reg[PC], WORD));
-		    reg[PC] += 4;
-		}
-		is 0b011 then		// STD long immediate
-		{   tmp = Read(reg[PC], QUAD);
-		    reg[PC] += 8;
-		}
-		else			// ST[BHWD] short immediate
-		{   tmp = Sext(4, op.rd);
-		}
-	    }
-	    else
-		tmp = reg[op.rd];
+	if op.rb == 0 then	// base
+	    base = instpc;
+	else
+	    base = reg[op.rb];
+	inx = 0;
+	if op.ri != 0 then	// Get indexing, maybe nullified later
+	{   inx = reg[op.ri];
+	    if op.sc != 0 then inx = inx << op.sc;
 	}
-	// Some encodings aren't indexed (e.g. LDM/STM/MM)
-	if (op.minor & 0b111000) != 0b010000 then
-	{   if op.ri != 0 then
-	    {   inx = reg[op.ri];
-		if op.sc != 0 then inx = inx << op.sc;
-		adr += inx;
-	    }
-	}
-if db&2 != 0 then {
-fde.str("adr="); fde.hex64(adr); fde.nl(); }
+	tmp = reg[op.rd];	// Get store data, maybe changed later
+	adr = base + inx + disp;
+	width = size2width[op.size];
+if db&2 != 0 then
+print bde,
+"OpMem minor=[04b] L=[d] size=[d] base=[x] inx=[x] disp=[x] adr=[x]\n",
+op.minor, op.L, op.size, base, inx, disp, adr;
+	// FIXME - atomics
 	if op.minor
-	is 0b000000 then		// LDUB
-	    reg[op.rd] = Read(adr, BYTE);
-	is 0b000001 then		// LDUH
-	    reg[op.rd] = Read(adr, HALF);
-	is 0b000010 then		// LDUW
-	    reg[op.rd] = Read(adr, WORD);
-	is 0b000011 then		// LDD
-	    reg[op.rd] = Read(adr, QUAD);
-	is 0b000100 then		// LDSB
-	    reg[op.rd] = Sext(7,Read(adr, BYTE));
-	is 0b000101 then		// LDSH
-	    reg[op.rd] = Sext(15,Read(adr, HALF));
-	is 0b000110 then		// LDSW
-	    reg[op.rd] = Sext(31,Read(adr, WORD));
-	is 0b000111 then		// LA
-	    reg[op.rd] = adr;
-	is 0b010011 then		// LDM
-	    DoLDM(op.rd, op.ri, adr);
-	is 0b010100 then		// STM
-	    DoSTM(op.rd, op.ri, adr);
-	is 0b001000, 0b011000, 0b011100 then	// STB
-	    Write(adr, BYTE, tmp);
-	is 0b001001, 0b011001, 0b011101  then	// STH
-	    Write(adr, HALF, tmp);
-	is 0b001010, 0b011010, 0b011110 then	// STW
-	    Write(adr, WORD, tmp);
-	is 0b001011, 0b011011, 0b011111 then	// STD
-	    Write(adr, QUAD, tmp);
-	is 0b100011 then			// CALX
-	{   reg[LR] = reg[PC];
-	    reg[PC] = Read(adr, QUAD);
+	is 0b0000 then			// LDD LDU{WHB}
+	    reg[op.rd] = Read(adr, width);
+	is 0b0001 then			// LA, LDS{WHB}
+	{   if op.size == 0 then	// LA
+		reg[op.rd] = adr;
+	    else
+		reg[op.rd] = Sext(31,Read(adr, width));
 	}
-	is 0b100111 then			// CALA
-	{   reg[LR] = reg[PC];
-	    reg[PC] = adr;
+	is 0b0010 then			// STD ST{WHB}
+	    Write(adr, width, tmp);
+	is 0b0110 then			// CALX/JMPX
+	{   nextpc = Read(adr, QUAD);
+	    if op.rd == 0 then
+		reg[LR] = reg[PC];
 	}
+	is 0b0111 then			// CALA
+	{   nextpc = adr;
+	    reg[LR] = reg[PC];
+	}
+	is 0b1010 then			// LDM
+	{   if op.L ==  0 then
+		DoLDM(op.rd, op.ri, adr);
+	    else
+		DoMM(inst);		// FIXME - op.size == 3
+	}
+	is 0b1011 then			// STM
+	{   if op.L ==  0 then
+		DoSTM(op.rd, op.ri, adr);
+	    else
+		DoMS(inst, reg[op.rd]);	// FIXME - op.size == 3
+	}
+	is 0b1110 then			// STx #+IMM5, MS #+IMM5
+	{   tmp = op.rd;
+	    if op.L == 0 then
+		Write(adr, width, tmp);
+	    else
+		DoMS(inst, op.rd);
+	}
+	is 0b1111 then			// STx #-IMM5, MS #-IMM5
+	{   tmp = -op.rd;
+	    if op.L == 0 then
+		Write(adr, width, tmp);
+	    else
+		DoMS(inst, -op.rd);
+	}
+	else
+	    Fault("Unimplemented instruction", inst);
     }
 
     proc DoExit(start:_uint, stop:_uint, disp:_uint)
@@ -1724,6 +1756,10 @@ fde.str("adr="); fde.hex64(adr); fde.nl(); }
 	S = (disp & 1) != 0;	// restore saved SP
 	F = (disp & 2) != 0;	// use FP not SP for save area
 	L = (disp & 4) != 0;	// saved LR to LR, not IP
+if db&64 != 0 then {
+print bde, "EXIT  start=[d] stop=[d] S=[t] F=[t] L=[t]\n",
+start, stop, S, F, L;
+}
 	if F then
 	    stack = reg[FP];
 	else
@@ -1731,13 +1767,11 @@ fde.str("adr="); fde.hex64(adr); fde.nl(); }
 	stack += (disp & ~7);
 	loop
 	{
-//fde.chr('R'); fde.uint(start); fde.nl();
 	    if start != SP || S then
 	    {	tmp = Read(stack, QUAD);
-//fde.str(" fm "); fde.hex64(stack); fde.nl();
 		stack += 8;
 		if start == LR && !L then
-		    reg[PC] = tmp;
+		    nextpc = tmp;
 		else
 		    reg[start] = tmp;
 	    }
@@ -1754,14 +1788,15 @@ fde.str("adr="); fde.hex64(adr); fde.nl(); }
 
 	S = (disp & 1) != 0;
 	F = (disp & 2) != 0;
+if db&64 != 0 then {
+print bde, "ENTER start=[d] stop=[d] S=[t] F=[t]\n", start, stop, S, F;
+}
 	stack = reg[SP];
 	loop
 	{
-//fde.chr('R'); fde.uint(stop); fde.nl();
 	    if stop != SP || S then
 	    {	stack -= 8;
 		Write(stack, QUAD, reg[stop]);
-//fde.str(" to "); fde.hex64(stack); fde.nl();
 	    }
 	    if stop == FP && F then
 		reg[FP] = stack;
@@ -1780,54 +1815,36 @@ fde.str("adr="); fde.hex64(adr); fde.nl(); }
 	    adr += instpc;
 	else
 	    adr += reg[op.rb];
+if db&2 != 0 then {
+print bdx, "adr=[x]\n", adr;
+}
 	if op.major & 0b001111
-	is 0b0000 then		// LDUB
-	    reg[op.rd] = Read(adr, BYTE);
-	is 0b0001 then		// LDUH
-	    reg[op.rd] = Read(adr, HALF);
-	is 0b0010 then		// LDUW
-	    reg[op.rd] = Read(adr, WORD);
-	is 0b0011 then		// LDD
+	is 0b0000 then		// LDD
 	    reg[op.rd] = Read(adr, QUAD);
-	is 0b0100 then		// LDSB
-	    reg[op.rd] = Sext(7,Read(adr, BYTE));
-	is 0b0101 then		// LDSH
-	    reg[op.rd] = Sext(15,Read(adr, HALF));
-	is 0b0110 then		// LDSW
-	    reg[op.rd] = Sext(31,Read(adr, WORD));
-	is 0b1000 then		// STB
-	    Write(adr, BYTE, reg[op.rd]);
-	is 0b1001 then		// STH
-	    Write(adr, HALF, reg[op.rd]);
-	is 0b1010 then		// STW
-	    Write(adr, WORD, reg[op.rd]);
-	is 0b1011 then		// STD
-	    Write(adr, QUAD, reg[op.rd]);
-	is 0b0111 then		// EXIT
+	is 0b0001 then		// LDUW
+	    reg[op.rd] = Read(adr, WORD);
+	is 0b0010 then		// LDUH
+	    reg[op.rd] = Read(adr, HALF);
+	is 0b0011 then		// LDUB
+	    reg[op.rd] = Read(adr, BYTE);
+	is 0b0100 then
 	    DoExit(op.rd, op.rb, op.imm);
-	is 0b1100 then		// ENTER
+	is 0b0101 then		// LDSW
+	    reg[op.rd] = Sext(31,Read(adr, WORD));
+	is 0b0110 then		// LDSH
+	    reg[op.rd] = Sext(15,Read(adr, HALF));
+	is 0b0111 then		// LDSB
+	    reg[op.rd] = Sext(7,Read(adr, BYTE));
+	is 0b1000 then		// STD
+	    Write(adr, QUAD, reg[op.rd]);
+	is 0b1001 then		// STW
+	    Write(adr, WORD, reg[op.rd]);
+	is 0b1010 then		// STH
+	    Write(adr, HALF, reg[op.rd]);
+	is 0b1011 then		// STB
+	    Write(adr, BYTE, reg[op.rd]);
+	is 0b1100 then
 	    DoEnter(op.rd, op.rb, op.imm);
-	// TEMP - BGL ABI
-	is 0b1101 then		// LDM
-	{   var lreg: _uint;
-	    lreg = op.rd;
-	    loop
-	    {	reg[lreg] = Read(adr, QUAD);
-	      exit lreg == 0;
-		adr += 8;
-		lreg -= 1;
-	    }
-	}
-	is 0b1110 then		// STM
-	{   var sreg: _uint;
-	    sreg = op.rd;
-	    loop
-	    {	Write(adr, QUAD, reg[sreg]);
-	      exit sreg == 0;
-		adr += 8;
-		sreg -= 1;
-	    }
-	}
     }
 
     proc OpBb(inst: Inst)
@@ -1837,11 +1854,10 @@ fde.str("adr="); fde.hex64(adr); fde.nl(); }
 
 	n = op.bit;
 	src = reg[op.rs1];
-//fde.str("OpBb src="); fde.hex64(src);
-//fde.str(" mask="); fde.hex64((1 << n)); fde.nl();
+//print bde, "OpBb src=[x] mask=[x]\n", src, (1 << n);
 	if src & (1 << n) != 0 then
 	{   shadow = 0;
-	    reg[PC] = (Sext(15, inst&0xFFFF) << 2) + instpc;
+	    nextpc = (Sext(15, inst&0xFFFF) << 2) + instpc;
 	}
     }
 
@@ -1860,6 +1876,7 @@ fde.str("adr="); fde.hex64(adr); fde.nl(); }
 	is GT0 then take = SWord(tmp) >  0;
 	is LE0 then take = SWord(tmp) <= 0;
 	is LT0 then take = SWord(tmp) <  0;
+/*
 	is DEQ then take = _float64(tmp) == 0.0;
 	is DNE then take = _float64(tmp) != 0.0;
 	is DGE then take = _float64(tmp) >= 0.0;
@@ -1872,8 +1889,9 @@ fde.str("adr="); fde.hex64(adr); fde.nl(); }
 	is FLT then take = _float32(_uint32(tmp)) <  0.0;
 	is FGT then take = _float32(_uint32(tmp)) >  0.0;
 	is FLE then take = _float32(_uint32(tmp)) <= 0.0;
+*/
 	is RET then
-	{   reg[PC] = reg[LR];
+	{   nextpc = reg[LR];
 	    return;
 	}
 	is SVC then
@@ -1881,52 +1899,45 @@ fde.str("adr="); fde.hex64(adr); fde.nl(); }
 	    return;
 	}
 	is SVR then Fault("SVR not yet implemented", inst);
+	is JTTD, JTTW, JTTH, JTTB then
+	{   var optt: OPTT = OPTT(inst);
+	    var addr, index, end: Word;
+	    var offs: SWord;
+	    var size: _uint;
+
+	    index = _min(reg[optt.rs1], optt.imm);
+	    size  = optt.size;
+	    addr = instpc + 4 + (index << (3 - size));
+if db&8 != 0 then {
+print bde, "OpJt tablesize=[d] entrysize=[d] table[[[d]]=[x]",
+op.imm, size, index, addr;
+}
+	    if size
+	    is 3 then offs = Sext(7,Read(addr, BYTE));
+	    is 2 then offs = Sext(15,Read(addr, HALF));
+	    is 1 then offs = Sext(31,Read(addr, WORD));
+	    is 0 then offs = Read(addr, QUAD);
+//	newpc = (addr & ~3) + (offs << 2);	// PC-rel to container address
+	    nextpc = instpc + (offs << 2);		// PC-rel to JT inst address
+if db&8 != 0 then print bde, " offs=[d] newpc=[x]\n", offs, nextpc;
+	    shadow = 0;
+	    return;
+	}
 	else
 	    Fault("Unimplemented branch condition instruction", inst);
 	if take then
 	{   shadow = 0;
-	    reg[PC] = (Sext(15, inst&0xFFFF) << 2) + instpc;
+	    nextpc = (Sext(15, inst&0xFFFF) << 2) + instpc;
 	}
-    }
-
-    proc OpJt(inst: Inst)
-    {	var op: OPTT = OPTT(inst);
-	var addr, index, end, newpc: Word;
-	var offs: SWord;
-
-	index = _min(reg[op.rs1], op.imm);
-if db&8 != 0 then { fde.str("OpJt imm="); fde.uint16(op.imm);
-fde.str(" index="); fde.uint(index); }
-	if op.remote then
-	{
-	}
-	else
-	    addr = reg[PC] + (index << op.sz);
-if db&8 != 0 then { fde.str(" val="); fde.hex32(addr); }
-	if op.sz
-	is 0 then offs = Sext(7,Read(addr, BYTE));
-	is 1 then offs = Sext(15,Read(addr, HALF));
-	is 2 then offs = Sext(31,Read(addr, WORD));
-	is 3 then offs = Read(addr, QUAD);
-if db&8 != 0 then { fde.str(" offs="); fde.hex32(offs); }
-//	newpc = (addr & ~3) + (offs << 2);	// PC-rel to container address
-	newpc = instpc + (offs << 2);		// PC-rel to JT inst address
-if db&8 != 0 then { fde.str(" newpc="); fde.hex32(newpc); fde.nl(); }
-	if op.call then
-	{   end = reg[PC] + (op.imm * (1 << op.sz));
-	    end = (end + 3) & ~3;
-	    reg[0] = end;
-	}
-	reg[PC] = newpc;
     }
 
 
     proc OpBr(inst: Inst)
     {	var op: OPBR = OPBR(inst);
 
-	if (op.major & 1) != 0 then reg[0] = reg[PC];
+	if (op.major & 1) != 0 then reg[0] = nextpc;
 	shadow = 0;
-	reg[PC] = (Sext(25, inst&0x03FF_FFFF) << 2) + instpc;
+	nextpc = (Sext(25, inst&0x03FF_FFFF) << 2) + instpc;
     }
 
     proc OpCarry(inst: Inst)
@@ -1934,34 +1945,30 @@ if db&8 != 0 then { fde.str(" newpc="); fde.hex32(newpc); fde.nl(); }
 
 	creg = op.rd;
 	cbits = op.imm;
-if db&4 != 0 then {
-fde.str("creg="); fde.uint8(creg);
-fde.str(" cbits=0x"); fde.hex16(cbits); fde.nl();
-}
+if db&4 != 0 then { print bde, "creg=[d] cbits=[!x]\n", creg, cbits; }
     }
 
-    proc ExtraLen(inst: Inst): _uint
-    {   var xlength, d_bit, s_immed: _uint;
+    proc InstrLen(inst: Inst): _uint
+    {   var len, major: _uint;
 
-	xlength = 0;
-	// if( instruction<31:29> = 3'b001 && instruction<15> )
-	if (inst & 0xE0008000 == 0x20008000) then
-	{   // XOPs with additional words of instruction and I bit
-	    xlength += 1;	// D bit
-	    if (inst & 0x1C000000) == 0x10000000 then
-		xlength += (inst >> 13)&1;	// s1 bit
-	    else
-		xlength += (inst >> 12)&1;	// s2 bit
+	len = 1;
+	if (inst & 0x40) != 0 then	// I bit set
+	{
+//fde.str("Len I bit set\n");
+	    // FIXME - only 2 bits of major needed -01--- or -10---
+	    major = inst >> 26;
+	    if major
+	    is 0b001000, 0b001001,	// XOP0 XOP1
+	       0b001011, 0b001101,	// XOP3 XOP5
+	       0b001110,		// XOP6
+	       0b010001, 0b010010,	// MUX, INS
+	       0b010011, 0b010101 then	// MAC LOOP
+	    {   len += 1;		// I-bit
+		len += (inst >> 5)&1;	// d-bit
+	    }
 	}
-	if (inst & 0x1C000780) == 0x04000300 then // store imm not I5
-	{	xlength += 1;
-	    if ((inst >> 5) & 3) == 3 then	// std imm
-		xlength += 1;
-	}
-if db&4 != 0 then {
-fde.str("ExtraLen="); fde.uint(xlength); fde.nl();
-}
-	return xlength * 4;	// words to bytes
+if db&256 != 0 then { print bde, "InstLen=[d]\n", len; }
+	return len * 4;	// words to bytes
     }
 
     // run a single instruction
@@ -1972,6 +1979,7 @@ fde.str("ExtraLen="); fde.uint(xlength); fde.nl();
 	var offs: _int32;	// branch offset
 	var imm: _uint64;
 	var skip: _uint8;
+	var mark: _byte = ':';
 
 	cycles += 1;
 	if reg[SP] < stackstat.min then
@@ -1984,22 +1992,22 @@ fde.str("ExtraLen="); fde.uint(xlength); fde.nl();
 	skip = 0;
 	if pcnt > 0 then
 	{   skip = shadow & 1;
-if db&4 != 0 then { fde.hex16(shadow); fde.chr(' '); }
+if db&4 != 0 then { print bde, "[x] ", shadow; }
 	    shadow = shadow >> 1;
 	    pcnt -= 1;
+	    if skip != 0 then mark = '!'; else mark = '*';
 	}
 if db&1 != 0 then {
-fde.hex32(_uint32(instpc));
-if skip != 0 then fde.chr('!'); else fde.chr(':');
+print bde, "[>8x][c]", instpc, mark;
 disInst(instpc);
-fde.nl();
+print bde, "\n";
 }
 	CI = boolean(cbits&1);
 	CO = boolean((cbits>>1)&1);
 	cbits = cbits >> 2;
-	reg[PC] += 4;
+	nextpc = instpc + InstrLen(inst);
 	if skip != 0 then
-	{   reg[PC] += ExtraLen(inst);
+	{   reg[PC] = nextpc;
 	    return true;
 	}
 	if (inst >> 26) & 0b111111
@@ -2007,22 +2015,27 @@ fde.nl();
 	   0b001111,
 	   0b101111, 0b110000 then	// unallocated
 	    Fault("Unallocated instruction", inst);
-	is 0b000110, 0b000111 then OpPredShf(inst);
-	is 0b001000 	      then OpShfR(inst);
-	is 0b001001	      then OpMem(inst);
-	is 0b001010           then Op2(inst);
-	is 0b001100	      then Op3(inst);
-	is 0b001101	      then Op1(inst);
-	is 0b010101	      then DoLoop(inst);
-	is 0b011000..0b011001 then OpBb(inst);
-	is 0b011010	      then OpBc(inst);
-	is 0b011011           then OpJt(inst);
-	is 0b011110..0b011111 then OpBr(inst);
-	is 0b100000..0b101110 then OpMemImm(inst);
-	is 0b110001..0b110100,
-	   0b111000..0b111011 then OpImm(inst);
-	is 0b111100	      then OpCarry(inst);
-	is 0b111101           then OpVec(inst);
+	is MOC_XOM6		then OpPred(inst);
+	is MOC_XOM7		then OpPredShf(inst);
+	is MOC_XOP0		then OpShfR(inst);
+	is MOC_MEM		then OpMem(inst);
+	is MOC_INT2		then Op2Int(inst);
+	is MOC_FP2		then Op2FP(inst);
+	is MOC_OP1		then Op1(inst);
+	is MOC_MUX		then OpMux(inst);
+	is MOC_INS		then OpIns(inst);
+	is MOC_MAC		then OpMac(inst);
+	is MOC_LOOP		then OpLoop(inst);
+	is MOC_BBIT,MOC_BBIT|1	then OpBb(inst);
+	is MOC_BCND		then OpBc(inst);
+	is 0b011110..0b011111	then OpBr(inst);
+	is 0b100000..0b101100	then OpMemImm(inst); // LD, ST, ENTER, EXIT
+	is 0b110001..0b110100	then OpImm(inst); // ADD ... CMP
+	is 0b111000..0b111010	then OpImm(inst); // OR .. AND
+	is 0b111011		then OpMov(inst);
+	is MOC_SHF	        then OpShfOW(inst);
+	is MOC_MOD		then OpCarry(inst);
+	is MOC_VEC		then OpVec(inst);
 	is 0b111111 then	// Syscall hack
 	{   if (inst & 0xFFFFFF00) == breakpoint then
 		fault = BKPT;
@@ -2031,24 +2044,23 @@ fde.nl();
 	}
 	else
 	    Fault("Unimplemented instruction", inst);
+//print bde, "nextpc=[x]\n", nextpc;
+	reg[PC] = nextpc;
 	return fault == NONE;
     }
 
     proc DumpMemTab()
     {   var i: _uint;
-	fde.str("nsegs="); fde.uint16(nmem); fde.nl();
+	print bde, "nsegs=[d]\n", nmem;
 	for i from 0 to nmem-1 do
 	{
-	    fde.hex64(memtab[i].beg);
-	    fde.chr('-');
-	    fde.hex64(memtab[i].end);
-	    fde.str(" @ ");
-	    fde.hex64(_uintptr(memtab[i].adr));
-	    fde.str(" : ");
-	    if memtab[i].flg.r then fde.chr('r');
-	    if memtab[i].flg.w then fde.chr('w');
-	    if memtab[i].flg.x then fde.chr('x');
-	    fde.nl();
+	    print bde, "[x]-[x] @ [p] :",
+		memtab[i].beg, memtab[i].end,
+		memtab[i].adr;
+	    if memtab[i].flg.r then print bde, "r";
+	    if memtab[i].flg.w then print bde, "w";
+	    if memtab[i].flg.x then print bde, "x";
+	    print bde, "\n";
 	}
     }
 
@@ -2107,68 +2119,27 @@ if db > 2 then { DumpMemTab(); }
     // display current register state
     // ****
     proc Dump()
-    {   var n: 0..32;
-
-	n = 0;
-	fde.str("r0-r3  ");
-	while n < 4 do
-	{   fde.str("  ");
-	    fde.hex64(reg[n]);
-	    n += 1;
-	}
-	fde.str("\nr4-r7  ");
-	while n < 8 do
-	{   fde.str("  ");
-	    fde.hex64(reg[n]);
-	    n += 1;
-	}
-	fde.str("\nr8-r11 ");
-	while n < 12 do
-	{   fde.str("  ");
-	    fde.hex64(reg[n]);
-	    n += 1;
-	}
-	fde.str("\nr12-r15");
-	while n < 16 do
-	{   fde.str("  ");
-	    fde.hex64(reg[n]);
-	    n += 1;
-	}
-	fde.str("\nr16-r19");
-	while n < 20 do
-	{   fde.str("  ");
-	    fde.hex64(reg[n]);
-	    n += 1;
-	}
-	fde.str("\nr20-r23");
-	while n < 24 do
-	{   fde.str("  ");
-	    fde.hex64(reg[n]);
-	    n += 1;
-	}
-	fde.str("\nr24-r27");
-	while n < 28 do
-	{   fde.str("  ");
-	    fde.hex64(reg[n]);
-	    n += 1;
-	}
-	fde.str("\nr28-r31");
-	while n < 32 do
-	{   fde.str("  ");
-	    fde.hex64(reg[n]);
-	    n += 1;
-	}
-	fde.str("\nip       ");
-	fde.hex64(reg[PC]);
-	fde.str("  ");
-	fde.hex8(shadow);
-	fde.str("  ");
-	fde.hex16(cbits);
-	fde.str("    cycles ");
-	fde.uint(cycles);
-	fde.nl();
-	fde.str("max stack usage "); fde.uint64(stackstat.max - stackstat.min);
-	fde.str(" bytes at "); fde.uint(stackstat.cycle); fde.str(" cycles\n");
+    {
+	print bde, "r0-r3    [016x]  [016x]  [016x]  [016x]\n",
+	    reg[0],  reg[1],  reg[2],  reg[3];
+	print bde, "r4-r7    [016x]  [016x]  [016x]  [016x]\n",
+	    reg[4],  reg[5],  reg[6],  reg[7];
+	print bde, "r8-r11   [016x]  [016x]  [016x]  [016x]\n",
+	    reg[8],  reg[9],  reg[10], reg[11];
+	print bde, "r12-r15  [016x]  [016x]  [016x]  [016x]\n",
+	    reg[12], reg[13], reg[14], reg[15];
+	print bde, "r16-r19  [016x]  [016x]  [016x]  [016x]\n",
+	    reg[16], reg[17], reg[18], reg[19];
+	print bde, "r20-r23  [016x]  [016x]  [016x]  [016x]\n",
+	    reg[20], reg[21], reg[22], reg[23];
+	print bde, "r24-r27  [016x]  [016x]  [016x]  [016x]\n",
+	    reg[24], reg[25], reg[26], reg[27];
+	print bde, "r28-r31  [016x]  [016x]  [016x]  [016x]\n",
+	    reg[28], reg[29], reg[30], reg[31];
+	print bde, "ip       [016x]  [02x]  [04x]    cycles  [d]\n",
+	    reg[PC], shadow, cbits, cycles;
+	print bde, "max stack usage [d] bytes at [d] cycles\n",
+	    stackstat.max - stackstat.min, stackstat.cycle;
     }
 
 
@@ -2179,9 +2150,7 @@ if db > 2 then { DumpMemTab(); }
 	while fp > reg[SP] do
 	{
 	    ra = Read(fp+8, WORD);
-	    fde.str("fp="); fde.hex64(fp);
-	    fde.str(" ra="); fde.hex64(ra);
-	    fde.nl();
+	    print bde, "fp=[x] ra=[x]\n", fp, ra;
 	    fp = Read(fp, WORD);
 	}
     }
@@ -2219,9 +2188,7 @@ package chip
 	k = j + ptrsize * argc;
 	for n from 0 to argc-1 do
 	{
-if db != 0 then {
-fde.str("argv["); fde.uint(n);
-fde.str("]="); fde.str(argv[n]@); fde.nl(); }
+if db != 0 then { print bde, "argv[[[d]] =[s]\n", n, argv[n]@; }
 	    my66000.Write(my66000.memtab[1].beg+j, QUAD, my66000.memtab[1].beg+k);
 	    i = 0;
 	    loop

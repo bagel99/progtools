@@ -1,13 +1,17 @@
 import sys;
 import zstr;
+const fdi: sys.fildes = 0;
 import out;
+alias out.fdo as fdo;
+alias out.fde as fde;
+
+import prt;
+var bdo: fmt.pDesc;
+var bde: fmt.pDesc;
 
 var db: _uint = 0;
 var logit: _uint = 2;
 
-const fdi: sys.fildes = 0;
-alias out.fdo as fdo;
-alias out.fde as fde;
 
 import elf;
 const DYNAMIC: boolean = true;
@@ -28,63 +32,6 @@ var Arg: [9]_uint =
 import my66000;
 alias my66000 as cpu;
 import srec;
-
-/*
-proc Log(msg: @[]_byte, addr: _uint32, data: _uint32)
-{
-    if logit > 0 then
-    {
-	fde.chr('\t');
-	fde.str(msg);
-	fde.str("\t@");
-	fde.hex32(addr);
-	fde.str(" =");
-	fde.hex32(data);
-	fde.nl();
-    }
-}
-
-proc LogR(msg: @[]_byte, addr: _uint32, data: _uint32, size: cpu.Width)
-{
-    if logit > 0 then
-    {
-	fde.str("\tRead  ");
-	fde.str(msg);
-	fde.str("\t[");
-	fde.hex32(addr);
-	fde.str("]->");
-	if size
-	is BYTE then { fde.hex8(_uint8(data)); fde.chr('\t'); }
-	is HALF then fde.hex16(_uint16(data));
-	is WORD then fde.hex32(data);
-	if logit > 1 then
-	{   fde.str("\t@");
-	    fde.hex32(armm.instpc);
-	}
-	fde.nl();
-    }
-}
-
-proc LogW(msg: @[]_byte, addr: _uint32, data: _uint32, size: cpu.Width)
-{
-    if logit > 0 then
-    {
-	fde.str("\tWrite ");
-	fde.str(msg);
-	fde.str("\t[");
-	fde.hex32(addr);
-	fde.str("]<-");
-	fde.hex32(data);
-	if log > 1 then
-	{   fde.str("\t@");
-	    fde.hex32(armm.instpc);
-	}
-	fde.nl();
-    }
-}
-
-*/
-
 
 proc strtou32(s: @[]_byte): _uint32
 {   var n: _uint32;
@@ -145,16 +92,15 @@ proc main(argc:_uint, argv:@[]@[]_byte):_int //[[global]]
     }
     if i >= argc then
 	return 1;
+    bde = prt.open(prt.fde, 128);
+    bde.setflush(true);
     fd = sys.open(argv[i]@, {RDONLY}, 0);
     if fd < 0 then
-    {   fde.str("Unable to open ");
-	fde.str(argv[i]@);
-	fde.nl();
+    {   print bde, "Unable to open [s]\n", argv[i]@;
 	return 1;
     }
     if db != 0 then
-    {	fde.str("Using chip "); fde.str(chip.name); fde.nl();
-    }
+	print bde, "Using chip [s]\n", chip.name;
     chip.Init(argc-i, argv[i:]);
 
     if loadmode
@@ -171,7 +117,7 @@ proc main(argc:_uint, argv:@[]@[]_byte):_int //[[global]]
 	if elfload.load(fd, MY66000, memory, false) then
 	    cpu.Load();
 	else
-	{   fde.str("Unable to load - perhaps use -b\n");
+	{   print bde, "Unable to load - perhaps use -b\n";
 	    return 2;
 	}
     }
@@ -187,7 +133,6 @@ proc main(argc:_uint, argv:@[]@[]_byte):_int //[[global]]
 	while i < n do
 	{
 	    i += 1;
-if db&1 != 0 then {fde.uint(i); fde.chr('\t'); }
 	  exit !cpu.Run();
 	}
 	if cpu.fault == EXIT then

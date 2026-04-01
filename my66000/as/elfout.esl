@@ -27,59 +27,60 @@ package elfout
 	var name: @[]_byte;
 
 	pseg = segment.list.head.next;	// skip .undef segment
-	while pseg != 0 && pseg.relocs do
+	while pseg != 0 do
 	{
-	    name = _new(_memory(_zlen(pseg.name@) + 5 + 1));
-	    name[0:5] = '.rela';
-	    name[5:_zlen(pseg.name@)] = pseg.name[0:];
-	    name[_zlen(pseg.name@) + 5] = 0;
-if debug.rel then {
-fde.str("OutReloc section "); fde.str(pseg.name);
-fde.str(" name="); fde.str(name); fde.nl();
-}
-	    psec = pf.StartSection(name, RELA, {.INFO=true});
 	    pfix = pseg.fhead;
-	    while pfix != 0 do
-	    {
-		if pfix.kind != NONE then
-		{
-		    if pfix.valt == EXPR then
-		    {   psym = pfix.expr.sym1;
-			addend = pfix.expr.offs;
-			if pfix.expr.op == SYMSUB then
-			    addend = -addend;
-		    }
-		    else
-			fde.str("OutputRelocation bad expression type\n");
-		    reloc.offset = pfix.blok.addr + pfix.boff;
-		    reloc.info.type = _uint32(pfix.kind);
-		    if psym.VeryLocal() then	// make it section relative
-		    {	symnum = psym.segm.symnum;
-			addend += psym.FinalValue();
-		    }
-		    else
-			symnum = psym.numb;
-		    reloc.info.sym  = symnum;
-		    if pfix.kind	// LD,ST is 4 bytes back
-		    is PCREL32, PCREL64 then addend += 4;
-		    reloc.addend = addend;
-		    psec.Write(reloc, reloc?size);
 if debug.rel then {
-fde.chr('\t'); fde.str(segment.KindName[pfix.kind]);
-fde.str(" offset="); fde.hex32(pfix.blok.addr + pfix.boff);
-fde.str(" kind="); fde.str(segment.ValtName[pfix.valt]);
-fde.str(" symbol="); fde.str(psym.name);
-fde.str(" symnum="); fde.uint(symnum);
-fde.str(" addend="); fde.int64(addend);
-fde.nl();
+print bde, "OutReloc section [s] fhead=[p]\n", pseg.name, pseg.fhead;
 }
+	    if pfix != 0 then
+	    {
+		name = _new(_memory(_zlen(pseg.name@) + 5 + 1));
+		name[0:5] = '.rela';
+		name[5:_zlen(pseg.name@)] = pseg.name[0:];
+		name[_zlen(pseg.name@) + 5] = 0;
+if debug.rel then {
+print bde, "reloc section name=[s]\n", name;
+}
+		psec = pf.StartSection(name, RELA, {.INFO=true});
+		while pfix != 0 do
+		{
+		    if pfix.kind != NONE then
+		    {
+			if pfix.valt == EXPR then
+			{   psym = pfix.expr.sym1;
+			    addend = pfix.expr.offs;
+			    if pfix.expr.op == SYMSUB then
+				addend = -addend;
+			}
+			else
+			    print bde, "OutputRelocation bad expression type\n";
+			reloc.offset = pfix.blok.addr + pfix.boff;
+			reloc.info.type = _uint32(pfix.kind);
+			if psym.VeryLocal() then	// make it section relative
+			{	symnum = psym.segm.symnum;
+			    addend += psym.FinalValue();
+			}
+			else
+			    symnum = psym.numb;
+			reloc.info.sym  = symnum;
+			if pfix.kind	// LD,ST is 4 bytes back
+			is PCREL32, PCREL64 then addend += 4;
+			reloc.addend = addend;
+			psec.Write(reloc, reloc?size);
+if debug.rel then {
+print bde, "\t[s] offset=[x] kind=[s] symbol=[s] symnum=[d] addend=[d]\n",
+    segment.KindName[pfix.kind], pfix.blok.addr + pfix.boff,
+    segment.ValtName[pfix.valt], psym.name, symnum, addend;
+}
+		    }
+		    pfix = pfix.next;
 		}
-		pfix = pfix.next;
+		psec.SetLink(symlink);		// link to symtab
+		psec.SetInfo(pseg.secnum);		// section number target
+		psec.SetEntrySize(elf.rel64a?size);
+		psec.FinishSection();
 	    }
-	    psec.SetLink(symlink);		// link to symtab
-	    psec.SetInfo(pseg.secnum);		// section number target
-	    psec.SetEntrySize(elf.rel64a?size);
-	    psec.FinishSection();
 	    pseg = pseg.next;
 	}
     }

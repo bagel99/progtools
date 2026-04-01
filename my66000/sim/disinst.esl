@@ -1,8 +1,8 @@
-// Before importing this, alias <somefd> as fdx.
+// Before importing this, alias <somebd> as bdx.
 
     proc PReg(reg: _uint)
     {
-	fdx.str(regname[reg]);
+	print bdx, "[s]", regname[reg];
     }
 
     proc PAddr(addr: _uint64)
@@ -11,21 +11,18 @@
 	{   var s: @[]_byte;
 	    s = GetSym(addr);
 	    if s != 0 then
-	    {	fdx.str(s);
+	    {	print bdx, "[s]", s;
 		return;
 	    }
 	}
-	fdx.str("0x");
-	fdx.hex64(_uint64(addr));
+	print bdx, "[!x]", addr;
     }
 
     proc PWO(wo: Word)
     {
-	fdx.chr('#');
-	fdx.uint8(wo&0x3F);	// offset
+	print bdx, "#[d]", wo&0x3F;	// offset
 	if ((wo>>6)&0x3F) != 0 then
-	{   fdx.str(",#");
-	    fdx.uint8((wo>>6)&0x3F);
+	{   print bdx, ",#[d]", (wo>>6)&0x3F;
 	}
     }
 
@@ -35,6 +32,7 @@
 	var op: OP3 = OP3(inst);	// gets all the registers
 	var t8: _int8;
 	var t16: _int16;
+	var dot: boolean = false;
 	const Cnd3: [32][2]_byte =
 	{   '??', '??', '??', '??', '??', '??', '??',
 	    '??', '??', '??', '??', '??', '??',
@@ -48,48 +46,51 @@
 	{   c = fmt[i];
 	  exit c == 0;
 	    if c
-	    is 'C' then
-		fdx.str(CBitNames[op.rd]);
-	    is 'D' then
-		fdx.int16(Read(ip+4, HALF));
-	    is 'E' then
-		fdx.int16(Read(ip+6, HALF));
+	    is '.' then dot = true;
+	    is 'C' then print bdx, "[s]", CBitNames[op.rd];
+	    is 'D' then print bdx, "[d]", Read(ip+4, HALF);
+	    is 'E' then print bdx, "[d]", Read(ip+6, HALF);
+	    is 'F' then		// signed I5 in Rs1
+	    {   t8 = op.rs1;
+		if t8 > 15 then t8 |= ~0xF;
+		print bdx, "[d]", t8;
+	    }
 	    is 'G' then		// signed I5 in Rs2
 	    {   t8 = op.rs2;
 		if t8 > 15 then t8 |= ~0xF;
-		fdx.int8(t8);
+		print bdx, "[d]", t8;
 	    }
 	    is 'H' then		// signed I5 in Rs3
 	    {   t8 = op.rs3;
 		if t8 > 15 then t8 |= ~0xF;
-		fdx.int8(t8);
+		print bdx, "[d]", t8;
 	    }
 	    is 'I' then		// I5 in Rs1
-		fdx.uint8(op.rs1);
+		print bdx, "[d]", op.rs1;
 	    is 'J' then		// I5 in Rs2
-		fdx.uint8(op.rs2);
-	    is 'K' then		// I5 in Rs3
-		fdx.uint8(op.rs3);
-	    is 'L' then		// signed I10 in Rs3, Rs2
-	    {   t16 = (op.rs3<<5)|op.rs2;
-		if t16 > 511 then t16 &= ~0x1FF;
-		fdx.int16(t16);
+		print bdx, "[d]", op.rs2;
+	    is 'K' then
+	    {   t8 = op.rs1;
+		print bdx, "[d].[d]", t8/2, (t8&1)*5;
 	    }
-	    is 'M' then		// optional width for dynamic shifts
+	    is 'L' then
+	    {   t8 = op.rs2;
+		print bdx, "[d].[d]", t8/2, (t8&1)*5;
+	    }
+	    is 'M' then		// optional width for shifts
 	    {	if (inst & 0xFC0) != 0 then
-		{   fdx.str(",#");
-		    fdx.uint8((inst >> 6) & 0x3F);
+		{   print bdx, ",#[d]", (inst >> 6) & 0x3F;
 		}
 	    }
-	    is 'N' then		// #w,#o or #o for status shifts
-		PWO(inst);
+	    is 'N' then		// offset for shifts
+		print bdx, "#[d]", inst & 0x3F;
 	    is 'O' then		// #w,#o for insert
 		PWO(Word(Read(ip+4, WORD)));
 	    is 'P' then		// signed I16 in dec
-		fdx.int16(_int16(_uint16(inst)));
+		print bdx, "[d]", _int16(_uint16(inst));
 	    is 'Q' then		// CND in loop
-	    {	fdx.chr(Cnd3[op.rd][0]);
-		if Cnd3[op.rd][1] != ' ' then fdx.chr(Cnd3[op.rd][1]);
+	    {	print bdx, "[c]", Cnd3[op.rd][0];
+		if Cnd3[op.rd][1] != ' ' then print bdx, "[c]", Cnd3[op.rd][1];
 	    }
 	    is 'R' then		// register Rd
 		PReg(op.rd);
@@ -99,259 +100,303 @@
 		PReg(op.rs2);
 	    is 'U' then		// register Rs3
 		PReg(op.rs3);
-	    is 'V' then
-		;
+	    is 'V' then		// unsigned I16 in hex
+		print bdx, "[!04x]", _uint16(inst);
+	    is 'A' then		// signed I16 in low half
+		print bdx, "[d]", _int16(Read(ip+4, WORD));
+	    is 'B' then		// signed I16 in high halt
+		print bdx, "[d]", _int16(Read(ip+4, WORD)>>16);
 	    is 'W' then		// signed I32 but second extension
-		fdx.int32(_uint32(Read(ip+8, WORD)));
+		print bdx, "[d]", _uint32(Read(ip+8, WORD));
 	    is 'X' then		// signed I16 in hex
-	    {	fdx.str("0x");
-		fdx.hex16(inst&0xFFFF);
-	    }
+		print bdx, "[!x]", inst&0xFFFF;
 	    is 'Y' then		// signed I32
-		fdx.int32(_int32(Read(ip+4, WORD)));
+		print bdx, "[d]", _int32(Read(ip+4, WORD));
 	    is 'Z' then		// I64
-	    {	fdx.str("0x");
-		fdx.hex64(Read(ip+4, QUAD));
-	    }
+		print bdx, "[!x]", Read(ip+4, QUAD);
 	    else
-		fdx.chr(c);
+		print bdx, "[c]", c;
 	    i += 1;
 	}
     }
 
+    const XXX: []_byte = "???";
+
     proc disOpMem(inst: Inst, ip: Word)
     {   var op: OPMEM = OPMEM(inst);
 	var addr: _uint64;
-	var minor: 0..0b111111;
-	var disp: _uint;
-	const OpName: [64]@[]_byte =
-	{ "ldub","lduh","lduw","ldd" ,"ldsb","ldsh","ldsw","la",   // 0b000xxx
-	  "stb", "sth", "stw", "std", "???", "pre", "push","???",  // 0b001xxx
-	  "???", "???", "???", "ldm", "stm", "???", "???", "???",  // 0b010xxx
-	  "stb", "sth", "stw", "std", "stb", "sth", "stw", "std",  // 0b011xxx
-	  "???", "???", "???", "calx","???", "???", "???", "cala", // 0b100xxx
-	  "???", "???", "???", "???", "???", "???", "???", "???",  // 0b101xxx
-	  "???", "???", "???", "???", "???", "???", "mm",  "ms",   // 0b110xxx
-	  "ms",  "???", "???", "???", "ms",  "???", "???", "???"   // 0b111xxx
+	var minor: _uint;
+	const OpName: [128]@[]_byte =			//   mmmm_L_zz
+	{ "ldd",  "lduw", "lduh", "ldub",		// 0b0000_0_zz
+	  "lddl", "lduwl","lduhl","ldubl",		// 0b0000_1_zz
+	  "la",   "ldsw", "ldsh", "ldsb",		// 0b0001_0_zz
+	  XXX,    "ldswl","ldshl","ldsbl",		// 0b0001_1_zz
+	  "std",  "stw",  "sth",  "stb",		// 0b0010_0_zz
+	  "stdl", "stwl", "sthl", "stbl",		// 0b0010_1_zz
+	  "pre",  XXX,    XXX,    XXX,			// 0b0011_0_zz
+	  "prel", XXX,    XXX,    XXX,			// 0b0011_1_zz
+	  XXX,    XXX,    XXX,    XXX,			// 0b0100_0_zz
+	  XXX,    XXX,    XXX,    XXX,			// 0b0100_1_zz
+	  XXX,    XXX,    XXX,    XXX,			// 0b0101_0_zz
+	  XXX,    XXX,    XXX,    XXX,			// 0b0101_1_zz
+	  "calx", XXX,    XXX,    XXX,			// 0b0110_0_zz
+	  XXX,    XXX,    XXX,    XXX,			// 0b0110_1_zz
+	  "cala", XXX,    XXX,    XXX,			// 0b0111_0_zz
+	  XXX,    XXX,    XXX,    XXX,			// 0b0111_1_zz
+	  XXX,    XXX,    XXX,    XXX,			// 0b1000_0_zz
+	  XXX,    XXX,    XXX,    XXX,			// 0b1000_1_zz
+	  XXX,    XXX,    XXX,    XXX,			// 0b1001_0_zz
+	  XXX,    XXX,    XXX,    XXX,			// 0b1001_1_zz
+	  "ldm",  XXX,    XXX,    XXX,			// 0b1010_0_zz
+	  XXX,    XXX,    XXX,    "mm",			// 0b1011_1_zz
+	  "stm",  XXX,    XXX,    XXX,			// 0b1011_0_zz
+	  XXX,    XXX,    XXX,    "ms",			// 0b1100_1_zz
+	  XXX,    XXX,    XXX,    XXX,			// 0b1100_0_zz
+	  XXX,    XXX,    XXX,    XXX,			// 0b1100_1_zz
+	  XXX,    XXX,    XXX,    XXX,			// 0b1101_0_zz
+	  XXX,    XXX,    XXX,    XXX,			// 0b1101_1_zz
+	  "std",  "stw",  "sth",  "stb",		// 0b1110_0_zz
+	  XXX,    XXX,    XXX,    "ms",			// 0b1110_1_zz
+	  "std",  "stw",  "sth",  "stb",		// 0b1111_0_zz
+	  XXX,    XXX,    XXX,    "ms",			// 0b1111_1_zz
 	};
+	var name: @[]_byte;
 
-	minor = op.minor;
-	fdx.str(OpName[minor]);
-	    if op.L == 1 then
-		fdx.chr('l');
-	    fdx.chr('\t');
-	    if minor
-	    is 0b011000 .. 0b011111 then	// store immediate
-	    {	// address displacement, if any, comes before immediate data
-		disp = 0;
-		if op.I != 0 then
-		{	disp = 4;	// 4 byte displacement
-		    if op.D != 0 then
-			disp = 8;	// 8 byte displacement
-		}
-		fdx.str("#0x");
-		if (minor & 0b100) == 0 then
-		{   if minor == 0b011011 then	// STD
-			fdx.hex64(Read(ip+disp+4, QUAD));
-		    else
-			fdx.hex32(_uint32(Read(ip+disp+4, WORD)));
-		}
-		else
-		    fdx.int(_int(Sext(4, op.rd)));
-		fdx.chr(',');
-	    }
-	    is 0b000000..0b010111 then	// normal register src/dst
-	    {	PReg(op.rd);
-		fdx.chr(',');
-	    }
-	    is 0b110110, 0b110111, 0b111000, 0b111100 then	// MM, MS
-	    {	var cnt: Word;
-		var val: _uint8;
-		var offs: _uint = ip+4;
-		PReg(op.ri); fdx.chr(',');
-		if op.minor == 0b111000 then
-		{   fdx.chr('#');
-		    val = _uint8(Read(offs, WORD));
-		    offs += 4;
-		    fdx.uint8(val);
-		}
-		elif op.minor == 0b111100 then
-		{   fdx.chr('#');
-		    fdx.uint8(op.rd);
-		}
-		else
-		    PReg(op.rd);
-		fdx.chr(',');
-		if op.I != 0 then
-		{   fdx.chr('#');
-		    if op.D == 0 then	// 32-bit
-		    {   cnt = _int32(Read(offs, WORD));
-			fdx.int32(_int32(cnt));
-		    }
-		    else
-		    {   cnt = Read(offs, QUAD);
-			fdx.str("0x");
-			fdx.hex64(cnt);
-		    }
-		}
-		else
-		    PReg(op.rb);
-		return;
-	    }
-	    if minor
-	    is 0b010011, 0b010100 then	// LDM,STM
-	    {	PReg(op.ri); fdx.chr(',');
+	minor = (inst >> 9) & 0b1111_1_11;
+	name = OpName[minor];
+	if (minor >> 3) == 0b0110 && op.rd == 1 then
+	    name = "jmpx";
+	print bdx, "[s]\t", name;
+	if minor >> 3
+	is 0b0000, 0b0001, 0b0010, 0b0011 then	// normal load/store
+	{   PReg(op.rd);
+	    print bdx, ",";
+	}
+	is 0b1010, 0b1011 then
+	{   if op.L == 0 then	// ldm, stm
+	    {	PReg(op.rd); print bdx, ",";
+		PReg(op.ri); print bdx, ",";
 		op.ri = 0;	// defeat indexing
 	    }
-	    fdx.chr('[');
-	    if op.rb == 0 then PReg(32); else PReg(op.rb);
-	    if op.ri != 0 then
-	    {	fdx.chr(',');
-		PReg(op.ri);
-		if op.sc != 0 then
-		{   fdx.str("<<");
-		    fdx.uint(op.sc);
-		}
-	    }
-	    if op.I != 0 then
-	    {	fdx.chr(',');
-		if op.D == 0 then	// 32-bit
-		{   addr = _int32(Read(ip+4, WORD));
-		    fdx.int32(_int32(addr));
+	    else		// mm, ms
+	    {	PReg(op.rb); print bdx, ",";
+		PReg(op.rd); print bdx, ",";
+		if op.I == 0 then
+		{   if op.D == 0 then
+			PReg(op.ri);
+		    else
+			print bdx, "#[d]", op.ri;
 		}
 		else
-		{   addr = Read(ip+4, QUAD);
-		    fdx.str("0x");
-		    fdx.hex64(addr);
+		{   if op.D == 0 then
+			print bdx, "#[d]", Read(ip+4, WORD);
+		    else
+			print bdx, "#[!x]", Read(ip+4, QUAD);
 		}
+		return;
 	    }
-	    fdx.chr(']');
-//	    if op.rb == 0 then
-//	    {   fdx.str("\t; ");
-//		PAddr(ip+addr);
-//	    }
+	}
+	is 0b1110, 0b1111 then
+	{   if op.L == 0 then	// store IMM5
+	    {
+		if op.minor == 0b1110 then	// +IMM5
+		    print bdx, "#[d],", op.rd;
+		else
+		    print bdx, "#-[d],",  op.rd;
+	    }
+	    else		// ms
+	    {	PReg(op.rb); print bdx, ",";
+		if op.minor == 0b1110 then	// +IMM5
+		    print bdx, "#[d],", op.rd;
+		else
+		    print bdx, "#-[d],",  op.rd;
+		if op.I == 0 then
+		{   if op.D == 0 then
+			PReg(op.ri);
+		    else
+			print bdx, "#[d]", op.ri;
+		}
+		else
+		{   if op.D == 0 then
+			print bdx, "#[d]", Read(ip+4, WORD);
+		    else
+			print bdx, "#[!x]", Read(ip+4, QUAD);
+		}
+		return;
+	    }
+	}
+	// address syntax follows
+	print bdx, "[[";
+	if op.rb == 0 then PReg(32); else PReg(op.rb);
+	if op.ri != 0 then
+	{   print bdx, ",";
+	    PReg(op.ri);
+	    if op.sc != 0 then
+		print bdx, "<<[d]", op.sc;
+	}
+	if op.I != 0 then
+	{   if op.D == 0 then	// 32-bit
+	    {   addr = _int32(Read(ip+4, WORD));
+		print bdx, ",[d]", _int32(addr);
+	    }
+	    else
+	    {   addr = Read(ip+4, QUAD);
+		print bdx, ",[!x]", addr;
+	    }
+	}
+	print bdx, "]";
+
     }
 
-    proc disOp2(inst: Inst, ip: Word)
+    proc disOp2Int(inst: Inst, ip: Word)
     {   var op: OP2 = OP2(inst);
-	var minor: 0..0b111111;
-	const OpNameU: [64]@[]_byte =
-	{ "???",  "cvtus","cvtsd","cvtud","???",  "???",  "???",  "???",
-	  "???",  "???",  "???",  "???",  "???",  "???",  "???",  "???",
-	  "???",  "cvtdu","cvtfu","cvtdf","rnd",  "???",  "???",  "???",
-	  "???",  "???",  "???",  "???",  "???",  "???",  "???",  "???",
-	  "???",  "add",  "mul",  "div",  "cmp",  "???",  "max",  "min",
-	  "or",   "xor",  "and",  "???",  "???",  "???",  "???",  "???",
-	  "???",  "fadd", "fmul", "fdiv", "fcmp", "???",  "fmax", "fmin",
-	  "???",  "csgn", "eadd", "???",  "???",  "fpow", "atan2","???"
+	var minor: _uint;;
+	const OpName: [128]@[]_byte =
+	{ XXX,     XXX,     XXX,     XXX,	// 0000_0_zz
+	  XXX,     XXX,     XXX,     XXX,	// 0000_1_zz
+	  "add",   "addw",  XXX,     XXX,	// 0001_0_zz
+	  "adds",  "addws", XXX,     XXX,	// 0001_1_zz
+	  "mul",   "mulw",  XXX,     XXX,	// 0010_0_zz
+	  "muls",  "mulws", XXX,     XXX,	// 0010_1_zz
+	  "div",   "divw",  XXX,     XXX,	// 0011_0_zz
+	  "divs",  "divws", XXX,     XXX,	// 0011_1_zz
+	  "cmp",   "cmpw",  XXX,     XXX,	// 0100_0_zz
+	  "???",   XXX,     XXX,     XXX,	// 0100_1_zz
+	  "???",   XXX,     XXX,     XXX,	// 0101_0_zz
+	  "???",   XXX,     XXX,     XXX,	// 0101_1_zz
+	  "max",   "maxw",  XXX,     XXX,	// 0110_0_zz
+	  "maxs",  "maxws", XXX,     XXX,	// 0110_1_zz
+	  "min",   "minw",  XXX,     XXX,	// 0111_0_zz
+	  "mins",  "minws", XXX,     XXX,	// 0111_1_zz
+	  "or",    "orw",   XXX,     XXX,	// 1000_0_zz
+	  "???",   XXX,     XXX,     XXX,	// 1000_1_zz
+	  "xor",   "xorw",  XXX,     XXX,	// 1001_0_zz
+	  "???",   XXX,     XXX,     XXX,	// 1001_1_zz
+	  "and",   "andw",  XXX,     XXX,	// 1010_0_zz
+	  XXX,     XXX,     XXX,     XXX,   	// 1010_1_zz
+	  XXX,     XXX,     XXX,     XXX,	// 1011_0_zz
+	  XXX,     XXX,     XXX,     XXX,  	// 1011_1_zz
+	  XXX,     XXX,     XXX,     XXX,	// 1100_0_zz
+	  XXX,     XXX,     XXX,     XXX,  	// 1100_1_zz
+	  XXX,     XXX,     XXX,     XXX,	// 1101_0_zz
+	  XXX,     XXX,     XXX,     XXX,  	// 1101_1_zz
+	  "cvtfu", XXX,     XXX,     XXX,	// 1110_0_zz
+	  "cvtfs", XXX,     XXX,     XXX,	// 1110_1_zz
+	  "cvtdu", XXX,     XXX,     XXX,	// 1111_0_zz
+	  "cvtds", XXX,     XXX,     XXX,	// 1111_1_zz
 	};
-	const OpNameS: [64]@[]_byte =
-	{ "???",  "cvtsu","cvtsf","cvtuf","???",  "???",  "???",  "???",
-	  "???",  "???",  "???",  "???",  "???",  "???",  "???",  "???",
-	  "???",  "cvtds","cvtfs","cvtfd","rndf", "???",  "???",  "???",
-	  "???",  "???",  "???",  "???",  "???",  "???",  "???",  "???",
-	  "???",  "adds", "muls", "divs", "cmp",  "???",  "maxs", "mins",
-	  "???",  "???",  "???",  "???",  "???",  "???",  "???",  "???",
-	  "???",  "faddf","fmulf","fdivf","fcmpf","???",  "fmaxf","fminf",
-	  "???",  "csgnf","eaddf","???",  "???",  "fpowf","atan2f","???"
+	const OpFmt: [16]@[]_byte =	// s1.s2.I.D
+	{   "R,S,T",  "R,S,#J", "R,S,#Y", "R,S,#Z",	// 00ID
+	    "R,S,-T", "R,#I,T", "R,#Y,T", "R,#Z,T",	// 01ID
+	    "R,-S,T", "R,S,#-J","R,-S,#Y","R,-S,#Z",	// 10ID
+	    "R,-S,-T","R,#I,-T","R,#Y,-T","R,#Z,-T"	// 11ID
 	};
-	const OpFmt: [16]@[]_byte =	// I.D.s1.s2
-	{   "R,S,T",	"R,S,-T",	"R,-S,T",	"R,-S,-T",
-	    "R,S,#J",	"R,#I,T",	"R,S,#-J",	"R,#-I,T",
-	    "R,S,#Y",	"R,#Y,T",	"R,-S,#Y",	"R,#Y,-T",
-	    "R,S,#Z",	"R,#Z,T",	"R,-S,#Z",	"R,#Z,-T"
-	};
-	// Map I.s1.s2.S.D into I.D.s1.s2
-	const MapSpec: [32]_byte =
-	{   0x0, 0x4, 0x0, 0x4, 0x1, 0x5, 0x1, 0x5,
-	    0x2, 0x6, 0x2, 0x6, 0x3, 0x7, 0x3, 0x7,
-	    0x8, 0xC, 0x8, 0xC, 0x9, 0xD, 0x9, 0xD,
-	    0xA, 0xE, 0xA, 0xE, 0xB, 0xF, 0xB, 0xF
-	};
-	minor = op.minor;
-	{   if op.S != 0 then fdx.str(OpNameS[op.minor]);
-			 else fdx.str(OpNameU[op.minor]);
-	    fdx.chr('\t');
-	    PFmt(inst, ip, OpFmt[MapSpec[(inst >> 11)&0b11111]]);
-//fdx.chr('\t'); fdx.hex8(MapSpec[(inst >> 11)&0b11111]);
+	minor = (inst >> 9) & 0b1111_1_11;
+//fde.str("disOp2Int minor="); fde.uint(minor);
+//fde.str(" nnId="); fde.hex8((inst >> 5)&0b1111);
+//fde.str(" name="); fde.str(OpName[minor]);
+//fde.str(" fmt="); fde.str(OpFmt[(inst >> 5)&0b1111]); fde.nl();
+	{   print bdx, "[s]\t", OpName[minor];
+	    PFmt(inst, ip, OpFmt[(inst >> 5)&0b1111]);
 	}
     }
 
-    proc disLoop(inst: Inst, ip: Word)
-    {   var op: OPLOOP = OPLOOP(inst);
-	var type: 0..3 = op.kind;
-
-	const Fmt1u: [8]@[]_byte =
-	{   "eq", "ne", "hs", "lo", "hi", "ls", "a", "n"
+    proc disOp2FP(inst: Inst, ip: Word)
+    {   var op: OP2 = OP2(inst);
+	var minor: _uint;
+	const OpName: [128]@[]_byte =
+	{ XXX,     XXX,     XXX,     XXX,   	// 0000_0_zz
+	  XXX,     XXX,     XXX,     XXX,	// 0000_1_zz
+	  XXX,     XXX,     XXX,     XXX,	// 0001_0_zz
+	  "fadd",  "faddf", XXX,     XXX,	// 0001_1_zz
+	  XXX,     XXX,     XXX,     XXX,	// 0010_0_zz
+	  "fmul",  "fmulf", XXX,     XXX,	// 0010_1_zz
+	  XXX,     XXX,     XXX,     XXX,	// 0011_0_zz
+	  "fdiv",  "fdivf", XXX,     XXX,	// 0011_1_zz
+	  XXX,     XXX,     XXX,     XXX,	// 0100_0_zz
+	  "fcmp",  "fcmpf", XXX,     XXX,	// 0100_1_zz
+	  XXX,     XXX,     XXX,     XXX,	// 0101_0_zz
+	  XXX,     XXX,     XXX,     XXX,	// 0101_1_zz
+	  XXX,     XXX,     XXX,     XXX,	// 0110_0_zz
+	  "fmax",  "fmaxf", XXX,     XXX,	// 0110_1_zz
+	  XXX,     XXX,     XXX,     XXX,	// 0111_0_zz
+	  "fmin",  "fminf", XXX,     XXX,	// 0111_1_zz
+	  "rnd",   "cvtfd", XXX,     XXX,	// 1000_0_zz
+	  "csgn",  "csgnf", XXX,     XXX,	// 1000_1_zz
+	  "cvtdf", "rndf",  XXX,     XXX,	// 1001_0_zz
+	  "eadd",  "eaddf", XXX,     XXX,	// 1001_1_zz
+	  XXX,     XXX,     XXX,     XXX,	// 1010_0_zz
+	  XXX,     XXX,     XXX,     XXX,	// 1010_1_zz
+	  XXX,     XXX,     XXX,     XXX,	// 1011_0_zz
+	  XXX,     XXX,     XXX,     XXX,	// 1011_1_zz
+	  "cvtdu", "cvtfu", XXX,     XXX,	// 1100_0_zz
+	  XXX,     XXX,     XXX,     XXX,	// 1100_1_zz
+	  "cvtds", "cvtfs", XXX,     XXX,	// 1101_0_zz
+	  "hypot", "hypotf",XXX,     XXX,	// 1101_1_zz
+	  "cvtud", "cvtuf", XXX,     XXX,	// 1110_0_zz
+	  "pow",   "powf",  XXX,     XXX,	// 1110_1_zz
+	  "cvtsd", "cvtsf", XXX,     XXX,	// 1111_0_zz
+	  "atan2", "atan2f",XXX,     XXX,	// 1111_1_zz
 	};
-	const Fmt1s: [8]@[]_byte =
-	{   "eq", "ne", "ge", "lt", "gt", "le", "a", "n"
+	const OpFmt: [16]@[]_byte =	// s1.s2.I.D
+	{   "R,S,T",  "R,S,#L", "R,S,#Y", "R,S,#Z",	// 00ID
+	    "R,S,-T", "R,#K,T", "R,#Y,T", "R,#Z,T",	// 01ID
+	    "R,-S,T", "R,S,#-L","R,-S,#Y","R,-S,#Z",	// 10ID
+	    "R,-S,-T","R,#K,-T","R,#Y,-T","R,#Z,-T"	// 11ID
 	};
-	const Fmt2: [8]@[]_byte =
-	{   "S,U,T",  "S,#K,T", "S,U,#J", "S,#K,#J",
-	    "S,#Y,T", "S,U,#Y", "S,#Z,T", "S,U,#Z"
-	};
-	const Fmt3: [8]@[]_byte =
-	{   "?",  "?", "?",  "?",
-	    "", "S,#E,#D", "?", "S,#W,#Y"
-	};
-
-	fdx.str("loop"); fdx.uint(op.kind); fdx.chr('\t');
-	if op.s == 0 then
-	    PFmt(inst, ip, Fmt1u[op.cnd]);
-	else
-	    PFmt(inst, ip, Fmt1s[op.cnd]);
-	fdx.chr(',');
-	var iss: _uint = (inst >> 13) & 0b111;	// The I,s1,s2 bits
-	if (iss == 0b101 || iss == 0b111) && op.rs2 != 0 then
-	    PFmt(inst, ip, Fmt3[iss]);
-	else
-	    PFmt(inst, ip, Fmt2[iss]);
+	minor = (inst >> 9) & 0b1111_1_11;
+	var iscvt: boolean;
+	iscvt = (minor & 0b1000_1_00) == 0b1000_0_00;
+//print bde, "disOp2FP minor=[07b], iscvt=[t]\n", minor, iscvt;
+	{   print bdx, "[s]\t", OpName[minor];
+	    PFmt(inst, ip, OpFmt[(inst >> 5)&0b1111]);
+	}
     }
 
     proc disOp3(inst: Inst, ip: Word)
     {   var op: OP3 = OP3(inst);
-	const MuxOpNames: [8]@[]_byte =
-	{ "mux", "cmov","???", "???", "mux", "???", "mux", "???"
+	const OpFmt: [16]@[]_byte =	// s1.s2.I.D
+	{   "R,U,S,T",  "R,U,S,#J", "R,U,S,#Y", "R,U,S,#Z",	// 00ID
+	    "R,U,S,-T", "R,U,#I,T", "R,U,#Y,T", "R,U,#Z,T",	// 01ID
+	    "R,U,-S,T", "R,U,S,#-J","R,U,-S,#Y","R,U,-S,#Z",	// 10ID
+	    "R,U,-S,-T","R,U,#I,-T","R,U,#Y,-T","R,U,#Z,-T"	// 11ID
 	};
-	const OpFmt: [8]@[]_byte =
-	{   "R,S,T,U",   "R,S,T,U",   "R,T",       "R,S",
-	    "R,S,T,#Y",  "R,#Y",      "R,S,T,#Z",  "R,#Z"
-	};
-	const OpFmt4: [8]@[]_byte =
+	const OpFmt2: [8]@[]_byte =
 	{   "R,S,T,U",   "R,S,T,-U",  "R,S,-T,U",  "R,S,-T,-U",
 	    "R,S,T,#Y",  "R,S,#Y,U",  "R,S,T,#Z",  "R,S,#Z,U"
 	};
+	const OpFmt3: [16]@[]_byte =	// s1.s2.I.D
+	{   "R,U,S,T",  "R,U,S,#J", "R,U,S,MN", "R,U,S,#Z",	// 00ID
+	    "R,U,S,-T", "R,U,#I,T", "R,U,#Y,T", "R,U,#Z,T",	// 01ID
+	    "R,U,-S,T", "R,U,S,#-J","R,U,-S,MN","R,U,-S,#Z",	// 10ID
+	    "R,U,-S,-T","R,U,#I,-T","R,U,#Y,-T","R,U,#Z,-T"	// 11ID
+	};
 
-	if op.minor
-	is 0b000 then	// FMAC
-	{   fdx.str("fmac\t");
-	    PFmt(inst, ip, OpFmt4[(inst>>13)&0b111]);
+//print bde, "disOp3 major [6b]\n", op.major;
+	if op.major
+	is MOC_MUX then		// the varieties of MUX
+	{   print bdx, "cmov\t";
+	    PFmt(inst, ip, OpFmt[(inst>>5)&0b1111]);
 	}
-	is 0b001 then		// the varieties of MUX
-	{   fdx.str(MuxOpNames[(inst>>13)&0b111]); fdx.chr('\t');
-	    PFmt(inst, ip, OpFmt[(inst>>13)&0b111]);
+	is MOC_MAC then	// FMAC
+	{   if op.size == 0 then
+		print bdx, "fmac\t";
+	    else if op.size == 1 then
+		print bdx, "fmacf\t";
+	    PFmt(inst, ip, OpFmt[(inst>>5)&0b1111]);
 	}
-	is 0b010 then	// INS
-	{   fdx.str("ins\t");
-	    // FIXME - do the S1 and S2 bits have any meaning
-	    if op.I == 0 then
-		PFmt(inst, ip, OpFmt[0]);
-	    else
-		PFmt(inst, ip, "R,S,T,#O");
-	}
-	is 0b100 then	// FMACF
-	{   fdx.str("fmacf\t");
-	    PFmt(inst, ip, OpFmt4[(inst>>13)&0b111]);
+	is MOC_INS then	// INS
+	{   print bdx, "ins\t";
+	    PFmt(inst, ip, OpFmt3[(inst>>5)&0b1111]);
 	}
 	else
-	    fdx.str("???");
+	    print bdx, "???";
     }
 
     proc disOp1(inst: Inst, ip: Word)
-    {   var opa: OP1a = OP1a(inst);
+    {   var op: OP1 = OP1(inst);
 	const OpName: [64]@[]_byte =
-	{ "hr",  "???", "???", "???", "???", "???", "expon", "fract",
+	{ "hr",  "vec", "???", "???", "???", "???", "expon", "fract",
 	  "pop", "ff1", "???", "???", "???", "???", "???", "???",
 	  "cvt", "cvt", "???", "???", "rnd", "???", "???", "???",
 	  "???", "???", "???", "???", "???", "???", "???", "???"
@@ -374,113 +419,94 @@
 	  '?', '?', '?', '?', '?', '?', '?', '?',
 	  '?', '?', '?', '?', '?', '?', '?', '?'
 	};
-
-	if opa.minor == 0b000000 then	// HR
-	{   if opa.func == 0b00000 then 	// read/write IP
-	    {	if opa.w != 0 then
-		{   if opa.r != 0 then
-		    {	fdx.str("calli\t");
-			PReg(opa.rs1);
-		    }
-		    else
-		    {	if opa.rs1 != 0 then
-			{   fdx.str("jmp\t");
-			    PReg(opa.rs1);
-			}
-			else
-			    fdx.str("ret");
-		    }
+	if op.minor
+	is 0b0000 then				// HR
+	{   print bdx, "hr";
+	    if op.size&1 != 0 then
+	    {   if op.size&2 != 0 then
+		    print bdx, "x\t";
+		else
+		    print bdx, "r\t";
+		PReg(op.rd);
+	    }
+	    if op.size&2 != 0 then
+	    {   if op.size&1 == 0 then
+		    print bdx, "w\t";
+		else
+		    print bdx, ",";
+		PReg(op.rs2);
+	    }
+	    print bdx, ",[c]", HRFunc[op.func];
+	}
+	is 0b0001 then		// VEC
+	{	var reg: _uint;
+	    var mask: _uint32;
+	    mask = _uint32(Read(ip+4, WORD));
+	    print bdx, "vec\t"; PReg(op.rd);
+	    print bdx, ",{";
+	    if mask != 0 then
+	    {   loop
+		{   reg = _ctz(mask);
+		    PReg(reg);
+		    mask &= ~(1 << reg);
+		  exit mask == 0;
+		    print bdx, ",";
 		}
 	    }
-	    else
-	    {	fdx.str("hr");
-		if opa.r != 0 then
-		{   if opa.w != 0 then
-			fdx.str("x\t");
-		    else
-			fdx.str("r\t");
-		    PReg(opa.rd);
-		}
-		if opa.w != 0 then
-		{   if opa.r == 0 then
-			fdx.str("w\t");
-		    else
-			fdx.chr(',');
-		    PReg(opa.rs1);
-		}
-		fdx.chr(',');
-		fdx.chr(HRFunc[opa.func]);
-	    }
+	    print bdx, "}";
+	    return;
 	}
 	else
-	{   var opb: OP1b = OP1b(inst);
-	    const OpFmt: [32]@[]_byte =	// I s1 sd S D
-	    {   "R,S",	"R,#I",	"R,S",	"R,#I",
-		"R,S",	"R,#I",	"R,S",	"R,#I",	// FIXME - sd ignored
-		"R,-S",	"R,#-I","R,-S",	"R,#-I",
-		"R,-S",	"R,#-I","R,-S",	"R,#-I",
-		"R,#Y",	"R,#Z",	"R,#Y",	"R,#Z",
-		"R,#Y",	"R,#Z",	"R,#Y",	"R,#Z",
-		"R,#-Y","R,#-Z","R,#-Y","R,#-Z",
-		"R,#-Y","R,#-Z","R,#-Y","R,#-Z"
+	{   const OpFmt: [16]@[]_byte =	// s1.s2.I.D
+	    {   "R,T",  "R,#J",   "R,#Y",   "R,#Z",	// 00ID
+		"R,-T", "R,#I,T", "R,#Y,T", "R,#Z,T",	// 01ID
+		"R,T",  "R,#-J",  "R,#Y",   "R,#Z",	// 10ID
+		"R,-T", "R,-T",   "R,-T",   "R,-T"	// 11ID
 	    };
-	    if opb.minor
-	    is 0b00101 then
-	    {	if opb.func == 0 then
-		{   if opb.s == 0 then fdx.str("abs");
-				  else fdx.str("mov");
+	    if op.minor
+	    is 0b1000 then
+	    {	if op.func
+		is 0b00000 then
+		{   if op.S == 0 then print bdx, "mov";
+				 else print bdx, "abs";
 		}
-		else	// assume opb.func = 1
-		{   fdx.str("fabs");
-		    if opb.s != 0 then fdx.chr('f');
+		is 0b00001 then
+		{   print bdx, "fabs";
+		    if op.size != 0 then print bdx, "f";
 		}
+		is 0b00010 then
+		{   print bdx, "expon";
+		    if op.size != 0 then print bdx, "f";
+		}
+		is 0b00011 then
+		{   print bdx, "fract";
+		    if op.size != 0 then print bdx, "f";
+		}
+		else print bdx, "???";
 	    }
-	    is 0b00110..0b00111	then	// EXPON,FRACT
-	    {	fdx.str(OpName[opb.minor]);
-		if opb.s != 0 then fdx.chr('f');
+	    is 0b0110 then		// FF1 family
+	    {	if op.func <= 4 then print bdx, "[s]", OpFF1Name[op.func];
+		else print bdx, "???";
 	    }
-	    is 0b01001 then		// FF1 family
-	    {	if opb.func <= 4 then fdx.str(OpFF1Name[opb.func]);
-		else fdx.str("???");
-	    }
-	    is 0b01000, 0b01010..0b01111 then	// POP
-		fdx.str(OpName[opb.minor]);
+	    is 0b0111 then		// POP
+		print bdx, "[s]", OpName[op.minor];
 	    is 0b11000 then		// TRANS
-	    {   fdx.str(TransName[opb.func]);
-		if opb.s != 0 then fdx.chr('f');
+	    {   print bdx, "[s]", TransName[op.func];
+		if op.S != 0 then print bdx, "f";
 	    }
-	    is 0b11101 then		// VEC
-	    {	var reg: _uint;
-		var mask: _uint32;
-		mask = _uint32(Read(ip+4, WORD));
-		fdx.str("vec"); fdx.chr('\t'); PReg(opb.rd);
-		fdx.str(',{');
-		if mask != 0 then
-		{   loop
-		    {   reg = _ctz(mask);
-			PReg(reg);
-			mask &= ~(1 << reg);
-		      exit mask == 0;
-			fdx.chr(',');
-		    }
-		}
-		fdx.chr('}');
-		return;
-	    }
-	    fdx.chr('\t');
-	    if opb.sd != 0 then fdx.chr('-');
-	    PFmt(inst, ip, OpFmt[(inst >> 11)&0b11111]);
+	    print bdx, "\t";
+	    PFmt(inst, ip, OpFmt[(inst >> 5)&0b1111]);	// nnID
 	}
     }
 
     proc PShadow(e: _uint, t: _uint)
     {
 	while t > 0 do
-	{   fdx.chr('T');
+	{   print bdx, "T";
 	    t -= 1;
 	}
 	while e > 0 do
-	{   fdx.chr('F');
+	{   print bdx, "F";
 	    e -= 1;
 	}
     }
@@ -493,37 +519,62 @@
 	    "srl", "sra", "sll", "sla",
 	    "bitr","???", "???", "???"
 	};
+	const OpFmt: [16]@[]_byte =	// s1.s2.I.D
+	{   "R,S,T",  "R,S,#J", "R,S,#Y", "R,S,#Z",	// 00ID
+	    "R,S,-T", "R,#I,T", "R,#Y,T", "R,#Z,T",	// 01ID
+	    "R,-S,T", "R,S,#-J","R,-S,#Y","R,-S,#Z",	// 10ID
+	    "R,-S,-T","R,#I,-T","R,#Y,-T","R,#Z,-T"	// 11ID
+	};
+	print bdx, "[s]\t", ShfROpNames[op.minor];
+	PFmt(inst, ip, OpFmt[(inst >> 5)&0b1111]);
+    }
 
-	fdx.str(ShfROpNames[op.minor]); fdx.chr('\t');
-	PFmt(inst, ip, "R,S,TM");
+    proc disShfW(inst: Inst, ip: Word)
+    {	var op: OPSHF = OPSHF(inst);
+	const ShfROpNames: [16]@[]_byte =
+	{   "???", "???", "???", "???",
+	    "???", "???", "rol", "ror",
+	    "srl", "sra", "sll", "sla",
+	    "bitr","???", "???", "???"
+	};
+	print bdx, "[s]\t", ShfROpNames[op.minor];
+	PFmt(inst, ip, "R,S,NM");
+    }
+
+    proc disPred(inst: Inst, ip: Word)
+    {   var opc: OPPC = OPPC(inst);	// assume pred on condition
+
+	if opc.minor
+	is 0b0000 then	// pred on bit
+	{   var opb: OPPB = OPPB(inst);
+	    print bdx, "p[s]\t", CBitNames[opb.bit];
+	    PReg(opb.rs1); print bdx, ",";
+	    PShadow(opb.else, opb.then);
+	    print bdx, "\t; bit [d]", opb.bit;
+	}
+	is 0b0001 then
+	{   print bdx, "p[s]\t", CondNames[opc.cond];
+	    PReg(opc.rs1); print bdx, ",";
+	    PShadow(opc.else, opc.then);
+	}
+	else print bdx, "???";
     }
 
     proc disPredShf(inst: Inst, ip: Word)
     {	var op: OPSHF = OPSHF(inst);
 	const ShfOpNames: [16]@[]_byte =
-	{   "pb1", "pcnd","???", "???",
-	    "???", "???", "rol", "ror",
+	{   "???", "???", "???", "???",
+	    "bitr","???", "rol", "ror",
 	    "srl", "sra", "sll", "sla",
-	    "bitr","???", "???", "???"
+	    "ror", "rol", "???", "???"
 	};
 
 	if op.minor
 	is 0b0000 then
-	{   var opb: OPPB = OPPB(inst);
-	    fdx.chr('p'); fdx.str(CBitNames[opb.bit]); fdx.chr('\t');
-	    PReg(opb.rs1); fdx.chr(',');
-	    PShadow(opb.else, opb.then);
-	    fdx.str("\t; bit "); fdx.uint8(opb.bit);
-	}
-	is 0b0001 then
-	{   var opc: OPPC = OPPC(inst);
-	    fdx.chr('p'); fdx.str(CondNames[opc.cond]); fdx.chr('\t');
-	    PReg(opc.rs1); fdx.chr(',');
-	    PShadow(opc.else, opc.then);
-	}
+	    disPred(inst, ip);
 	else
 	{
-	    fdx.str(ShfOpNames[op.minor]); fdx.chr('\t');
+	    print bdx, "[s]\t", ShfOpNames[op.minor];
 	    PFmt(inst, ip, "R,S,N");
 	}
     }
@@ -532,12 +583,11 @@
     {	var op: OPBB = OPBB(inst);
 	var adr: Word;
 
-	fdx.str("b");
-	fdx.str(CBitNames[op.bit]); fdx.chr('\t');
-	PReg(op.rs1); fdx.chr(',');
+	print bdx, "b[s]\t", CBitNames[op.bit];
+	PReg(op.rs1); print bdx, ",";
 	adr = Word(Sext(15, inst&0xFFFF)) << 2;
 	adr += ip;
-	fdx.str("0x"); fdx.hex32(_uint32(adr));
+	print bdx, "[!x]", _uint32(adr);
     }
 
     proc disOpBc(inst: Inst, ip: Word)
@@ -545,68 +595,62 @@
 	var adr: Word;
 
 	if Conditions(op.cond)
-	is RET then fdx.str("ret");
+	is RET then print bdx, "ret";
 	is SVC then
-	{   fdx.str("svc\t");
+	{   print bdx, "svc\t";
 	    PFmt(inst, ip, "#I,#P");
 	}
 	is SVR then
-	{   fdx.str("svr\t");
+	{   print bdx, "svr\t";
 	    PFmt(inst, ip, "#I");
 	}
+	is JTTD, JTTW, JTTH, JTTB then
+	{   var optt: OPTT = OPTT(inst);
+	    const size: [4]_byte = { 'd', 'w', 'h', 'b' };
+	    print bdx, "jtt[c]\t", size[optt.size];
+	    PReg(op.rs1);
+	    print bdx, ",#[d]", optt.imm;
+	}
 	else
-	{   fdx.str("b");
-	    fdx.str(CondNames[op.cond]); fdx.chr('\t');
-	    PReg(op.rs1); fdx.chr(',');
+	{   print bdx, "b[s]\t", CondNames[op.cond];
+	    PReg(op.rs1);
 	    adr = Word(Sext(15, inst&0xFFFF)) << 2;
 	    adr += ip;
-	    fdx.str("0x"); fdx.hex32(_uint32(adr));
+	    print bdx, ",[!x]", _uint32(adr);
 	}
-    }
-
-    proc disOpJt(inst: Inst, ip: Word)
-    {	var op: OPTT = OPTT(inst);
-	var adr: Word;
-	const size: [4]_byte = { 'b', 'h', 'w', 'd' };
-
-	fdx.str("jtt"); fdx.chr(size[op.sz]); fdx.chr('\t');
-	PReg(op.rs1); fdx.str(",#");
-	fdx.uint16(op.imm);
     }
 
     proc disOpBr(inst: Inst, ip: Word)
     {	var op: OPBR = OPBR(inst);
 	var adr: Word;
 
-	if (op.major & 1) != 0 then fdx.str("call\t");
-	else fdx.str("br\t");
-
+	if (op.major & 1) != 0 then print bdx, "call\t";
+			       else print bdx, "br\t";
 	adr = ip + Word(Sext(25, inst&0x03FF_FFFF) << 2);
-	fdx.str("0x"); fdx.hex32(_uint32(adr));
-	fdx.str("\t; ");
+	print bdx, "[!x]\t;", _uint32(adr);
 	PAddr(adr);
     }
 
     proc disOpMemImm(inst: Inst, ip: Word)
     {   var op: OPMEMIMM = OPMEMIMM(inst);
 	const OpName: [16]@[]_byte =
-	{ "ldub","lduh","lduw","ldd" ,"ldsb","ldsh","ldsw","exit",
-	  "stb", "sth", "stw", "std", "enter","ldm", "stm", "???"
+	{ "ldd" , "lduw","lduh","ldub",
+	  "exit", "ldsw","ldsh","ldsb",
+	  "std",  "stw", "sth", "stb",
+	  "enter","???", "???", "???"
 	};
 
-	fdx.str(OpName[op.major&0b1111]); fdx.chr('\t');
-	PReg(op.rd); fdx.chr(',');
+	print bdx, "[s]\t", OpName[op.major&0b1111];
+	PReg(op.rd); print bdx, ",";
 	if op.major&0b1111
-	is 0b0111, 0b1100 then	// exit, enter
-	{   PReg(op.rb); fdx.chr(',');
-	    fdx.uint16(op.imm & 0xFFF8); fdx.chr(',');
-	    fdx.uint16(op.imm & 7);
+	is 0b0100, 0b1100 then	// exit, enter
+	{   PReg(op.rb);
+	    print bdx, ",[d],[d]", op.imm & 0xFFF8, op.imm & 7;
 	}
 	else
-	{   fdx.chr('[');
-	    if op.rb == 0 then PReg(32); else PReg(op.rb); fdx.chr(',');
-	    fdx.int16(_int16(op.imm));
-	    fdx.chr(']');
+	{   print bdx, "[[";
+	    if op.rb == 0 then PReg(32); else PReg(op.rb);
+	    print bdx, ",[d]]", _int16(op.imm);
 	}
     }
 
@@ -617,33 +661,68 @@
 	{ "???", "add", "mul", "div", "cmp", "???", "???", "???",
 	  "or",  "xor", "and", "mov", "???", "???", "???", "???"
 	};
+	const MovName: [4]@[]_byte =
+	{ "movd",  "movf", "movh", "mov"
+	};
 	const OpFmt = "R,S,#P\t; X";
-	const OpMov = "R,#P\t; X";
+	const OpMovs = "R,#P\t; X";
+	const OpMovu = "R,#V\t; X";
 
-	fdx.str(OpName[op.major&0b1111]); fdx.chr('\t');
-	if op.major&0b1111 != 0b1011 then	// not MOV
-	    PFmt(inst, ip, OpFmt);
+	if op.major&0b1111 == 0b1011 then	// MOV
+	{   print bdx, "[s]\t", MovName[(op.rs1>>3)&0b11];
+	    if op.rs1 == 0b11000 then
+		PFmt(inst, ip, OpMovs);
+	    else
+		PFmt(inst, ip, OpMovu);
+	}
 	else
-	    PFmt(inst, ip, OpMov);
+	{   print bdx, "[s]\t", OpName[op.major&0b1111];
+	    PFmt(inst, ip, OpFmt);
+	}
     }
 
-    proc disCarry(inst: Inst, ip: Word)
+    proc disLoop(inst: Inst, ip: Word)
+    {   var op: OPLOOP = OPLOOP(inst);
+	var cmp: @[]_byte;
+	var cnd, kind, nnId: _uint;
+
+	const Cnd: [10]@[]_byte =
+	{   "eq",  "ne", "hs",  "lo",  "hi",  "ls",	// unsigned
+	    "ge",  "lt",  "gt", "le"			// signed
+	};
+	const OpFmt: [16]@[]_byte =
+	{   "R,S,T",   "R,S,#G",  "R,S,#Y", "R,S,#Z",	// 00xx
+	    "?0100",   "R,#F,T",  "R,#Y,T", "R,#Z,T",	// 01xx
+	    "?1000",   "?1001",   "?1010",  "?1011",	// 10xx
+	    "?1100",   "R,#F,#G", "R,#B,#A","R,#W,#Y"	// 11xx
+	};
+
+	kind = (op.kcnd / 11) + 1;
+	cnd = op.kcnd % 11;
+	nnId = (inst >> 5)&0b1111;
+	print bdx, "loop[d]\t[s],", kind, Cnd[cnd];
+//	print bdx, " [[[04b]] ", nnId;
+	PFmt(inst, ip, OpFmt[nnId]);
+
+    }
+
+   proc disCarry(inst: Inst, ip: Word)
     {	var op: OPCARRY = OPCARRY(inst);
 	var bits: _uint;
 
-	fdx.str("carry\t");
-	PReg(op.rd); fdx.str(",{");
+	print bdx, "carry\t";
+	PReg(op.rd); print bdx, ",{";
 	bits = op.imm;
 	while (bits != 0) do
 	{ if bits & 3
-	  is 0 then fdx.chr('-');
-	  is 1 then fdx.chr('I');
-	  is 2 then fdx.chr('O');
-	  is 3 then fdx.str("IO");
+	  is 0 then print bdx, "-";
+	  is 1 then print bdx, "I";
+	  is 2 then print bdx, "O";
+	  is 3 then print bdx, "IO";
 	  bits = bits >> 2;
-	  if bits != 0 then fdx.chr(',');
+	  if bits != 0 then print bdx, ",";
 	}
-	fdx.chr('}');
+	print bdx, "}";
     }
 
     proc disVec(inst: Inst, ip: Word)
@@ -651,21 +730,21 @@
 	var bits, tmp: _uint;
 	var reg: _uint;
 
-	fdx.str("vec\t");
+	print bdx, "vec\t";
 	tmp = op.imm;
 	bits = ((tmp & 0x1F8000) << 10) |
 	       ((tmp & 0x007FFF) << 1);
-	PReg(op.rd); fdx.str(",{");
+	PReg(op.rd); print bdx, ",{";
 	if bits != 0 then
 	{   loop
 	    {   reg = _ctz(bits);
 		PReg(reg);
 		bits &= ~(1 << reg);
 	      exit bits == 0;
-		fdx.chr(',');
+		print bdx, ",";
 	    }
 	}
-	fdx.chr('}');
+	print bdx, "}";
     }
 
 
@@ -673,32 +752,21 @@
     {   var len, major: _uint;
 
 	len = 1;
-	if (inst & 0x8000) != 0 then	// I (or D) bit set
+	if (inst & 0x40) != 0 then	// I bit set
 	{
+//fde.str("Len I bit set\n");
+	    // FIXME - only 2 bits of major needed -01--- or -10---
 	    major = inst >> 26;
-//fdx.str("InstLen "); fdx.hex8(major);
-//fdx.str(" d="); fdx.uint((inst >> 11)&1);
-//fdx.str(" s1="); fdx.uint((inst >> 14)&1);
-//fdx.nl();
-	    if major <= 0b010101 then
-	    {	if major
-		is 0b001001, 0b001010, 0b001101 then // XOP1 LD/ST, XOP2, XOP5
-		{   len += 1;			// I-bit
-		    len += (inst >> 11)&1;	// d-bit
-		}
-		is 0b001100, 0b010101 then		// XOP4, LOOP
-		{   len += 1;			// I-bit
-		    len += (inst >> 14)&1;	// s1-bit
-		}
+	    if major
+	    is MOC_XOP0, MOC_INT2,	// XOP0 XOP1
+	       MOC_FP2,  MOC_MEM,	// XOP3 XOP5
+	       MOC_OP1,			// XOP6
+	       MOC_MUX,  MOC_INS,	// MUX, INS
+	       MOC_MAC,  MOC_LOOP then	// MAC LOOP
+	    {   len += 1;		// I-bit
+		len += (inst >> 5)&1;	// d-bit
 	    }
 	}
-	if (inst & 0x1C00_0780) == 0x0400_0300 then // stX imm long
-	{   len += 1;
-	    if ((inst >> 5) & 3) == 3 then	// std imm
-		len += 1;
-	}
-	if (inst & 0xFC00_07E0) == 0x2400_0700 then // MS with follwing byte
-	    len += 1;
 	return len * 4;	// words to bytes
     }
 
@@ -710,54 +778,45 @@
 	inst = Read(ip, WORD);
 	major = (inst >> 26) & 0b111111;
 	n = InstLen(inst);
-	fdx.chr(' ');
-	fdx.hex32(Read(ip, WORD));
-	fdx.chr('\t');
+	print bdx, " [08x]\t", Read(ip, WORD);
 	if major
-	is 0b000000,
-	   0b001111,
-	   0b101111, 0b110000 then	// unallocated
-	{
-	    fdx.str("Unallocated instruction ");
-	    fdx.hex32(inst);
-	}
-	is 0b000110, 0b000111 then disPredShf(inst, ip);
-	is 0b001000	      then disShfR(inst, ip);
-	is 0b001001	      then disOpMem(inst, ip);
-	is 0b001010           then disOp2(inst, ip);
-	is 0b001100	      then disOp3(inst, ip);
-	is 0b001101	      then disOp1(inst, ip);
-	is 0b010101	      then disLoop(inst, ip);
-	is 0b011000..0b011001 then disOpBb(inst, ip);
-	is 0b011010	      then disOpBc(inst, ip);
-	is 0b011011           then disOpJt(inst, ip);
+	is MOC_XOM6           then disPred(inst, ip);
+	is MOC_XOM7           then disPredShf(inst, ip);
+	is MOC_XOP0	      then disShfR(inst, ip);
+	is MOC_INT2           then disOp2Int(inst, ip);
+	is MOC_FP2            then disOp2FP(inst, ip);
+	is MOC_MEM	      then disOpMem(inst, ip);
+	is MOC_OP1	      then disOp1(inst, ip);
+	is MOC_MUX	      then disOp3(inst, ip);
+	is MOC_INS	      then disOp3(inst, ip);
+	is MOC_MAC	      then disOp3(inst, ip);
+	is MOC_LOOP	      then disLoop(inst, ip);
+	is MOC_BBIT,MOC_BBIT|1 then disOpBb(inst, ip);
+	is MOC_BCND	      then disOpBc(inst, ip);
 	is 0b011110..0b011111 then disOpBr(inst, ip);
-	is 0b100000..0b101110 then disOpMemImm(inst, ip);
+	is 0b100000..0b100110 then disOpMemImm(inst, ip); // LD
+	is 0b101000..0b101011 then disOpMemImm(inst, ip); // ST
+	is 0b100111, 0b101100 then disOpMemImm(inst, ip); // ENTER, EXIT
 	is 0b110001..0b110100,
 	   0b111000..0b111011 then disOpImm(inst, ip);
+	is MOC_SHF	      then disShfW(inst, ip);
 	is 0b111100	      then disCarry(inst, ip);
 	is 0b111101           then disVec(inst, ip);
 	is 0b111111 then	// Syscall hack
 	{   if inst == 0xFFAA5501 then
-		fdx.str("<syscall>");
+		print bdx, "<syscall>";
 	    elif (inst & 0xFFFFFF00) == 0xFFAA0000 then
-		fdx.str("<breakpoint>");
+		print bdx, "<breakpoint>";
 	    else
-	    {
-		fdx.str("Unimplemented instruction ");
-	    fdx.hex32(inst);
-	    }
+		print bdx, "Unimplemented instruction [08x]", inst;
 	}
 	else
-	{
-	    fdx.str("Unimplemented instruction ");
-	    fdx.hex32(inst);
-	}
+	    print bdx, "Unimplemented instruction [08x]", inst;
 	i = 4;
 	while i < n do
-	{   fdx.str("\n          ");
-	    fdx.hex32(Read(ip+i, WORD));
+	{   print bdx, "\n          [08x]", Read(ip+i, WORD);
 	    i += 4;
 	}
+	bdx.flush();
 	return n;
     }

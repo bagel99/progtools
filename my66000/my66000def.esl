@@ -1,19 +1,68 @@
     type  Inst: _uint32;	// size of an instruction
     type  Addr: _uint64;	// size of an address
-    type  Word: _uint64;	// size of a register
-    type  SWord: _int64;
+    type  Word: _uint64;	// register, unsigned
+    type  SWord: _int64;	// register, signed
     type REG: 0..31;
+
+    // Major opcode
+    const MOC_XOM6 = 0b000110;
+    const MOC_XOM7 = 0b000111;
+    const MOC_XOP0 = 0b001000;
+    const MOC_INT2 = 0b001001;
+    const MOC_FP2  = 0b001011;
+    const MOC_MEM  = 0b001101;
+    const MOC_OP1  = 0b001110;
+    const MOC_MUX  = 0b010001;
+    const MOC_INS  = 0b010010;
+    const MOC_MAC  = 0b010011;
+    const MOC_LOOP = 0b010101;
+    const MOC_BBIT = 0b011000;	// also 0b011001
+    const MOC_BCND = 0b011010;	// also JTT
+    const MOC_EXIT = 0b100100;
+    const MOC_ENTER= 0b101100;
+    const MOC_MOV  = 0b111011;
+    const MOC_SHF  = 0b110101;
+    const MOC_MOD  = 0b111100;
+    const MOC_VEC  = 0b111101;
+
+    type OPMEM:
+    {	major:	0..0b111111;	// 31..26
+	rd:	REG;		// 25..21
+	rb:	REG;		// 20..16
+	minor:  0..0b1111;	// 15..12
+	L:	0..1;		// 11
+	size:   0..0b11;	// 10..9
+	sc:	0..0b11;	// 8..7
+	I:	0..1;		// 6
+	D:	0..1;		// 5
+	ri:	REG;		// 4..0
+    }: packed, msb, bits(32);
 
     type OP2:
     {	major:	0..0b111111;	// 31..26
 	rd:	REG;		// 25..21
 	rs1:	REG;		// 20..16
-	I:	0..1;		// 15
-	s1:	0..1;		// 14
-	s2:	0..1;		// 13
-	S:	0..1;		// 12
-	D:	0..1;		// 11
-	minor:	0..0b111111;	// 10..5
+	minor:  0..0b1111;	// 15..12
+	S:	0..1;		// 11
+	size:   0..0b11;	// 10..9
+	s1:	0..1;		// 8
+	s2:	0..1;		// 7
+	I:	0..1;		// 6
+	D:	0..1;		// 5
+	rs2:	REG;		// 4..0
+    }: packed, msb, bits(32);
+
+    type OP1:
+    {	major:	0..0b111111;	// 31..26
+	rd:	REG;		// 25..21
+	func:	0..0b11111;	// 20..16
+	minor:  0..0b1111;	// 15..12
+	S:	0..1;		// 11
+	size:   0..0b11;	// 10..9
+	s1:	0..1;		// 8
+	s2:	0..1;		// 7
+	I:	0..1;		// 6
+	D:	0..1;		// 5
 	rs2:	REG;		// 4..0
     }: packed, msb, bits(32);
 
@@ -21,57 +70,54 @@
     {	major:	0..0b111111;	// 31..26
 	rd:	REG;		// 25..21
 	rs1:	REG;		// 20..16
-	I:	0..1;		// 15
-	s1:	0..1;		// 14
-	s2:	0..1;		// 13
-	minor:	0..0b111;	// 12..10
-	rs3:	REG;		// 9..5
+	rs3:	REG;		// 15..11
+	size:   0..0b11;	// 10..9
+	s1:	0..1;		// 8
+	s2:	0..1;		// 7
+	I:	0..1;		// 6
+	D:	0..1;		// 5
 	rs2:	REG;		// 4..0
     }: packed, msb, bits(32);
 
-    type OP1a:
+    type OPSHF:
     {	major:	0..0b111111;	// 31..26
 	rd:	REG;		// 25..21
 	rs1:	REG;		// 20..16
-	z1:     0..1;		// 15
-	w:      0..1;		// 14
-	r:      0..1;		// 13
-	z2:	0..0b11;	// 12..11
-	minor:	0..0b111111;	// 10..5
-	func:	0..0b11111;	// 4..0
+	minor:	0..0b1111;	// 15..12
+	w:	0..0b111111;	// 11..6;
+	o:	0..0b111111;	// 5..0
     }: packed, msb, bits(32);
 
-    type OP1b:
+    type OPSHFR:	// XOM7
     {	major:	0..0b111111;	// 31..26
 	rd:	REG;		// 25..21
 	rs1:	REG;		// 20..16
-	I:	0..1;		// 15
-	s1:     0..1;		// 14
-	sd:     0..1;		// 13
-	s:      0..1;		// 12
-	D:	0..1;		// 11
-	minor:	0..0b111111;	// 10..5
-	func:	0..0b11111;	// 4..0
+	minor:	0..0b1111;	// 15..12
+	S:	0..1;		// 11
+	size:   0..0b11;	// 10..9
+	s1:	0..1;		// 8
+	s2:	0..1;		// 7
+	_:	0..1;		// 6
+	o:	0..0b111111;	// 5..0
     }: packed, msb, bits(32);
 
     type OPLOOP:
     {	major:	0..0b111111;	// 31..26
-	kind:	0..0b11;	// 25..24
-	cnd:	0..0b111;	// 23..21
+	rd:	REG;		// 25..21
 	rs1:	REG;		// 20..16
-	I:	0..1;		// 15
-	s1:	0..1;		// 14
-	s2:	0..1;		// 13
-	s:      0..1;		// 12
-	_:	0..0b11;	// 11..10
-	rs3:	REG;		// 9..5
+	kcnd:	0..0b11111;	// 15..11 kind and cnd
+	size:   0..0b11;	// 10..9
+	s1:	0..1;		// 8
+	s2:	0..1;		// 7
+	I:	0..1;		// 6
+	D:	0..1;		// 5
 	rs2:	REG;		// 4..0
     }: packed, msb, bits(32);
 
     type OPCARRY:
     {	major:	0..0b111111;	// 31..26
 	rd:	REG;		// 25..21
-	rs1:	REG;		// 20..16 UNUSED?
+	func:	0..0b11111;	// 20..16
 	imm:	_int16;		// 15..0
     }: packed, msb, bits(32);
 
@@ -79,37 +125,6 @@
     {	major:	0..0b111111;	// 31..26
 	rd:	REG;		// 25..21
 	imm:    0..0x1FFFFF;	// 20..0
-    }: packed, msb, bits(32);
-
-    type OPSHF:
-    {	major:	0..0b111111;	// 31..26
-	rd:	REG;		// 25..21
-	rs1:	REG;		// 20..16
-	minor:	0..0b1111;	// 15..12 low is S bit
-	w:	0..0b111111;	// 11..6;
-	o:	0..0b111111;	// 5..0
-    }: packed, msb, bits(32);
-
-    type OPSHFR:
-    {	major:	0..0b111111;	// 31..26
-	rd:	REG;		// 25..21
-	rs1:	REG;		// 20..16
-	minor:	0..0b1111;	// 15..12 low is S bit
-	w:	0..0b111111;	// 11..6;
-	z:	0..1;		// 5
-	rs2:	REG;		// 4..0
-    }: packed, msb, bits(32);
-
-    type OPMEM:
-    {	major:	0..0b111111;	// 31..26
-	rd:	REG;		// 25..21
-	rb:	REG;		// 20..16
-	I:	0..1;		// 15
-	sc:	0..2;		// 14..13
-	L:	0..1;		// 12
-	D:	0..1;		// 11
-	minor:	0..0b111111;	// 10..5
-	ri:	REG;		// 4..0
     }: packed, msb, bits(32);
 
     type OPIMM:
@@ -138,6 +153,14 @@
 	imm:   _int16;		// 15..0 - sign extend << 2
     }: packed, msb, bits(32);
 
+    type OPTT:	// This is a variation of OPBC
+    {	major:	0..0b111111;	// 31..26
+	ones:	0..0b111;	// 25..23 should be 0b111
+	size:   0..0b11;	// 22..21
+	rs1:	REG;		// 20..16
+	imm:	_uint16;	// 15..0
+    }: packed, msb, bits(32);
+
     type OPBB:
     {	major:	0..0b11111;	// 31..27
 	bit:	0..63;		// 26..21 - extends into major
@@ -151,9 +174,9 @@
 	rs1:	REG;		// 20..16
 	minor:	0..0b1111;	// 15..12
 	_:      0..0b11;	// 11..10
-	else:	0..8;		// 9..6
+	else:	0..0b1111;	// 9..6
 	_:      0..0b11;	// 5..4
-	then:   0..8;		// 3..0
+	then:   0..0b1111;	// 3..0
     }: packed, msb, bits(32);
 
     type OPPB:
@@ -162,33 +185,36 @@
 	rs1:	REG;		// 20..16
 	minor:	0..0b1111;	// 15..12
 	_:      0..0b11;	// 11..10
-	else:	0..8;		// 9..6
+	else:	0..0b1111;	// 9..6
 	_:      0..0b11;	// 5..4
-	then:   0..8;		// 3..0
-    }: packed, msb, bits(32);
-
-    type OPTT:
-    {	major:	0..0b11111;	// 31..27
-	unused: 0..0b11;	// 26..25
-	remote: boolean;	// 24
-	call:   boolean;	// 23
-	sz:	0..3;		// 22..21
-	rs1:	REG;		// 20..16
-	imm:	_uint16;	// 15..0
+	then:   0..0b1111;	// 3..0
     }: packed, msb, bits(32);
 
 
-    type Conditions:	// for BCND
-    (	EQ0, NE0, GE0, LT0, GT0, LE0, A,   N,		// integer
-	DEQ, DNE, DGE, DLT, DGT, DLE, DOR, DUN,		// double
-	FEQ, FNE, FGE, FLT, FGT, FLE, FOR, FUN,		// single
-	IN,  _,   _,    _,   _,  SVC, SVR, RET
+
+    type Conditions:	// for BCND (integer)
+    (	EQ0, NE0, GE0, LT0, GT0, LE0, A,   N,
+	_,   _,   _,   _,   _,   _,   _,   _,
+	_,   _,   IN, RET,  _,   _,   SVC, SVR,
+	_,   _,   _,   _,   JTTD,JTTW,JTTH,JTTB
     );
     const CondNames: [Conditions][5]_byte =
     {	"eq0", "ne0", "ge0", "lt0", "gt0", "le0", "a",   "n",
-	"deq", "dne", "dge", "dlt", "dgt", "dle", "dor", "dun",
+	"",    "",    "",    "",    "",    "",    "",    "",
+	"",    "",    "in",  "ret", "",    "",    "svr", "svc",
+	"",    "",    "",    "",    "jttd","jttw","jtth","jttb"
+    };
+    type FConditions:	// for BFCND
+    (	DEQ, DNE, DGE, DLT, DGT, DLE, DOR, DUN,		// double
+	FEQ, FNE, FGE, FLT, FGT, FLE, FOR, FUN,		// single
+	_,   _,   _,   _,   _,   _,   _,   _,
+	_,   _,   _,   _,   _,   _,   _,   _
+    );
+    const FCondNames: [Conditions][5]_byte =
+    {	"deq", "dne", "dge", "dlt", "dgt", "dle", "dor", "dun",
 	"feq", "fne", "fge", "flt", "fgt", "fle", "for", "fun",
-	"in",  "",    "",    "",    "",    "svr", "svc", "ret"
+	"",    "",    "",    "",    "",    "",    "",    "",
+	"",    "",    "",    "",    "",    "",    "",    ""
     };
     type CBits:		// result of CMP or FCMP
     (	EQ=0, NEQ, NE, NNE, GE, NGE, LT, NLT,		// 0-7

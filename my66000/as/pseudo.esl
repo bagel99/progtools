@@ -61,7 +61,7 @@
 	    is 2 then segment.FixNew(e, ABS_32, EXPR);
 	    is 3 then segment.FixNew(e, ABS_64, EXPR);
 	    else
-		fde.str("unimplemented size data fixup required\n");	// FIXME
+		print bde, "unimplemented size data fixup required\n";	// FIXME
 	    }
 	    if opt
 	    is 0 then segment.Put1(e.offs);
@@ -99,7 +99,7 @@
 		    segment.Put8(0);
 		}
 		else
-		    fde.str("unimplemented size data fixup required\n");
+		    print bde, "unimplemented size data fixup required\n";
 	    }
 	    else
 		Syntax("Illegal immediate value");
@@ -130,6 +130,35 @@
 	  exit s[0] != ',';
 	    s = SkipWS(s[1:]);
 	}
+    }
+
+    proc SetOp(s: @[]_byte)
+    {   var n: _uint;
+	var r: @[]_byte;
+	var e: expr.ExprT;
+	var pos, pns: symbol.Symbol;
+
+	r = SkipWS(s);
+	s, n = lex.Symbol(r);
+	s = SkipWS(s);
+	if s[0] != ',' then return;
+	s = SkipWS(s[1:]);
+	s = Expr(s, e);
+	if e.op != NONE && e.op != SYMADD then
+	{   Syntax("Bad .set expression");
+	    return;
+	}
+//print bde, "SetOp [!s] = ", n, r;
+//expr.Dump(bde, e);
+//print bde, "\n";
+	pos = symbol.Look(e.sym1.name, e.sym1.len);
+	pns = symbol.Enter(r, n);
+	pns.flags = pos.flags;
+	pns.segm = pos.segm;
+	pns.blok = pos.blok;
+	pns.offs = pos.offs;
+	if e.op == SYMADD then
+	    pns.offs += e.offs;
     }
 
     proc VisibilityOp(s: @[]_byte, opt: _uint)
@@ -195,7 +224,7 @@
 	ok, size, _ = expr.Fix(e);
 	if !ok then
 	{   Syntax("expression is not constant");
-	    expr.Dump(fde,e);
+	    expr.Dump(bde,e);
 	}
 	psym = symbol.Enter(s, j);
 	psym.SetSize(size);
@@ -247,8 +276,7 @@
 	{   r, len = GetSym(s);
 	    name = s;
 	}
-//fde.str("Section name= "); fde.strn(name, len);
-//fde.str(" r[0]='");  fde.chr(r[0]); fde.str("'\n");
+//print bde, "Section name= [!s] r[0]='[c]'\n", len, name, r[0]'
     }
 
     proc SectionOp(s: @[]_byte)
@@ -310,10 +338,10 @@
 	{ "word",		4, 4, 2 },
 	{ "dword",		5, 4, 3 },
 	{ "quad",		4, 4, 3 },
-	{ "jt8",		3,11, 0 },
-	{ "jt16",		4,11, 1 },
-	{ "jt32",		4,11, 2 },
-	{ "jt64",		4,11, 3 },
+	{ "jt8",		3,12, 0 },
+	{ "jt16",		4,12, 1 },
+	{ "jt32",		4,12, 2 },
+	{ "jt64",		4,12, 3 },
 	{ "inst",		4, 4, 2 },
 	{ "ascii",		5, 5, 0 },
 	{ "asciz",		5, 5, 1 },
@@ -325,6 +353,7 @@
 	{ "internal",		8,10, 1 },
 	{ "hidden",		6,10, 2 },
 	{ "protected",		9,10, 3 },
+	{ "set",		3,11, 0 },
 	{ "loc",		3, 0, 0 },
 	{ "ident",		5, 0, 0 },
 	{ "cfi_startproc",     13, 0, 0 },
@@ -373,6 +402,8 @@
 	    SizeOp(t[0:]);
 	is 10 then	// visibility
 	    VisibilityOp(t[0:], POpcodes[p].option);
-	is 11 then	// jump table
+	is 11 then	// set
+	    SetOp(t[0:]);
+	is 12 then	// jump table
 	    JTOp(t[0:], POpcodes[p].option);
     }

@@ -51,6 +51,12 @@ package lex
 	    n += s[i] - '0';
 	    i += 1;
 	}
+	// kludge for FP IMM5 -15.5 .. +15.5
+	if s[i] == '.' then
+	{   n = n << 1;
+	    if s[i+1] == '5' then n += 1;
+	    i += 2;
+	}
 	return s[i:], n;
     }
 

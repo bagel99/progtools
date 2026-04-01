@@ -1,8 +1,10 @@
 import sys;
-import out;
+
+import prt;
+var bde: fmt.pDesc;
+var bdo: fmt.pDesc;
+
 const fdi: sys.fildes = 0;
-alias out.fdo as fdo;
-alias out.fde as fde;
 import bufin;
 
 var lineno: _uint;
@@ -10,42 +12,38 @@ var filename: @[]_byte;
 var errors: _uint = 0;
 type OutFmt: (BIN, ELF);
 var outputformat: OutFmt;
+var fixlong: boolean = false;
 
 
 // FIXME - move someplace
 proc Error(msg: @[]_byte)
 {
     errors += 1;
-    fde.uint(lineno);
-    fde.str(": ");
-    fde.str(msg);
+    print bde, "[d]: [s]", lineno, msg;
 }
 
 proc Syntax(msg: @[]_byte)
 {
     Error(msg);
-    fde.nl();
+    print bde, "\n";
 }
 
 proc Syntax2n(msg: @[]_byte, s: @[]_byte, n: _uint)
 {
     Error(msg);
-    fde.strn(s, n);
-    fde.nl();
+    print bde, "[!s]\n", n, s;
 }
 
 proc SyntaxS(msg: @[]_byte, s: @[]_byte)
 {
     Error(msg);
-    fde.str(s);
-    fde.nl();
+    print bde, "[s]\n", s;
 }
 
 proc SyntaxN(msg: @[]_byte, n: _uint)
 {
     Error(msg);
-    fde.uint(n);
-    fde.nl();
+    print bde, "[d]\n", n;
 }
 
 var static: boolean = false;
@@ -125,6 +123,10 @@ proc main(argc: _uint, argv: @[]@[]_byte): _int
     if i > argc then
 	return 3;
 
+    bdo = prt.open(prt.fdo, 512);
+    bde = prt.open(prt.fde, 128);
+    bde.setflush(true);
+
     symbol.Init();
     segment.Init();
     if i == argc then	// source is stdin
@@ -156,11 +158,8 @@ proc main(argc: _uint, argv: @[]@[]_byte): _int
 		elfout.Output(fd, ofmt==ELFABS);
 	}
 	else
-	{   fde.str("Unable to open output file: ");
-	    fde.str(ofile);
-	    fde.nl();
-	}
-    }
+	    print bde, "Unable to open output file: [s]\n", ofile;
+   }
     return errors;
 }
 

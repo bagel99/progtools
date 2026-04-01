@@ -71,24 +71,19 @@ package symbol
     {   var ps: Symbol;
 
 //	Sort();
-	fdo.str("Symbol Table:\n");
+	print bdo, "Symbol Table:\n";
 	ps = symtable;
 	while ps != 0 do
 	{   if outlocalsym || !ps.VeryLocal() then
 	    {	if ps.flags.def then
-		    fdo.hex64(ps.FinalValue());
+		    print bdo, "[016x]", ps.FinalValue();
 		else
-		    fdo.str("               U");
-		fdo.str(" [");
-		fdo.uint(ps.numb);
-		fdo.str("] ");
-		fdo.str(ps.segm.name);
-		fdo.chr(' ');
-		fdo.str(ps.name);
-		fdo.nl();
+		    print bdo, "               U";
+		print bdo, " [[[d]] [s] [s]\n", ps.numb, ps.segm.name, ps.name;
 	    }
 	    ps = ps.next;
 	}
+	bdo.flush();
     }
 
     /*
@@ -149,7 +144,7 @@ package symbol
     proc Enter(name: @[]_byte, n: _uint): Symbol
     {	var ps: Symbol;
 
-//fde.str("Enter symbol name="); fde.strn(name,n); fde.nl();
+//print bde, "Enter symbol name=[!s]\n" n, name;
 	ps = Look(name, n);
 	if ps == 0 then			// currently unknown
 	{   ps = _new(SymbolT(n+1));
@@ -178,9 +173,8 @@ package symbol
 	ps.segm = curseg;
 	ps.blok = curseg.btail;
 	ps.offs = curseg.btail.size;
-//fde.str("\tsegm="); fde.str(ps.segm.name);
-//fde.str(" blokaddr="); fde.hex64(ps.blok.addr);
-//fde.str(" offs="); fde.hex16(ps.offs); fde.nl();
+//print bde, "\tsegm=[s] blokaddr=[x] offs=[x]\n",
+//  ps.segm.name, ps.blok.addr, ps.offs;
 	return ps;
     }
 
@@ -209,8 +203,9 @@ package symbol
     	    	Syntax("illegal symbol");
     	}
     	else
-	    ps = Define(name, n);
+	{   ps = Define(name, n);
 	    ps.SetAddress(curseg, curseg.btail, curseg.btail.size);
+	}
     }
 
     proc Init()

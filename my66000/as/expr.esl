@@ -4,28 +4,29 @@ package expr
     alias symbol.Symbol as Symbol;
     alias lex.SkipWS as SkipWS;
 
-    proc Dump(fd: out.OutFD, e: Expr)
+    proc Dump(bd: fmt.pDesc, e: Expr)
     {
 	if e.op
 	is NONE then
-	{   fd.str("0x"); fd.hex64(_uint64(e.offs));
+	{   print bd, "[!x]", _uint64(e.offs);
 	}
 	is SYMADD then
-	{   fd.str(e.sym1.name);
+	{   print bd, "[s]", e.sym1.name;
 	    if e.offs != 0 then
-	    {   fd.str(" + 0x"); fd.hex64(_uint64(e.offs));
+	    {   print bd, " + [!x]", _uint64(e.offs);
 	    }
 	}
 	is SYMSUB then
-	{   fd.str(e.sym1.name);
-	    fd.str(" - 0x");  fd.hex64(_uint64(e.offs));
+	{   print bd, "[s]", e.sym1.name;
+	    if e.offs != 0 then
+	    {   print bd, " - [!x]", _uint64(e.offs);
+	    }
 	}
 	is SYMDIFF then
-	{   fd.str(e.sym1.name);
-	    fd.str(" - "); fd.str(e.sym2.name);
+	{   print bd, "[s] - [s]", e.sym1.name, e.sym2.name;
 	}
 	else
-	{   fd.str("unknown op="); fd.hex8(_uint8(e.op));
+	{   print bd, "unknown op=[!x]", _uint8(e.op);
 	}
     }
 

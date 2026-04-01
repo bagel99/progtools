@@ -2,7 +2,7 @@ ESLC=   eslc -X
 INC=	-I.. -I../../libsim -I../../libelf -I../../lib
 LIB=	../../lib
 DBG=
-OPT=	-i	# disable inlining
+OPT=	-Ai	# disable inlining
 GCC=	gcc -gdwarf-5
 ARCH:= $(shell uname -m)
 
@@ -10,7 +10,7 @@ ARCH:= $(shell uname -m)
 .SECONDARY: %.s %.ll
 
 %.out: %.s
-	$(GCC) -z noexecstack $< $(LIB)/arch/$(ARCH)/lib.a -lm -o $@
+	$(GCC) -z noexecstack -static $< $(LIB)/arch/$(ARCH)/lib.a -lm -o $@
 
 %.s: %.esl
 	$(ESLC) -m$(ARCH) $(DBG) $(INC) $(OPT) $< >$@

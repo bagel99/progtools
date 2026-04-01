@@ -1,10 +1,13 @@
 import sys;
-import zstr;
-import out;
-
 const fdi: sys.fildes = 0;
-const fdo: out.OutFD = 1;
-const fde: out.OutFD = 2;
+import out;
+alias out.fdo as fdo;
+alias out.fde as fde;
+
+import prt;
+var bde: fmt.pDesc;
+var bdo: fmt.pDesc;
+alias bdo as bdx;
 
 import elfread64;
 
@@ -41,6 +44,9 @@ proc Read(addr: Addr, w: Width): Word
     return rv;
 }
 
+// Stuff to support print symbols at the correct place
+// Fixme, the symbols should be sorted
+
 var pstr: elfread.pStrings;
 var psym: elfread.pSymbols;
 
@@ -63,6 +69,11 @@ proc NextSym(start: Addr)(addr: Addr, name:  @[]_byte)
     }
 }
 
+proc SortSymbols()
+{
+}
+
+// FIXME - this is very inefficient to call for every instruction
 proc GetSym(addr: Addr): @[]_byte
 {   var i: _uint;
     var sinx: _uint;
@@ -79,7 +90,6 @@ proc GetSym(addr: Addr): @[]_byte
     return 0;
 }
 
-alias fdo as fdx;
 import disinst;
 
 proc DisSection(ptxt: elfread.pText)
@@ -93,58 +103,61 @@ proc DisSection(ptxt: elfread.pText)
     addr = ptxt.addr;
     end = addr + ptxt.size;
     while addr < end do
-    {	if newsym then
+    {   /*
+	if newsym then
 	{   symaddr, symname = NextSym(addr);
 	    newsym = false;
 	}
 	if addr == symaddr then
-	{   fdx.str(symname); fdx.str(":\n");
+	{   print bdx, "[s]:\n", symname;  // FIXME
 	    newsym = true;
 	}
-	fdx.hex32(_uint32(addr));
-	fdx.chr(' ');
+	*/
+	symname = GetSym(addr);
+	if symname != 0 then print bdx, "[s]:\n", symname;
+	print bdx, "[>8x] ", _uint32(addr);
 	inst = Read(addr, WORD);
 	addr += disInst(addr);
 	// Check for inline jump table, was previous inst a JT
-	if (inst & 0xFC00_0000) == 0x6C00_0000 then
+	if (inst & 0xFF80_0000) == 0x6B80_0000 then
 	{   var op: OPTT = OPTT(inst);
 	    var j, n: _uint;
 	    n = op.imm;
-	    if op.sz
-	    is 0 then
+	    if op.size
+	    is 3 then
 	    {	for j from 0 to n do
 		{   if (j & 7) == 0 then
-			fdx.str("\n\t\t\t.jt8\t");
+			print bdx, "\n\t\t\t.jt8\t";
 		    else
-			fdx.chr(',');
-		    fdx.int8(_int8(Read(addr, BYTE)));
+			print bdx, ",";
+		    print bdx, "[d]", _int8(Read(addr, BYTE));
 		    addr += 1;
-		}
-	    }
-	    is 1 then
-	    {	for j from 0 to n do
-		{   if (j & 7) == 0 then
-			fdx.str("\n\t\t\t.jt16\t");
-		    else
-			fdx.chr(',');
-		    fdx.int16(_int16(Read(addr, HALF)));
-		    addr += 2;
 		}
 	    }
 	    is 2 then
 	    {	for j from 0 to n do
 		{   if (j & 7) == 0 then
-			fdx.str("\n\t\t\t.jt32\t");
+			print bdx, "\n\t\t\t.jt16\t";
 		    else
-			fdx.chr(',');
-		    fdx.int32(_int32(Read(addr, HALF)));
+			print bdx, ",";
+		    print bdx, "[d]", _int16(Read(addr, HALF));
+		    addr += 2;
+		}
+	    }
+	    is 1 then
+	    {	for j from 0 to n do
+		{   if (j & 7) == 0 then
+			print bdx, "\n\t\t\t.jt32\t";
+		    else
+			print bdx, ",";
+		    print bdx, "[d]", _int32(Read(addr, WORD));
 		    addr += 4;
 		}
 	    }
-	    is 3 then {}	// FIXME
+	    is 0 then {}	// FIXME
 	    addr = (addr + 3) & ~3;	// round end of table up
 	}
-	fdx.nl();
+	print bdx, "\n";
     }
 }
 
@@ -156,11 +169,12 @@ proc main(argc:_uint, argv:@[]@[]_byte):_int //[[global]]
     i = 1;
     if i >= argc then
 	return 1;
+    bdo = prt.open(prt.fdo, 512);
+    bde = prt.open(prt.fde, 128);
+    bde.setflush(true);
     fd = sys.open(argv[i]@, {RDONLY}, 0);
     if fd < 0 then
-    {   fde.str("Unable to open ");
-	fde.str(argv[i]@);
-	fde.nl();
+    {   print bde, "Unable to open [s]\n", argv[i]@;
 	return 1;
     }
     var pf: elfread.pFile;
@@ -169,13 +183,13 @@ proc main(argc:_uint, argv:@[]@[]_byte):_int //[[global]]
 
     pf = elfread.Init(fd, MY66000);
     if pf == 0 then
-    {   fde.str("Unable to process\n");
+    {   print bde, "Unable to process\n";
 	return 2;
     }
     nshdr = pf.fh.shnum;
-fde.str("nshdr="); fde.uint(nshdr); fde.nl();
-    psym = pf.GetSymbolSection();
-    pstr = pf.GetStringSection();
+print bde, "nshdr=[d]\n", nshdr;
+    psym, pstr = pf.GetSymbols();
+//DumpSym();
 
     i = 0;
     loop
@@ -185,7 +199,7 @@ fde.str("nshdr="); fde.uint(nshdr); fde.nl();
 	DisSection(ptxt);
 	i += 1;
     }
-
+    prt.close(bdo);
     return 0;
 }
 
