@@ -2,7 +2,7 @@
 	.globl	strcmp
 strcmp:  ; r1=src1, r2=src2
 	mov	r3,#0
-	vec	r6,{r3}
+	vec	r6,{r5}
 	ldub	r4,[r1,r3,0]
 	ldub	r5,[r2,r3,0]
 	add	r5,r4,-r5
