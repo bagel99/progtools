@@ -75,6 +75,7 @@ package my66000
     var   faultarg: UImm;
     var   rlast: _uint = 0;
     var   cycles: _uint = 0;
+    var   tid_address: Addr;	// emulated address of thread struct
     var   setbp: boolean = false;
     var   stackstat:
     {     min:   Word;
@@ -94,18 +95,6 @@ package my66000
 	fault = OTHER;
     }
 
-    proc Map(addr: Addr): boolean, _address
-    {   var i: _uint;
-
-	for i from 0 to nmem-1 do
-	{   if addr >= memtab[i].beg && addr <= memtab[i].end then
-	    {	addr -= memtab[i].beg;
-		return true, memtab[i].adr@[addr];
-	    }
-	}
-	return false, 0;
-    }
-
     proc LoadBytes(addr: Word, data: @[]_byte, len: _uint): boolean
     {   var i: _uint;
 
@@ -119,14 +108,57 @@ package my66000
 	return true;
     }
 
+    proc Map(addr: Addr): boolean, _address
+    {   var i: _uint;
+
+	for i from 0 to nmem-1 do
+	{   if addr >= memtab[i].beg && addr <= memtab[i].end then
+	    {	addr -= memtab[i].beg;
+		return true, memtab[i].adr@[addr];
+	    }
+	}
+	return false, 0;
+    }
+
+    var iov: [8]sys.iovec;
+
+    proc MapIOV(vaddr: Addr, n: _uint): boolean, _address
+    {	var i: _uint;
+	var ok: boolean;
+	type iovT: @[]sys.iovec;
+	var viov: iovT;
+	var addr: _address;
+
+	// First map pointer to iov array
+//print bde, "MapIOV viov=[p]\n", viov;
+	ok, addr = Map(vaddr);
+	if !ok then return false, 0;
+	viov = iovT(addr);
+	// Then map buffer pointer for each descriptor
+	for i from 0 to n-1 do
+	{
+//print bde, "\ti=[d] base=[p] len=[d]\n",
+//i, viov[i].base, viov[i].len;
+	    ok, addr = Map(Addr(viov[i].base));
+	    if !ok then return false, 0;
+	    iov[i].base = addr;
+	    iov[i].len  = viov[i].len;
+	}
+	return true, iov;
+    }
+
     proc SysCall(nr: _uint, n: _uint)
     {	var ok: boolean;
 	var addr: _address;
 	var rv: _int;
 
-	// using the /usr/include/asm/unistd64.h numbering
+	if n == 0 then n = reg[8];
 	if n
-	is 0 then	// read
+	is 1, 234 then	// exit, exit_group
+	{
+	    fault = EXIT;
+	}
+	is 3 then	// read
 	{   ok, addr = Map(reg[Arg[2]]);
 	    if ok then
 	    {
@@ -136,7 +168,7 @@ package my66000
 		reg[Arg[1]] = SWord(rv);
 	    }
 	}
-	is 1 then	// write
+	is 4 then	// write
 	{   ok, addr = Map(reg[Arg[2]]);
 	    if ok then
 	    {
@@ -146,7 +178,7 @@ package my66000
 		reg[Arg[1]] = SWord(rv);
 	    }
 	}
-	is 2 then	// open
+	is 5 then	// open
 	{   ok, addr = Map(reg[Arg[1]]);
 	    if ok then
 	    {
@@ -154,20 +186,42 @@ package my66000
 		reg[Arg[1]] = SWord(rv);
 	    }
 	}
-	is 3 then	// close
+	is 6 then	// close
 	{   sys.close(_int(reg[Arg[1]]));
 	    reg[Arg[1]] = 0;	// FIXME sys.close
 	}
-	is 8 then	// lseek
+	is 19 then	// lseek
 	{   rv = sys.lseek(_int(reg[Arg[1]]), _uint(reg[Arg[2]]),
 			   sys.whence_t(reg[Arg[3]]));
 	    if rv < 0 then
 		print bde, "lseek error [d]\n", rv;
 	    reg[Arg[1]] = SWord(rv);
 	}
-	is 60 then	// exit
+	is 54 then	// ioctl
+	{   ok, addr = Map(reg[Arg[3]]);
+	    if ok then
+	    {
+		rv = sys.ioctl(_int(reg[Arg[1]]), _uint(reg[Arg[2]]), addr);
+		reg[Arg[1]] = SWord(rv);
+	    }
+	}
+	is 146 then	// writev
 	{
-	    fault = EXIT;
+//print bde, "writev r1=[d] r2=[!x] r3=[d]\n", reg[1], reg[2], reg[3];
+	    ok, addr = MapIOV(reg[2], _uint(reg[3]));
+	    if ok then
+	    {
+//print bde, "addr=[p]\n", addr;
+		rv = sys.writev(_int(reg[1]), addr, _uint(reg[3]));
+//print bde, "rv=[d]\n", rv;
+if rv == -1 then print bde, "errno=[d]\n", sys.errno();
+		reg[Arg[1]] = SWord(rv);
+	    }
+	}
+	is 232 then	// set_tid_address
+	{
+	    tid_address = reg[1];
+	    reg[1] = 1;		// fake thread id
 	}
 	else
 	    print bde, "** Unimplemented system call [d]\n", n;
@@ -965,21 +1019,30 @@ islogical, minor, src1, src2;
 
 	minor = (inst >> 9) & 0b1111_1_11;
 	if minor
-	is 0b0001_0_00 then	// FADD/FSUB
+		// converts
+	is 0b1100_0_00 then	// CVTDU
+	    tmp = Convert(src1, D, U);
+	is 0b1110_0_00 then	// CVTUD
+	    tmp = Convert(src1, U, D);
+	is 0b1000_0_01 then	// CVTFD
+	    tmp = Convert(src1, F, D);
+
+		// normal floating point
+	is 0b0001_1_00 then	// FADD/FSUB
 	    tmp = Word(_float64(src1) + _float64(src2));
-	is 0b0010_0_00 then	// FMUL
+	is 0b0010_1_00 then	// FMUL
 	    tmp = Word(_float64(src1) * _float64(src2));
-	is 0b0011_0_00 then	// FDIV
+	is 0b0011_1_00 then	// FDIV
 	    tmp = Word(_float64(src1) / _float64(src2));
-	is 0b0100_0_00 then	// FCMP
+	is 0b0100_1_00 then	// FCMP
 	    tmp = DoDoubleCompare(_float64(src1), _float64(src2));
-	is 0b0110_0_00 then	// FMAX
+	is 0b0110_1_00 then	// FMAX
 	    tmp = Word(_max(_float64(src1), _float64(src2)));
-	is 0b0111_0_00 then	// FMIN
+	is 0b0111_1_00 then	// FMIN
 	    tmp = Word(_min(_float64(src1), _float64(src2)));
-	is 0b1000_0_00 then	// CSGN
+	is 0b1000_1_00 then	// CSGN
 	    tmp = (src1 & 0x7FFFFFFF_FFFF_FFFF) | (src2 & 0x80000000_00000000);
-	is 0b1001_0_00 then	// EADD
+	is 0b1001_1_00 then	// EADD
 	{	var dbl: _float64;
 	    var old, new: _int;
 	    var frac: _uint64;
@@ -993,34 +1056,34 @@ islogical, minor, src1, src2;
 		tmp = Word(float64Make(dbl.getSign(),_uint(new),frac));
 	    }
 	}
-	is 0b1101_0_00 then	// HYPOT
+	is 0b1101_1_00 then	// HYPOT
 	    Fault("HYPOT not yet implemented", inst);
-	is 0b1110_0_00 then	// FPOW
+	is 0b1110_1_00 then	// FPOW
 	    Fault("POW not yet implemented", inst);
-	is 0b1111_0_00 then	// FATAN2
+	is 0b1111_1_00 then	// FATAN2
 	    Fault("ATAN2 not yet implemented", inst);
 
-	is 0b0001_0_01 then	// FADDF/FSUBF
+	is 0b0001_1_01 then	// FADDF/FSUBF
 	    tmp = Word(_uint32(_float32(_uint32(src1)) + _float32(_uint32(src2))));
-	is 0b0010_0_01 then	// FMULF
+	is 0b0010_1_01 then	// FMULF
 	    tmp = Word(_uint32(_float32(_uint32(src1)) * _float32(_uint32(src2))));
-	is 0b0011_0_01 then	// FDIVF
+	is 0b0011_1_01 then	// FDIVF
 	    tmp = Word(_uint32(_float32(_uint32(src1)) / _float32(_uint32(src2))));
-	is 0b0100_0_01 then	// FCMPF
+	is 0b0100_1_01 then	// FCMPF
 	    tmp = DoSingleCompare(_float32(_uint32(src1)), _float32(_uint32(src2)));
-	is 0b0110_0_01 then	// FMAXF
+	is 0b0110_1_01 then	// FMAXF
 	    tmp = Word(_uint32(_max(_float32(_uint32(src1)), _float32(_uint32(src2)))));
-	is 0b0111_0_01 then	// FMINF
+	is 0b0111_1_01 then	// FMINF
 	    tmp = Word(_uint32(_min(_float32(_uint32(src1)), _float32(_uint32(src2)))));
-	is 0b1000_0_01 then	// CSGNF
+	is 0b1000_1_01 then	// CSGNF
 	    tmp = (src1 & 0x7FFF_FFFF) | (src2 & 0x8000_0000);
-	is 0b1001_0_01 then	// EADDF
+	is 0b1001_1_01 then	// EADDF
 	    Fault("EADDF not yet implemented", inst);
-	is 0b1101_0_01 then	// HYPOT
+	is 0b1101_1_01 then	// HYPOT
 	    Fault("HYPOTF not yet implemented", inst);
-	is 0b1110_0_01 then	// FPOW
+	is 0b1110_1_01 then	// FPOW
 	    Fault("POWF not yet implemented", inst);
-	is 0b1111_0_01 then	// FATAN2
+	is 0b1111_1_01 then	// FATAN2
 	    Fault("ATAN2F not yet implemented", inst);
 	else
 	    Fault("Unimplemented instruction2", inst);
@@ -1709,14 +1772,13 @@ op.minor, op.L, op.size, base, inx, disp, adr;
 	}
 	is 0b0010 then			// STD ST{WHB}
 	    Write(adr, width, tmp);
-	is 0b0110 then			// CALX/JMPX
-	{   nextpc = Read(adr, QUAD);
-	    if op.rd == 0 then
-		reg[LR] = reg[PC];
-	}
-	is 0b0111 then			// CALA
-	{   nextpc = adr;
-	    reg[LR] = reg[PC];
+	is 0b0111 then			// CAL?/JMP?
+	{   if op.rd == 1 then		// CALA/CALX
+		reg[LR] = nextpc;
+	    if op.L == 0 then		// ???A
+		nextpc = adr;
+	    else			// ???X
+		nextpc = Read(adr, QUAD);
 	}
 	is 0b1010 then			// LDM
 	{   if op.L ==  0 then
@@ -1876,20 +1938,6 @@ print bdx, "adr=[x]\n", adr;
 	is GT0 then take = SWord(tmp) >  0;
 	is LE0 then take = SWord(tmp) <= 0;
 	is LT0 then take = SWord(tmp) <  0;
-/*
-	is DEQ then take = _float64(tmp) == 0.0;
-	is DNE then take = _float64(tmp) != 0.0;
-	is DGE then take = _float64(tmp) >= 0.0;
-	is DLT then take = _float64(tmp) <  0.0;
-	is DGT then take = _float64(tmp) >  0.0;
-	is DLE then take = _float64(tmp) <= 0.0;
-	is FEQ then take = _float32(_uint32(tmp)) == 0.0;
-	is FNE then take = _float32(_uint32(tmp)) != 0.0;
-	is FGE then take = _float32(_uint32(tmp)) >= 0.0;
-	is FLT then take = _float32(_uint32(tmp)) <  0.0;
-	is FGT then take = _float32(_uint32(tmp)) >  0.0;
-	is FLE then take = _float32(_uint32(tmp)) <= 0.0;
-*/
 	is RET then
 	{   nextpc = reg[LR];
 	    return;
@@ -1931,6 +1979,34 @@ if db&8 != 0 then print bde, " offs=[d] newpc=[x]\n", offs, nextpc;
 	}
     }
 
+    proc OpBfc(inst: Inst)
+    {	var op: OPBC = OPBC(inst);
+	var take: boolean;
+	var cond: FConditions;
+	var tmp: Word;
+
+	tmp = reg[op.rs1];
+	cond = FConditions(op.cond);
+	if cond
+	is DEQ then take = _float64(tmp) == 0.0;
+	is DNE then take = _float64(tmp) != 0.0;
+	is DGE then take = _float64(tmp) >= 0.0;
+	is DLT then take = _float64(tmp) <  0.0;
+	is DGT then take = _float64(tmp) >  0.0;
+	is DLE then take = _float64(tmp) <= 0.0;
+	is FEQ then take = _float32(_uint32(tmp)) == 0.0;
+	is FNE then take = _float32(_uint32(tmp)) != 0.0;
+	is FGE then take = _float32(_uint32(tmp)) >= 0.0;
+	is FLT then take = _float32(_uint32(tmp)) <  0.0;
+	is FGT then take = _float32(_uint32(tmp)) >  0.0;
+	is FLE then take = _float32(_uint32(tmp)) <= 0.0;
+	else
+	    Fault("Unimplemented branch floating condition instruction", inst);
+	if take then
+	{   shadow = 0;
+	    nextpc = (Sext(15, inst&0xFFFF) << 2) + instpc;
+	}
+    }
 
     proc OpBr(inst: Inst)
     {	var op: OPBR = OPBR(inst);
@@ -1995,7 +2071,7 @@ if db&256 != 0 then { print bde, "InstLen=[d]\n", len; }
 if db&4 != 0 then { print bde, "[x] ", shadow; }
 	    shadow = shadow >> 1;
 	    pcnt -= 1;
-	    if skip != 0 then mark = '!'; else mark = '*';
+	    if skip != 0 then mark = '+'; else mark = '-';
 	}
 if db&1 != 0 then {
 print bde, "[>8x][c]", instpc, mark;
@@ -2028,6 +2104,7 @@ print bde, "\n";
 	is MOC_LOOP		then OpLoop(inst);
 	is MOC_BBIT,MOC_BBIT|1	then OpBb(inst);
 	is MOC_BCND		then OpBc(inst);
+	is MOC_BFCND		then OpBfc(inst);
 	is 0b011110..0b011111	then OpBr(inst);
 	is 0b100000..0b101100	then OpMemImm(inst); // LD, ST, ENTER, EXIT
 	is 0b110001..0b110100	then OpImm(inst); // ADD ... CMP

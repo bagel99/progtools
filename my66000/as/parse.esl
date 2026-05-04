@@ -494,7 +494,7 @@ import my66000def;
      * 000111dddddsssssmmmm0zznn0oooooo -- XOM7
      * 110101dddddsssssmmmmwwwwwwoooooo -- IMM16
      */
-    proc ShfOp0(s: @[]_byte, minor: _uint)
+    proc ShfOp0(s: @[]_byte, minor: _uint, size: _uint)
     {   var op: OP2;
 	var arg1, arg2: OperandT;
 	var imm: @OperandT;
@@ -505,7 +505,7 @@ import my66000def;
 	op.major = MOC_XOP0;
 	op.minor = minor;
 	op.S = 0;
-	op.size = 0;
+	op.size = size;
 	s, op.rd = GetReg(s);
 	s = SkipComma(s);
 	s = GetOperand(s, arg1);
@@ -518,7 +518,7 @@ import my66000def;
 	FinishOp(Inst(op), nnID, negate, arg1, arg2);
     }
 
-    proc ShfOp(s: @[]_byte, opc: _uint, alt: _uint, flags: _uint)
+    proc ShfOp(s: @[]_byte, opc: _uint, size: _uint, flags: _uint)
     {
 	var rd, rs1, rs2: _uint;
 	var r: @[]_byte;
@@ -528,13 +528,13 @@ import my66000def;
 	s, rd = GetReg(s);
 	s = SkipComma(s);
 	if s[0] == '#' || s[0] == '-' then
-	{   ShfOp0(r, opc);	// rescan as XOP0
+	{   ShfOp0(r, opc, size);	// rescan as XOP0
 	    return;
 	}
 	s, rs1 = GetReg(s);
 	s = SkipComma(s);
 	if s[0] != '#' then
-	{   ShfOp0(r, opc);	// rescan as XOP0
+	{   ShfOp0(r, opc, size);	// rescan as XOP0
 	    return;
 	}
 	s = SkipWS(s[1:]);
@@ -563,6 +563,7 @@ import my66000def;
 	    opr.minor = opc;
 	    opr.rd = rd;
 	    opr.rs1 = rs1;
+	    opr.size = size;
 	    opr.o = o & 0b111111;	// compiler bug?
 //print bde, "XOM7 [!08x]\n", _uint32(opr);
 	    segment.Put4(_uint32(opr));
@@ -941,7 +942,7 @@ print bde, "kind=[d] comp=[d] signed=[t]", kind, op.cnd, signed;
 	var tgt: expr.ExprT;
 	var n: _uint;
 
-	op.major = MOC_BCND;
+	if alt == 0 then op.major = MOC_BCND; else op.major = MOC_BFCND;
 	op.cond  = opc;
 	if flags == 0 then	// normal branch on condition
 	{
@@ -1434,14 +1435,17 @@ print bde, "kind=[d] comp=[d] signed=[t]", kind, op.cnd, signed;
 	{ "calx",  4,  0b0111_1_00, 0b000000, 6, MemOp },
 	{ "cala",  4,  0b0111_0_00, 0b000000, 6, MemOp },
 	{ "jmpx",  4,  0b0111_1_00, 0b000000, 2, MemOp },
+	{ "jmpa",  4,  0b0111_0_00, 0b000000, 2, MemOp },
 
-	{ "srl",   3,  0b1000, 0, 0, ShfOp },
-	{ "sra",   3,  0b1001, 0, 0, ShfOp },
-	{ "sll",   3,  0b1010, 0, 0, ShfOp },
-	{ "sla",   3,  0b1011, 0, 0, ShfOp },
-	{ "rol",   3,  0b0110, 0, 0, ShfOp },
-	{ "ror",   3,  0b0111, 0, 0, ShfOp },
-	{ "bitr",  4,  0b0100, 0, 0, ShfOp },
+	{ "srl",   3,  0b1000, 0b00, 0, ShfOp },
+	{ "sra",   3,  0b1001, 0b00, 0, ShfOp },
+	{ "sll",   3,  0b1010, 0b00, 0, ShfOp },
+	{ "sla",   3,  0b1011, 0b00, 0, ShfOp },
+	{ "rol",   3,  0b0110, 0b00, 0, ShfOp },
+	{ "rolw",  4,  0b0110, 0b01, 0, ShfOp },
+	{ "ror",   3,  0b0111, 0b00, 0, ShfOp },
+	{ "rorw",  4,  0b0111, 0b01, 0, ShfOp },
+	{ "bitr",  4,  0b0100, 0b00, 0, ShfOp },
 
 	// XOP6 Op1 (also trancendentls below)
 	//              minor_S_zz     fffff  flags
@@ -1593,23 +1597,23 @@ print bde, "kind=[d] comp=[d] signed=[t]", kind, op.cnd, signed;
 	{ "fmacf", 5,  0b010011, 1, 0, Op3 },
 
 	// 64-bit floating point branch conditions
-	{ "bdeq",  4,  0b01000, 0, 0, BcmOp },
-	{ "bdne",  4,  0b01001, 0, 0, BcmOp },
-	{ "bdge",  4,  0b01010, 0, 0, BcmOp },
-	{ "bdlt",  4,  0b01011, 0, 0, BcmOp },
-	{ "bdgt",  4,  0b01100, 0, 0, BcmOp },
-	{ "bdle",  4,  0b01101, 0, 0, BcmOp },
-	{ "bdor",  4,  0b01110, 0, 0, BcmOp },
-	{ "bdun",  4,  0b01111, 0, 0, BcmOp },
+	{ "bdeq",  4,  0b00000, 1, 0, BcmOp },
+	{ "bdne",  4,  0b00001, 1, 0, BcmOp },
+	{ "bdge",  4,  0b00010, 1, 0, BcmOp },
+	{ "bdlt",  4,  0b00011, 1, 0, BcmOp },
+	{ "bdgt",  4,  0b00100, 1, 0, BcmOp },
+	{ "bdle",  4,  0b00101, 1, 0, BcmOp },
+	{ "bdor",  4,  0b00110, 1, 0, BcmOp },
+	{ "bdun",  4,  0b00111, 1, 0, BcmOp },
 	// 32-bit floating point branch conditions
-	{ "bfeq",  4,  0b10000, 0, 0, BcmOp },
-	{ "bfne",  4,  0b10001, 0, 0, BcmOp },
-	{ "bfge",  4,  0b10010, 0, 0, BcmOp },
-	{ "bflt",  4,  0b10011, 0, 0, BcmOp },
-	{ "bfgt",  4,  0b10100, 0, 0, BcmOp },
-	{ "bfle",  4,  0b10101, 0, 0, BcmOp },
-	{ "bfor",  4,  0b10110, 0, 0, BcmOp },
-	{ "bfun",  4,  0b10111, 0, 0, BcmOp },
+	{ "bfeq",  4,  0b01000, 1, 0, BcmOp },
+	{ "bfne",  4,  0b01001, 1, 0, BcmOp },
+	{ "bfge",  4,  0b01010, 1, 0, BcmOp },
+	{ "bflt",  4,  0b01011, 1, 0, BcmOp },
+	{ "bfgt",  4,  0b01100, 1, 0, BcmOp },
+	{ "bfle",  4,  0b01101, 1, 0, BcmOp },
+	{ "bfor",  4,  0b01110, 1, 0, BcmOp },
+	{ "bfun",  4,  0b01111, 1, 0, BcmOp },
 
 	// floating point compare bits
 	{ "bneq",  4,  0b000001, 0, 0, BbmOp },
@@ -1720,18 +1724,17 @@ print bde, "kind=[d] comp=[d] signed=[t]", kind, op.cnd, signed;
 
 	// locking loads/stores
 	//              minor_L_zz  alt flags
-	{ "ldd",   3,  0b0000_1_00,  0,   0,    MemOp },
-	{ "lduw",  4,  0b0000_1_01,  0,   0,    MemOp },
-	{ "lduh",  4,  0b0000_1_10,  0,   0,    MemOp },
-	{ "ldub",  4,  0b0000_1_11,  0,   0,    MemOp },
-	{ "la",    2,  0b0001_1_00,  0,   0,    MemOp },
-	{ "ldsw",  4,  0b0001_1_01,  0,   0,    MemOp },
-	{ "ldsh",  4,  0b0001_1_10,  0,   0,    MemOp },
-	{ "ldsb",  4,  0b0001_1_11,  0,   0,    MemOp },
-	{ "std",   3,  0b0010_1_00,  0,   0,    MemOp },
-	{ "stw",   3,  0b0010_1_01,  0,   0,    MemOp },
-	{ "sth",   3,  0b0010_1_10,  0,   0,    MemOp },
-	{ "stb",   3,  0b0010_1_11,  0,   0,    MemOp },
+	{ "lddl",  4,  0b0000_1_00,  0,   0,    MemOp },
+	{ "lduwl", 5,  0b0000_1_01,  0,   0,    MemOp },
+	{ "lduhl", 5,  0b0000_1_10,  0,   0,    MemOp },
+	{ "ldubl", 5,  0b0000_1_11,  0,   0,    MemOp },
+	{ "ldswl", 5,  0b0001_1_01,  0,   0,    MemOp },
+	{ "ldshl", 5,  0b0001_1_10,  0,   0,    MemOp },
+	{ "ldsbl", 5,  0b0001_1_11,  0,   0,    MemOp },
+	{ "stdl",  4,  0b0010_1_00,  0,   0,    MemOp },
+	{ "stwl",  4,  0b0010_1_01,  0,   0,    MemOp },
+	{ "sthl",  4,  0b0010_1_10,  0,   0,    MemOp },
+	{ "stbl",  4,  0b0010_1_11,  0,   0,    MemOp },
     };
 
     proc Instruction(s: @[]_byte, n: _uint)

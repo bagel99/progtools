@@ -55,7 +55,7 @@ package sys
     {   base:  _address;
 	len:   _uint;
     };
-    proc writev(fd: fildes, iov: @[]iovec, iovcnt: _uint): _int: external;
+    proc writev(fd: fildes, iov: _address, iovcnt: _uint): _int: external;
 
     type ioctl_code:    // Linux ioctl encoding
     {   command: _uint8;

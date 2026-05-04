@@ -137,6 +137,7 @@
 	var r: @[]_byte;
 	var e: expr.ExprT;
 	var pos, pns: symbol.Symbol;
+	var scope: symbol.SymbScope;
 
 	r = SkipWS(s);
 	s, n = lex.Symbol(r);
@@ -148,12 +149,14 @@
 	{   Syntax("Bad .set expression");
 	    return;
 	}
-//print bde, "SetOp [!s] = ", n, r;
+//print bde, "SetOp [!s]\n", n, r;
 //expr.Dump(bde, e);
 //print bde, "\n";
 	pos = symbol.Look(e.sym1.name, e.sym1.len);
 	pns = symbol.Enter(r, n);
+	scope = pns.flags.scope;	// preserve scope
 	pns.flags = pos.flags;
+	pns.flags.scope = scope;
 	pns.segm = pos.segm;
 	pns.blok = pos.blok;
 	pns.offs = pos.offs;

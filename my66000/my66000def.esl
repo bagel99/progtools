@@ -17,7 +17,8 @@
     const MOC_MAC  = 0b010011;
     const MOC_LOOP = 0b010101;
     const MOC_BBIT = 0b011000;	// also 0b011001
-    const MOC_BCND = 0b011010;	// also JTT
+    const MOC_BCND = 0b011010;	// integer, also JTT
+    const MOC_BFCND= 0b011011;	// float
     const MOC_EXIT = 0b100100;
     const MOC_ENTER= 0b101100;
     const MOC_MOV  = 0b111011;

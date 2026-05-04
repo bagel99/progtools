@@ -139,9 +139,9 @@
 	  XXX,    XXX,    XXX,    XXX,			// 0b0100_1_zz
 	  XXX,    XXX,    XXX,    XXX,			// 0b0101_0_zz
 	  XXX,    XXX,    XXX,    XXX,			// 0b0101_1_zz
-	  "calx", XXX,    XXX,    XXX,			// 0b0110_0_zz
+	  XXX,    XXX,    XXX,    XXX,			// 0b0110_0_zz
 	  XXX,    XXX,    XXX,    XXX,			// 0b0110_1_zz
-	  "cala", XXX,    XXX,    XXX,			// 0b0111_0_zz
+	  XXX,    XXX,    XXX,    XXX,			// 0b0111_0_zz
 	  XXX,    XXX,    XXX,    XXX,			// 0b0111_1_zz
 	  XXX,    XXX,    XXX,    XXX,			// 0b1000_0_zz
 	  XXX,    XXX,    XXX,    XXX,			// 0b1000_1_zz
@@ -162,12 +162,29 @@
 	};
 	var name: @[]_byte;
 
-	minor = (inst >> 9) & 0b1111_1_11;
-	name = OpName[minor];
-	if (minor >> 3) == 0b0110 && op.rd == 1 then
-	    name = "jmpx";
+	minor = op.minor;
+	if minor == 0b0111 then	// the misc instructions
+	{   if op.rd
+	    is 0 then
+	    {	if op.L == 0 then
+		    name = "jmpa";
+		else
+		    name = "jmpx";
+	    }
+	    is 1 then
+	    {	if op.L == 0 then
+		    name = "cala";
+		else
+		    name = "calx";
+	    }
+	    else
+		name = XXX;
+	}
+	else
+	    name = OpName[(inst >> 9) & 0b1111_1_11];
+
 	print bdx, "[s]\t", name;
-	if minor >> 3
+	if minor
 	is 0b0000, 0b0001, 0b0010, 0b0011 then	// normal load/store
 	{   PReg(op.rd);
 	    print bdx, ",";
@@ -620,6 +637,17 @@
 	}
     }
 
+    proc disOpBfc(inst: Inst, ip: Word)
+    {	var op: OPBC = OPBC(inst);
+	var adr: Word;
+
+	print bdx, "b[s]\t", FCondNames[op.cond];
+	PReg(op.rs1);
+	adr = Word(Sext(15, inst&0xFFFF)) << 2;
+	adr += ip;
+	print bdx, ",[!x]", _uint32(adr);
+    }
+
     proc disOpBr(inst: Inst, ip: Word)
     {	var op: OPBR = OPBR(inst);
 	var adr: Word;
@@ -793,6 +821,7 @@
 	is MOC_LOOP	      then disLoop(inst, ip);
 	is MOC_BBIT,MOC_BBIT|1 then disOpBb(inst, ip);
 	is MOC_BCND	      then disOpBc(inst, ip);
+	is MOC_BFCND	      then disOpBfc(inst, ip);
 	is 0b011110..0b011111 then disOpBr(inst, ip);
 	is 0b100000..0b100110 then disOpMemImm(inst, ip); // LD
 	is 0b101000..0b101011 then disOpMemImm(inst, ip); // ST

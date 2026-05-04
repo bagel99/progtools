@@ -117,7 +117,13 @@ proc main(argc: _uint, argv: @[]@[]_byte): _int
 	    is 'f' then debug.fb = true;
     	}
 	is 'o' then
-	    ofile = argv[i]@[2:];
+	{   if argv[i]@[2] == 0 then
+	    {	i += 1;
+		ofile = argv[i];
+	    }
+	    else
+		ofile = argv[i]@[2:];
+	}
 	i += 1;
     }
     if i > argc then

@@ -67,6 +67,20 @@ package symbol
     }
 */
 
+    proc DumpSymbol(ps: Symbol)
+    {
+	const Scope: [SymbScope]@[]_byte =
+	{ "LOCAL", "IMPORT", "EXPORT", "WEAK" };
+	if outlocalsym || !ps.VeryLocal() then
+	{   if ps.flags.def then
+		print bdo, "[016x]", ps.FinalValue();
+	    else
+		print bdo, "               U";
+	    print bdo, " [[[d]] [s] [s] [s]\n",
+		ps.numb, ps.segm.name, ps.name, Scope[ps.flags.scope];
+	}
+    }
+
     proc Dump()
     {   var ps: Symbol;
 
@@ -74,13 +88,7 @@ package symbol
 	print bdo, "Symbol Table:\n";
 	ps = symtable;
 	while ps != 0 do
-	{   if outlocalsym || !ps.VeryLocal() then
-	    {	if ps.flags.def then
-		    print bdo, "[016x]", ps.FinalValue();
-		else
-		    print bdo, "               U";
-		print bdo, " [[[d]] [s] [s]\n", ps.numb, ps.segm.name, ps.name;
-	    }
+	{   DumpSymbol(ps);
 	    ps = ps.next;
 	}
 	bdo.flush();
