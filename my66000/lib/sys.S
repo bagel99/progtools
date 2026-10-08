@@ -4,31 +4,31 @@
 	.p2align 2
 	.globl	exit
 exit:
-	svc	#0,#60
+	svc	#0,#1
 	.word	0		; halt?
-
-	.globl	open
-open:
-	svc	#3,#2
-	ret
-
-	.globl	close
-close:
-	svc	#1,#3
-	ret
 
 	.globl	read
 read:
-	svc	#3,#0
+	svc	#3,#3
 	ret
 
 	.globl	write
 write:
-	svc	#3,#1
+	svc	#3,#4
+	ret
+
+	.globl	open
+open:
+	svc	#3,#5
+	ret
+
+	.globl	close
+close:
+	svc	#1,#6
 	ret
 
 	.globl	lseek
 lseek:
-	svc	#2,#8
+	svc	#2,#19
 	ret
 

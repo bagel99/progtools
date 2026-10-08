@@ -132,7 +132,7 @@
 	}
     }
 
-    proc SetOp(s: @[]_byte)
+    proc SetOp(s: @[]_byte, delim: _byte)
     {   var n: _uint;
 	var r: @[]_byte;
 	var e: expr.ExprT;
@@ -142,7 +142,7 @@
 	r = SkipWS(s);
 	s, n = lex.Symbol(r);
 	s = SkipWS(s);
-	if s[0] != ',' then return;
+	if s[0] != delim then return;
 	s = SkipWS(s[1:]);
 	s = Expr(s, e);
 	if e.op != NONE && e.op != SYMADD then
@@ -406,7 +406,7 @@
 	is 10 then	// visibility
 	    VisibilityOp(t[0:], POpcodes[p].option);
 	is 11 then	// set
-	    SetOp(t[0:]);
+	    SetOp(t[0:], ',');
 	is 12 then	// jump table
 	    JTOp(t[0:], POpcodes[p].option);
     }

@@ -9,6 +9,7 @@
     const MOC_XOM7 = 0b000111;
     const MOC_XOP0 = 0b001000;
     const MOC_INT2 = 0b001001;
+    const MOC_CVT2 = 0b001010;
     const MOC_FP2  = 0b001011;
     const MOC_MEM  = 0b001101;
     const MOC_OP1  = 0b001110;
@@ -124,7 +125,7 @@
 
     type OPVEC:
     {	major:	0..0b111111;	// 31..26
-	rd:	REG;		// 25..21
+	width:	0..31;		// 25..21
 	imm:    0..0x1FFFFF;	// 20..0
     }: packed, msb, bits(32);
 
@@ -212,10 +213,10 @@
 	_,   _,   _,   _,   _,   _,   _,   _
     );
     const FCondNames: [Conditions][5]_byte =
-    {	"deq", "dne", "dge", "dlt", "dgt", "dle", "dor", "dun",
-	"feq", "fne", "fge", "flt", "fgt", "fle", "for", "fun",
-	"",    "",    "",    "",    "",    "",    "",    "",
-	"",    "",    "",    "",    "",    "",    "",    ""
+    {	"deq0", "dne0", "dge0", "dlt0", "dgt0", "dle0", "dor", "dun",
+	"feq0", "fne0", "fge0", "flt0", "fgt0", "fle0", "for", "fun",
+	"",     "",     "",     "",     "",     "",     "",    "",
+	"",     "",     "",     "",     "",     "",     "",    ""
     };
     type CBits:		// result of CMP or FCMP
     (	EQ=0, NEQ, NE, NNE, GE, NGE, LT, NLT,		// 0-7
@@ -254,3 +255,20 @@
 	"r24",	"r25",	"r26",	"r27",	"r28",	"r29",	"r30",	"sp",
 	"ip"
     };
+
+    // Operand types for XOP1, XOP2, XOP3
+    type OperandType: ( REG, IMM5P, IMM5N, IMM32, IMM64 );
+    proc Operand1Type(inst: Inst): OperandType
+    {	const tab1: [16]OperandType =
+	{ REG, REG, REG, REG, REG, IMM5P, IMM32, IMM64,
+	  REG, REG, REG, REG, REG, IMM5P, IMM32, IMM64
+	};
+	return tab1[(inst>>5) & 0b1111];
+    }
+    proc Operand2Type(inst: Inst): OperandType
+    {	const tab2: [16]OperandType =
+	{ REG, IMM5P, IMM32, IMM64, REG, REG, REG, REG,
+	  REG, IMM5N, IMM32, IMM64, REG, REG, REG, REG
+	};
+	return tab2[(inst>>5) & 0b1111];
+    }

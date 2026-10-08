@@ -175,8 +175,17 @@ print bde, "[!s]\n", 16, r;
       { 0b0_0111, 0b0_1111,     -1,       -1,       -1,       -1   }   // IMM64
     };
 
-    proc getFormat2(o1: @OperandT, o2: @OperandT): _uint, boolean
+    proc getFormat2(o1: @OperandT, o2: @OperandT, isfp: boolean): _uint, boolean
     {	var tmp: _int8;
+
+	if isfp then	// FIXUP FP32 with sign
+	{   if o1.type == IMM64 &&
+		    (o1.expr.offs & 0xffff_ffff_0000_0000) == 0 then
+		o1.type = IMM32;
+	    if o2.type == IMM64 &&
+		    (o2.expr.offs & 0xffff_ffff_0000_0000) == 0 then
+		o2.type = IMM32;
+	}
 	tmp = FmtTab[o1.type][o2.type];
 	if tmp < 0 then
 	    Syntax("Two immediates not allowed");
@@ -313,7 +322,7 @@ import my66000def;
 	s = GetOperand(s, arg1);
 	s = SkipComma(s);
 	s = GetOperand(s, arg2);
-	nnID, negimm = getFormat2(arg1, arg2);
+	nnID, negimm = getFormat2(arg1, arg2, false);
 //print bde, "IntOp nnID=[04b] negimm=[t]\n", nnID, negimm;
 	// check for IMM16 versions
 	if nnID
@@ -356,7 +365,7 @@ import my66000def;
 	s = GetOperand(s, arg1);
 	s = SkipComma(s);
 	s = GetOperand(s, arg2);
-	nnID, negimm = getFormat2(arg1, arg2);
+	nnID, negimm = getFormat2(arg1, arg2, true);
 //print bde, "FPOp nnID=[04b] negimm=[t]\n", nnID, negimm;
 	negate = NONE;
 	if negimm then
@@ -366,14 +375,18 @@ import my66000def;
 	FinishOp(Inst(op), nnID, negate, arg1, arg2);
     }
 
-    proc CvtOp(s: @[]_byte, opc: _uint, alt: _uint, flags: _uint)
+    proc Xop2(s: @[]_byte, opc: _uint, alt: _uint, flags: _uint)
     {	var op: OP2;
 	var r: @[]_byte;
 	var arg1, arg2: OperandT;
 	var nnID: 0..0b1111;
 	var negimm: boolean;
+	var src2fp: boolean;
+	var rmopt: boolean;
 
-	op.major = MOC_FP2;
+	src2fp = flags&1 == 0;
+	rmopt  = flags&2 == 0;
+	op.major = MOC_CVT2;
 	op.minor = opc >> 3;
 	op.S = (opc >> 2) & 1;
 	op.size = opc & 3;
@@ -381,15 +394,16 @@ import my66000def;
 	s = SkipComma(s);
 	s = GetOperand(s, arg1);
 	r = CheckComma(s);
-	if r == 0 then		// default rounding mode
-	{   arg2.type = REG;
-	    arg2.reg = 31;
+	if r == 0 && rmopt then	// default rounding mode
+	{   arg2 = arg1;
+	    arg1.type = REG;
+	    arg1.reg = 0;
 	}
 	else
 	    s = GetOperand(r, arg2);
-	nnID, negimm = getFormat2(arg1, arg2);
+	nnID, negimm = getFormat2(arg1, arg2, src2fp);
 	// FIXME - negate of conversion for IMM5
-//print bde, "OpCvt nnID=[04b]\n", nnID;
+//print bde, "Xop2 nnID=[04b]\n", nnID;
 	FinishOp(_uint32(op), nnID, NONE, arg1, arg2);
     }
 
@@ -451,7 +465,7 @@ import my66000def;
 	s = GetOperand(s, arg1);
 	s = SkipComma(s);
 	s = GetOperand(s, arg2);
-	nnID, negimm = getFormat2(arg1, arg2);
+	nnID, negimm = getFormat2(arg1, arg2, flags != 0);
 	negate = NONE;
 	if negimm then negate = INT;
 	FinishOp(_uint32(op), nnID, negate, arg1, arg2);
@@ -482,7 +496,7 @@ import my66000def;
 	    arg2.expr.offs |= arg3.expr.offs << 6;
 	    arg2.type = IMM32;
 	}
-	nnID, negimm = getFormat2(arg1, arg2);
+	nnID, negimm = getFormat2(arg1, arg2, false);
 	negate = NONE;
 	if negimm then negate = INT;
 	FinishOp(_uint32(op), nnID, negate, arg1, arg2);
@@ -511,7 +525,7 @@ import my66000def;
 	s = GetOperand(s, arg1);
 	s = SkipComma(s);
 	s = GetOperand(s, arg2);
-	nnID, negimm = getFormat2(arg1, arg2);
+	nnID, negimm = getFormat2(arg1, arg2, false);
 //print bde, "ShfOp0 nnID=[04b] negimm=[t]\n", nnID, negimm;
 	negate = NONE;
 	if negimm then negate = INT;
@@ -587,7 +601,7 @@ import my66000def;
 	// check for IMM16 versions
 	if nnID
 	is 0b0001, 0b1001, 0b0010 then
-	{   if !arg.fixup && (alt != 3 || IsImm16(arg.expr.offs)) then
+	{   if !arg.fixup && (flags != 0 || IsImm16(arg.expr.offs)) then
 	    {   var opim: OPIMM;
 		opim.major = MOC_MOV;
 		opim.rd  = rd;
@@ -630,7 +644,7 @@ import my66000def;
     proc Pcnd(s: @[]_byte, opc: _uint, alt: _uint, flags: _uint)
     {	var op: OPPC;
 	op.major = MOC_XOM6;
-	op.minor = 0b0001;
+	op.minor = alt;
 	op.cond  = opc;
 	Pred(s, _uint32(op));
     }
@@ -662,7 +676,7 @@ import my66000def;
 	var n, m: _uint;
 
 	op.major = MOC_XOM6 >> 1;
-	op.minor = 0b0001;
+	op.minor = 0b0000;
 	r = s;
 	s, n = lex.Dec(s);
 	if s == r then	// not literal bit number
@@ -675,13 +689,20 @@ import my66000def;
 
     proc VecOp(s: @[]_byte, opc: _uint, alt: _uint, flags: _uint)
     {   var r: @[]_byte;
-	var rd, reg: _uint;
+	var reg: _uint;
+	var expr: expr.ExprT;
+	var width: _uint;
 	var mask: _uint32;
 //		       33222222222211111111110000000000
 //		       10987654321098765432109876543210
 	const vecs = 0b01111110000000001111111111111110;
 
-	s,rd = GetReg(s);
+	if s[0] == '#' then
+	{   s = Expr(s[1:], expr);
+	    width = expr.offs;
+	    // FIXME - check range
+	} else
+	    Syntax("immediate expected\n");
 	s = SkipComma(s);
 	mask = 0;
 	if s[0] == '{' then
@@ -699,13 +720,13 @@ import my66000def;
 	else
 	    Syntax("'{' expected\n");
 	if mask & ~vecs == 0 then	// use short VEC
-	{   var op: OPVEC = {.major=MOC_VEC, .rd=rd };
+	{   var op: OPVEC = {.major=MOC_VEC, .width=width};
 	    op.imm = ((mask >> 1)  & 0x007FFF) |
 	             ((mask >> 10) & 0x3F8000);
 	    segment.Put4(_uint32(op));
 	}
 	else				// use long VEC
-	{   var op1: OP1 = {.major=MOC_OP1, .minor=0b0001, .rd=rd, .I=1 };
+	{   var op1: OP1 = {.major=MOC_OP1, .minor=0b0001, .rd=width, .I=1 };
 	    segment.Put4(_uint32(op1));
 	    segment.Put4(mask);
 	}
@@ -763,31 +784,18 @@ import my66000def;
     }
 
     /*
-	nnId   Rinc  Rcmp
-	0000   REG   REG
-	0001   REG   IMM5
-	0010   REG   IMM32
-	0011   REG   IMM64
-	0101   IMM5  REG
-	1101   IMM5  IMM5	different from 2OP
-	1110   IMM5  IMM16	use IMM16 split IMM32
-	1111   IMM5  IMM32	use IMM32 split IMM64
-	----   IMM5  IMM64	illegal
-	0110   IMM16 REG	use IMM32
-	1110   IMM16 IMM5	use IMM16 split IMM32
-	1110   IMM16 IMM16	split IMM32
-	1111   IMM16 IMM32	use IMM32 split IMM64
-	----   IMM16 IMM64	illegal
-	0110   IMM32 REG
-	1111   IMM32 IMM5	use IMM32, split IMM64
-	1111   IMM32 IMM16	use IMM32, split IMM64
-	1111   IMM32 IMM32	split IMM64
-	----   IMM32 IMM64	illegal
-	0111   IMM64 REG
-	----   IMM5 IMM64	illegal
-	----   IMM16 IMM64	illegal
-	----   IMM32 IMM64	illegal
-	----   IMM64 IMM64	illegal
+nnId    Rs1=inc	Rs2=cmp
+----
+0000	REG	REG
+0101	IMM5	REG
+0001	REG	IMM5
+1101	IMM5	IMM5
+0110	IMM32	REG
+0010	REG	IMM32
+0111	IMM64	REG
+0011	REG	IMM64
+1010	IMM16	IMM16
+1011	IMM32	IMM32
      */
     const LoopFmtTab:[LoopOperandForm][LoopOperandForm]_int8 =
     {  //  REG   SIMM5   IMM16   IMM32   IMM64
@@ -1019,17 +1027,27 @@ print bde, "kind=[d] comp=[d] signed=[t]", kind, op.cnd, signed;
     proc HrOp(s: @[]_byte, opc: _uint, alt: _uint, flags: _uint)
     {   var op: OP1;
 	var f: _uint;
+	var arg2: OperandT;
+	var nnID: 0..0b1111;
 
+print bde, "HrOp opc=[x], alt=[x], flags=[x]\n", opc, alt, flags;
 	op.major = MOC_OP1;
-	op.minor = 0b0000;
+	op.minor = opc;
 	op.S     = 0;
 	op.size  = alt;
-	if alt&1 != 0 then
+	if flags&1 != 0 then
 	{   s, op.rd = GetReg(s);
 	    s = SkipComma(s);
 	}
-	if alt&2 != 0 then
-	{   s, op.rs2 = GetReg(s);
+	if flags&2 != 0 then
+	{   s = GetOperand(s, arg2);
+	    nnID, _ = getFormat1(arg2);
+//print bde, "Op1 minor=[04b] nnID=[04b]\n", op.minor, nnID;
+	    op.s1 = (nnID>>3)&1;	// FIXME - insert whole field
+	    op.s2 = (nnID>>2)&1;
+	    op.I  = (nnID>>1)&1;
+	    op.D  = (nnID>>0)&1;
+	    op.rs2 = arg2.reg;
 	    s = SkipComma(s);
 	}
 	if s[0]
@@ -1396,9 +1414,9 @@ print bde, "kind=[d] comp=[d] signed=[t]", kind, op.cnd, signed;
     const Insts: []InstT =
     {
     	{ "mov",   3,  0, 0b11000, 0, MovOp },
-	{ "movh",  4,  0, 0b10000, 0, MovOp },
-	{ "movf",  4,  0, 0b01000, 0, MovOp },
-	{ "movd",  4,  0, 0b00000, 0, MovOp },
+	{ "movh",  4,  0, 0b10000, 1, MovOp },
+	{ "movf",  4,  0, 0b01000, 1, MovOp },
+	{ "movd",  4,  0, 0b00000, 1, MovOp },
 
 	// XOP1 integer 64-bit
 	//              minor_S_zz  alt	    flags
@@ -1446,6 +1464,9 @@ print bde, "kind=[d] comp=[d] signed=[t]", kind, op.cnd, signed;
 	{ "ror",   3,  0b0111, 0b00, 0, ShfOp },
 	{ "rorw",  4,  0b0111, 0b01, 0, ShfOp },
 	{ "bitr",  4,  0b0100, 0b00, 0, ShfOp },
+	{ "bitrw", 5,  0b0100, 0b01, 0, ShfOp },
+	{ "bitrh", 5,  0b0100, 0b10, 0, ShfOp },
+	{ "bitrb", 5,  0b0100, 0b11, 0, ShfOp },
 
 	// XOP6 Op1 (also trancendentls below)
 	//              minor_S_zz     fffff  flags
@@ -1503,13 +1524,13 @@ print bde, "kind=[d] comp=[d] signed=[t]", kind, op.cnd, signed;
 
 	{ "pcnd",  4,  0b00000, 0, 0, PcOp },
 	// pcnd "macros"
-	{ "peq0",  4,  0b00000, 0, 0, Pcnd },
-	{ "pne0",  4,  0b00001, 0, 0, Pcnd },
-	{ "pge0",  4,  0b00010, 0, 0, Pcnd },
-	{ "plt0",  4,  0b00011, 0, 0, Pcnd },
-	{ "pgt0",  4,  0b00100, 0, 0, Pcnd },
-	{ "ple0",  4,  0b00101, 0, 0, Pcnd },
-	{ "pin",   3,  0b10010, 0, 1, Pcnd },
+	{ "peq0",  4,  0b00000, 0b0001, 0, Pcnd },
+	{ "pne0",  4,  0b00001, 0b0001, 0, Pcnd },
+	{ "pge0",  4,  0b00010, 0b0001, 0, Pcnd },
+	{ "plt0",  4,  0b00011, 0b0001, 0, Pcnd },
+	{ "pgt0",  4,  0b00100, 0b0001, 0, Pcnd },
+	{ "ple0",  4,  0b00101, 0b0001, 0, Pcnd },
+	{ "pin",   3,  0b10010, 0b0001, 1, Pcnd },
 
 	{ "pb1",   3,  0b000000, 0, 0, PbOp },
 	// pb1 "macros"
@@ -1565,6 +1586,64 @@ print bde, "kind=[d] comp=[d] signed=[t]", kind, op.cnd, signed;
 	{ "xorw",  4,  0b1001_0_01,  0, 0, IntOp },
 	{ "andw",  4,  0b1010_0_01,  0, 0, IntOp },
 
+	{ "bitrw", 5,  0b0100, 0b01, 0, ShfOp },
+	{ "srlw",  4,  0b1000, 0b01, 0, ShfOp },
+	{ "sraw",  4,  0b1001, 0b01, 0, ShfOp },
+	{ "sllw",  4,  0b1010, 0b01, 0, ShfOp },
+	{ "slaw",  3,  0b1011, 0b01, 0, ShfOp },
+	{ "rolw",  4,  0b0110, 0b01, 0, ShfOp },
+	{ "rorw",  4,  0b0111, 0b01, 0, ShfOp },
+
+	// XOP1 integer 16-bit
+	//              minor_S_zz  alt	flags
+	{ "addh",  4,  0b0001_0_10,  0, 0, IntOp },
+	{ "addhs", 5,  0b0001_1_10,  0, 0, IntOp },
+	{ "mulh",  4,  0b0010_0_10,  0, 0, IntOp },
+	{ "mulhs", 5,  0b0010_1_10,  0, 0, IntOp },
+	{ "divh",  4,  0b0011_0_10,  0, 0, IntOp },
+	{ "divhs", 5,  0b0011_1_10,  0, 0, IntOp },
+	{ "cmph",  4,  0b0100_0_10,  0, 0, IntOp },
+	{ "maxh",  4,  0b0110_0_10,  0, 0, IntOp },
+	{ "maxhs", 5,  0b0110_1_10,  0, 0, IntOp },
+	{ "minh",  4,  0b0111_0_10,  0, 0, IntOp },
+	{ "minhs", 5,  0b0111_1_10,  0, 0, IntOp },
+	{ "orh",   3,  0b1000_0_10,  0, 0, IntOp },
+	{ "xorh",  4,  0b1001_0_10,  0, 0, IntOp },
+	{ "andh",  4,  0b1010_0_10,  0, 0, IntOp },
+
+	{ "bitrh", 5,  0b0100, 0b10, 0, ShfOp },
+	{ "srlh",  4,  0b1000, 0b10, 0, ShfOp },
+	{ "srah",  4,  0b1001, 0b10, 0, ShfOp },
+	{ "sllh",  4,  0b1010, 0b10, 0, ShfOp },
+	{ "slah",  4,  0b1011, 0b10, 0, ShfOp },
+	{ "rolh",  4,  0b0110, 0b10, 0, ShfOp },
+	{ "rorh",  4,  0b0111, 0b10, 0, ShfOp },
+
+	// XOP1 integer 8-bit
+	//              minor_S_zz  alt	flags
+	{ "addb",  4,  0b0001_0_11,  0, 0, IntOp },
+	{ "addbs", 5,  0b0001_1_11,  0, 0, IntOp },
+	{ "mulb",  4,  0b0010_0_11,  0, 0, IntOp },
+	{ "mulbs", 5,  0b0010_1_11,  0, 0, IntOp },
+	{ "divb",  4,  0b0011_0_11,  0, 0, IntOp },
+	{ "divbs", 5,  0b0011_1_11,  0, 0, IntOp },
+	{ "cmpb",  4,  0b0100_0_11,  0, 0, IntOp },
+	{ "maxb",  4,  0b0110_0_11,  0, 0, IntOp },
+	{ "maxbs", 5,  0b0110_1_11,  0, 0, IntOp },
+	{ "minb",  4,  0b0111_0_11,  0, 0, IntOp },
+	{ "minbs", 5,  0b0111_1_11,  0, 0, IntOp },
+	{ "orb",   3,  0b1000_0_11,  0, 0, IntOp },
+	{ "xorb",  4,  0b1001_0_11,  0, 0, IntOp },
+	{ "andb",  4,  0b1010_0_11,  0, 0, IntOp },
+
+	{ "bitrb", 5,  0b0100, 0b11, 0, ShfOp },
+	{ "srlh",  4,  0b1000, 0b11, 0, ShfOp },
+	{ "srah",  4,  0b1001, 0b11, 0, ShfOp },
+	{ "sllh",  4,  0b1010, 0b11, 0, ShfOp },
+	{ "slah",  4,  0b1011, 0b11, 0, ShfOp },
+	{ "rolh",  4,  0b0110, 0b11, 0, ShfOp },
+	{ "rorh",  4,  0b0111, 0b11, 0, ShfOp },
+
 	// XOP3 64-bit floating point
 	//              minor_S_zz
 	{ "fadd",  4,  0b0001_1_00, 0, 0, FPOp },
@@ -1574,10 +1653,9 @@ print bde, "kind=[d] comp=[d] signed=[t]", kind, op.cnd, signed;
 	{ "fmax",  4,  0b0110_1_00, 0, 0, FPOp },
 	{ "fmin",  4,  0b0111_1_00, 0, 0, FPOp },
 	{ "csgn",  4,  0b1000_1_00, 0, 0, FPOp },
-	{ "eadd",  4,  0b1001_1_00, 0, 0, FPOp },
 	{ "hypot", 5,  0b1101_1_00, 0, 0, FPOp },
-	{ "fpow",  4,  0b1110_1_00, 0, 0, FPOp },
-	{ "fatan2",6,  0b1111_1_00, 0, 0, FPOp },
+	{ "atan2", 5,  0b1110_1_00, 0, 0, FPOp },
+	{ "pow",   3,  0b1111_1_00, 0, 0, FPOp },
 
 	// XOP3 32-bit floating point
 	{ "faddf", 5,  0b0001_1_01, 0, 0, FPOp },
@@ -1588,31 +1666,30 @@ print bde, "kind=[d] comp=[d] signed=[t]", kind, op.cnd, signed;
 	{ "fmaxf", 5,  0b0110_1_01, 0, 0, FPOp },
 	{ "fminf", 5,  0b0111_1_01, 0, 0, FPOp },
 	{ "csgnf", 5,  0b1000_1_01, 0, 0, FPOp },
-	{ "eaddf", 5,  0b1001_1_01, 0, 0, FPOp },
 	{ "hypot", 5,  0b1101_1_01, 0, 0, FPOp },
-	{ "fpow",  4,  0b1110_1_01, 0, 0, FPOp },
-	{ "fatan2",6,  0b1111_1_01, 0, 0, FPOp },
+	{ "powf",  4,  0b1110_1_01, 0, 0, FPOp },
+	{ "atan2", 5,  0b1111_1_01, 0, 0, FPOp },
 
 	{ "fmac",  4,  0b010011, 0, 0, Op3 },
 	{ "fmacf", 5,  0b010011, 1, 0, Op3 },
 
 	// 64-bit floating point branch conditions
-	{ "bdeq",  4,  0b00000, 1, 0, BcmOp },
-	{ "bdne",  4,  0b00001, 1, 0, BcmOp },
-	{ "bdge",  4,  0b00010, 1, 0, BcmOp },
-	{ "bdlt",  4,  0b00011, 1, 0, BcmOp },
-	{ "bdgt",  4,  0b00100, 1, 0, BcmOp },
-	{ "bdle",  4,  0b00101, 1, 0, BcmOp },
+	{ "bdeq0", 5,  0b00000, 1, 0, BcmOp },
+	{ "bdne0", 5,  0b00001, 1, 0, BcmOp },
+	{ "bdge0", 5,  0b00010, 1, 0, BcmOp },
+	{ "bdlt0", 5,  0b00011, 1, 0, BcmOp },
+	{ "bdgt0", 5,  0b00100, 1, 0, BcmOp },
+	{ "bdle0", 5,  0b00101, 1, 0, BcmOp },
 	{ "bdor",  4,  0b00110, 1, 0, BcmOp },
 	{ "bdun",  4,  0b00111, 1, 0, BcmOp },
 	// 32-bit floating point branch conditions
-	{ "bfeq",  4,  0b01000, 1, 0, BcmOp },
-	{ "bfne",  4,  0b01001, 1, 0, BcmOp },
-	{ "bfge",  4,  0b01010, 1, 0, BcmOp },
-	{ "bflt",  4,  0b01011, 1, 0, BcmOp },
-	{ "bfgt",  4,  0b01100, 1, 0, BcmOp },
-	{ "bfle",  4,  0b01101, 1, 0, BcmOp },
-	{ "bfor",  4,  0b01110, 1, 0, BcmOp },
+	{ "bfeq0", 5,  0b01000, 1, 0, BcmOp },
+	{ "bfne0", 5,  0b01001, 1, 0, BcmOp },
+	{ "bfge0", 5,  0b01010, 1, 0, BcmOp },
+	{ "bflt0", 5,  0b01011, 1, 0, BcmOp },
+	{ "bfgt0", 5,  0b01100, 1, 0, BcmOp },
+	{ "bfle0", 5,  0b01101, 1, 0, BcmOp },
+	{ "bfor",  5,  0b01110, 1, 0, BcmOp },
 	{ "bfun",  4,  0b01111, 1, 0, BcmOp },
 
 	// floating point compare bits
@@ -1630,23 +1707,23 @@ print bde, "kind=[d] comp=[d] signed=[t]", kind, op.cnd, signed;
 	{ "bqnan", 5,  0b100001, 0, 0, BbmOp },
 
 	// 64-bit floating point pcnd "macros"
-	{ "pdeq",  4,  0b01000, 0, 0, Pcnd },
-	{ "pdne",  4,  0b01001, 0, 0, Pcnd },
-	{ "pdge",  4,  0b01010, 0, 0, Pcnd },
-	{ "pdlt",  4,  0b01011, 0, 0, Pcnd },
-	{ "pdgt",  4,  0b01100, 0, 0, Pcnd },
-	{ "pdle",  4,  0b01101, 0, 0, Pcnd },
-	{ "pdor",  4,  0b01110, 0, 0, Pcnd },
-	{ "pdun",  4,  0b01111, 0, 0, Pcnd },
+	{ "pdeq0", 5,  0b00000, 0b0010, 0, Pcnd },
+	{ "pdne0", 5,  0b00001, 0b0010, 0, Pcnd },
+	{ "pdge0", 5,  0b00010, 0b0010, 0, Pcnd },
+	{ "pdlt0", 5,  0b00011, 0b0010, 0, Pcnd },
+	{ "pdgt0", 5,  0b00100, 0b0010, 0, Pcnd },
+	{ "pdle0", 5,  0b00101, 0b0010, 0, Pcnd },
+	{ "pdor",  4,  0b00110, 0b0010, 0, Pcnd },
+	{ "pdun",  4,  0b00111, 0b0010, 0, Pcnd },
 	// 32-bit floating point pcnd "macros"
-	{ "pfeq",  4,  0b10000, 0, 0, Pcnd },
-	{ "pfne",  4,  0b10001, 0, 0, Pcnd },
-	{ "pfge",  4,  0b10010, 0, 0, Pcnd },
-	{ "pflt",  4,  0b10011, 0, 0, Pcnd },
-	{ "pfgt",  4,  0b10100, 0, 0, Pcnd },
-	{ "pfle",  4,  0b10101, 0, 0, Pcnd },
-	{ "pfor",  4,  0b10110, 0, 0, Pcnd },
-	{ "pfun",  4,  0b10111, 0, 0, Pcnd },
+	{ "pfeq0", 5,  0b01000, 0b0010, 0, Pcnd },
+	{ "pfne0", 5,  0b01001, 0b0010, 0, Pcnd },
+	{ "pfge0", 5,  0b01010, 0b0010, 0, Pcnd },
+	{ "pflt0", 5,  0b01011, 0b0010, 0, Pcnd },
+	{ "pfgt0", 5,  0b01100, 0b0010, 0, Pcnd },
+	{ "pfle0", 5,  0b01101, 0b0010, 0, Pcnd },
+	{ "pfor",  4,  0b01110, 0b0010, 0, Pcnd },
+	{ "pfun",  4,  0b01111, 0b0010, 0, Pcnd },
 
 	// floating point pb1 "macros"
 	{ "pneq",  4,  0b000001, 0, 0, Pbit  },
@@ -1662,65 +1739,94 @@ print bde, "kind=[d] comp=[d] signed=[t]", kind, op.cnd, signed;
 	{ "psnan", 5,  0b100000, 0, 0, Pbit  },
 	{ "pqnan", 5,  0b100001, 0, 0, Pbit  },
 
-	// conversions
+	// conversions and mixed int and fp
 	//              minor_S_zz
-	{ "cvtdf",  5, 0b1001_0_00, 0, 0, CvtOp },
-	{ "cvtfd",  5, 0b1000_0_01, 0, 0, CvtOp },
-	{ "cvtdu",  5, 0b1100_0_00, 0, 0, CvtOp },
-	{ "cvtfu",  5, 0b1100_0_01, 0, 0, CvtOp },
-	{ "cvtds",  5, 0b1101_0_00, 0, 0, CvtOp },
-	{ "cvtfs",  5, 0b1101_0_01, 0, 0, CvtOp },
-	{ "cvtud",  5, 0b1110_0_00, 0, 0, CvtOp },
-	{ "cvtuf",  5, 0b1110_0_01, 0, 0, CvtOp },
-	{ "cvtsd",  5, 0b1111_0_00, 0, 0, CvtOp },
-	{ "cvtsf",  5, 0b1111_0_01, 0, 0, CvtOp },
-	// round
-	{ "rnd",    3, 0b1000_0_00, 0, 0, CvtOp },	// cvtdd
-	{ "rndf",   4, 0b1001_0_01, 0, 0, CvtOp },	// cvtff
+	{ "cvtud",  5, 0b0000_0_00, 0, 1, Xop2 },
+	{ "cvtuf",  5, 0b0000_0_01, 0, 1, Xop2 },
+	{ "cvtsd",  5, 0b0000_1_00, 0, 1, Xop2 },
+	{ "cvtsf",  5, 0b0000_1_01, 0, 1, Xop2 },
+	{ "cvtdu",  5, 0b0001_0_00, 0, 0, Xop2 },
+	{ "cvtfu",  5, 0b0001_0_01, 0, 0, Xop2 },
+	{ "cvtds",  5, 0b0001_1_00, 0, 0, Xop2 },
+	{ "cvtfs",  5, 0b0001_1_01, 0, 0, Xop2 },
+	{ "rnd",    3, 0b1000_0_00, 0, 0, Xop2 },
+	{ "rndf",   4, 0b1000_0_01, 0, 0, Xop2 },
+	{ "eadd",   4, 0b1000_1_00, 0, 2, Xop2 },
+	{ "eaddf",  5, 0b1000_1_01, 0, 2, Xop2 },
+	{ "cvtdf",  5, 0b1100_0_01, 0, 0, Xop2 },
+	{ "cvtfd",  5, 0b1101_0_00, 0, 0, Xop2 },
+	{ "powi",   4, 0b1111_1_00, 0, 2, Xop2 },
+	{ "powif",  5, 0b1111_1_01, 0, 2, Xop2 },
 
 	// 64-bit transcendentals
-	//                minor_S_zz     fffff  flags
-	{ "fln2",     4, 0b1110_0_00,  0b00000,   0,  Xop5 },
-	{ "fln",      3, 0b1110_0_00,  0b00001,   0,  Xop5 },
-	{ "flog",     4, 0b1110_0_00,  0b00010,   0,  Xop5 },
-	{ "fexp2",    5, 0b1110_0_00,  0b00100,   0,  Xop5 },
-	{ "fexp",     4, 0b1110_0_00,  0b00101,   0,  Xop5 },
-	{ "fexp10",   6, 0b1110_0_00,  0b00110,   0,  Xop5 },
-	{ "frsqrt",   6, 0b1110_0_00,  0b01100,   0,  Xop5 },
-	{ "fsqrt",    5, 0b1110_0_00,  0b01101,   0,  Xop5 },
-
-	{ "fln2p1",   6, 0b1110_1_00,  0b00000,   0,  Xop5 },
-	{ "flnp1",    5, 0b1110_1_00,  0b00001,   0,  Xop5 },
-	{ "flogp1",   6, 0b1110_1_00,  0b00010,   0,  Xop5 },
-	{ "fexp2m1",  7, 0b1110_1_00,  0b00100,   0,  Xop5 },
-	{ "fexpm1",   6, 0b1110_1_00,  0b00101,   0,  Xop5 },
-	{ "fexp10m1", 8, 0b1110_1_00,  0b00110,   0,  Xop5 },
-	{ "frcbrt",   6, 0b1110_1_00,  0b01100,   0,  Xop5 },
-	{ "fcbrt",    5, 0b1110_1_00,  0b01101,   0,  Xop5 },
-
-	{ "fsin",     4, 0b1111_0_00,  0b00000,   0,  Xop5 },
-	{ "fcos",     4, 0b1111_0_00,  0b00001,   0,  Xop5 },
-	{ "ftan",     4, 0b1111_0_00,  0b00010,   0,  Xop5 },
-	{ "fasin",    5, 0b1111_0_00,  0b00100,   0,  Xop5 },
-	{ "facos",    5, 0b1111_0_00,  0b00101,   0,  Xop5 },
-	{ "fatan",    5, 0b1111_0_00,  0b00010,   0,  Xop5 },
-
-	{ "fsinpi",   6, 0b1111_1_00,  0b00000,   0,  Xop5 },
-	{ "fcospi",   6, 0b1111_1_00,  0b00001,   0,  Xop5 },
-	{ "ftanpi",   6, 0b1111_1_00,  0b00010,   0,  Xop5 },
-	{ "fasinpi",  7, 0b1111_1_00,  0b00100,   0,  Xop5 },
-	{ "facospi",  7, 0b1111_1_00,  0b00101,   0,  Xop5 },
-	{ "fatanpi",  7, 0b1111_1_00,  0b00010,   0,  Xop5 },
-
-/*
+	//               minor_S_zz     fffff  flags
+	{ "ln2",     3, 0b1110_0_00,  0b00000,   0,  Xop5 },
+	{ "ln",      2, 0b1110_0_00,  0b00001,   0,  Xop5 },
+	{ "log",     3, 0b1110_0_00,  0b00010,   0,  Xop5 },
+	{ "exp2",    4, 0b1110_0_00,  0b00100,   0,  Xop5 },
+	{ "exp",     3, 0b1110_0_00,  0b00101,   0,  Xop5 },
+	{ "exp10",   5, 0b1110_0_00,  0b00110,   0,  Xop5 },
+	{ "rsqrt",   5, 0b1110_0_00,  0b01100,   0,  Xop5 },
+	{ "sqrt",    4, 0b1110_0_00,  0b01101,   0,  Xop5 },
+	{ "sin",     3, 0b1111_0_00,  0b10000,   0,  Xop5 },
+	{ "cos",     3, 0b1111_0_00,  0b10001,   0,  Xop5 },
+	{ "tan",     3, 0b1111_0_00,  0b10010,   0,  Xop5 },
+	{ "asin",    4, 0b1111_0_00,  0b10100,   0,  Xop5 },
+	{ "acos",    4, 0b1111_0_00,  0b10101,   0,  Xop5 },
+	{ "atan",    4, 0b1111_0_00,  0b10110,   0,  Xop5 },
+	{ "ln2p1",   5, 0b1110_1_00,  0b00000,   0,  Xop5 },
+	{ "lnp1",    4, 0b1110_1_00,  0b00001,   0,  Xop5 },
+	{ "logp1",   5, 0b1110_1_00,  0b00010,   0,  Xop5 },
+	{ "exp2m1",  6, 0b1110_1_00,  0b00100,   0,  Xop5 },
+	{ "expm1",   5, 0b1110_1_00,  0b00101,   0,  Xop5 },
+	{ "exp10m1", 7, 0b1110_1_00,  0b00110,   0,  Xop5 },
+	{ "rcbrt",   5, 0b1110_1_00,  0b01100,   0,  Xop5 },
+	{ "cbrt",    4, 0b1110_1_00,  0b01101,   0,  Xop5 },
+	{ "sinpi",   5, 0b1111_1_00,  0b10000,   0,  Xop5 },
+	{ "cospi",   5, 0b1111_1_00,  0b10001,   0,  Xop5 },
+	{ "tanpi",   5, 0b1111_1_00,  0b10010,   0,  Xop5 },
+	{ "asinpi",  6, 0b1111_1_00,  0b10100,   0,  Xop5 },
+	{ "acospi",  6, 0b1111_1_00,  0b10101,   0,  Xop5 },
+	{ "atanpi",  6, 0b1111_1_00,  0b10110,   0,  Xop5 },
 
 	// 32-bit transcendentals
-	{ "fpowf",   5, 0b000000_00000_00000_00010_111101_00000, IntOp },
-*/
+	//               minor_S_zz     fffff  flags
+	{ "ln2f",    4, 0b1110_0_01,  0b00000,   0,  Xop5 },
+	{ "lnf",     3, 0b1110_0_01,  0b00001,   0,  Xop5 },
+	{ "logf",    4, 0b1110_0_01,  0b00010,   0,  Xop5 },
+	{ "exp2f",   5, 0b1110_0_01,  0b00100,   0,  Xop5 },
+	{ "expf",    4, 0b1110_0_01,  0b00101,   0,  Xop5 },
+	{ "exp10f",  6, 0b1110_0_01,  0b00110,   0,  Xop5 },
+	{ "rsqrtf",  6, 0b1110_0_01,  0b01100,   0,  Xop5 },
+	{ "sqrtf",   5, 0b1110_0_01,  0b01101,   0,  Xop5 },
+	{ "sinf",    4, 0b1111_0_01,  0b10000,   0,  Xop5 },
+	{ "cosf",    4, 0b1111_0_01,  0b10001,   0,  Xop5 },
+	{ "tanf",    4, 0b1111_0_01,  0b10010,   0,  Xop5 },
+	{ "asinf",   5, 0b1111_0_01,  0b10100,   0,  Xop5 },
+	{ "acosf",   5, 0b1111_0_01,  0b10101,   0,  Xop5 },
+	{ "atanf",   5, 0b1111_0_01,  0b10110,   0,  Xop5 },
+	{ "ln2p1f",  6, 0b1110_1_01,  0b00000,   0,  Xop5 },
+	{ "lnp1f",   5, 0b1110_1_01,  0b00001,   0,  Xop5 },
+	{ "logp1f",  6, 0b1110_1_01,  0b00010,   0,  Xop5 },
+	{ "exp2m1f", 7, 0b1110_1_01,  0b00100,   0,  Xop5 },
+	{ "expm1f",  6, 0b1110_1_01,  0b00101,   0,  Xop5 },
+	{ "exp10m1f",8, 0b1110_1_01,  0b00110,   0,  Xop5 },
+	{ "rcbrtf",  6, 0b1110_1_01,  0b01100,   0,  Xop5 },
+	{ "cbrtf",   5, 0b1110_1_01,  0b01101,   0,  Xop5 },
+	{ "sinpif",  6, 0b1111_1_01,  0b10000,   0,  Xop5 },
+	{ "cospif",  6, 0b1111_1_01,  0b10001,   0,  Xop5 },
+	{ "tanpif",  6, 0b1111_1_01,  0b10010,   0,  Xop5 },
+	{ "asinpif", 7, 0b1111_1_01,  0b10100,   0,  Xop5 },
+	{ "acospif", 7, 0b1111_1_01,  0b10101,   0,  Xop5 },
+	{ "atanpif", 7, 0b1111_1_01,  0b10110,   0,  Xop5 },
+
 	// experimental
-	{ "hrr",   3,  0b0000, 0b01, 0,  HrOp },
-	{ "hrw",   3,  0b0000, 0b10, 0,  HrOp },
-	{ "hrx",   3,  0b0000, 0b11, 0,  HrOp },
+	{ "crr",   3,  0b0000, 0b01, 0b01,  HrOp },
+	{ "crw",   3,  0b0000, 0b10, 0b10,  HrOp },
+	{ "crx",   3,  0b0000, 0b11, 0b11,  HrOp },
+	{ "trr",   3,  0b0001, 0b01, 0b01,  HrOp },
+	{ "trw",   3,  0b0001, 0b10, 0b10,  HrOp },
+	{ "trx",   3,  0b0001, 0b11, 0b11,  HrOp },
 
 	// locking loads/stores
 	//              minor_L_zz  alt flags
@@ -1787,9 +1893,11 @@ import pseudo;
 		opc = SkipWS(nxt[1:]);
 	    }
 	    if j > 0 then
-	    {   if opc[0] == '.' then
+	    {   if nxt[0] == '=' then
+		    SetOp(opc[0:], '=');
+		elif opc[0] == '.' then
 		    PseudoOp(opc[1:], j-1);
-	        else
+		else
 	  	    Instruction(opc[0:], j);
 	    }
 	    if listing then

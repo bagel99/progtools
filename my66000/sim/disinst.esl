@@ -1,5 +1,15 @@
 // Before importing this, alias <somebd> as bdx.
 
+    proc isOp1Reg(nnID: _uint): boolean
+    {
+	return nnID&0b0100 == 0 || nnID&0b0011 == 0;
+    }
+
+    proc isOp2Reg(nnID: _uint): boolean
+    {
+	return nnID&0b0100 != 0 || nnID&0b0011 == 0;
+    }
+
     proc PReg(reg: _uint)
     {
 	print bdx, "[s]", regname[reg];
@@ -11,11 +21,11 @@
 	{   var s: @[]_byte;
 	    s = GetSym(addr);
 	    if s != 0 then
-	    {	print bdx, "[s]", s;
+	    {	print bdx, "\t; [s]", s;
 		return;
 	    }
 	}
-	print bdx, "[!x]", addr;
+	print bdx, "\t; [!x]", addr;
     }
 
     proc PWO(wo: Word)
@@ -33,6 +43,7 @@
 	var t8: _int8;
 	var t16: _int16;
 	var dot: boolean = false;
+	var hex: boolean = false;
 	const Cnd3: [32][2]_byte =
 	{   '??', '??', '??', '??', '??', '??', '??',
 	    '??', '??', '??', '??', '??', '??',
@@ -47,6 +58,11 @@
 	  exit c == 0;
 	    if c
 	    is '.' then dot = true;
+	    is 'x' then hex = true;
+	    is 'A' then		// signed I16 in low half
+		print bdx, "[d]", _int16(Read(ip+4, WORD));
+	    is 'B' then		// signed I16 in high halt
+		print bdx, "[d]", _int16(Read(ip+4, WORD)>>16);
 	    is 'C' then print bdx, "[s]", CBitNames[op.rd];
 	    is 'D' then print bdx, "[d]", Read(ip+4, HALF);
 	    is 'E' then print bdx, "[d]", Read(ip+6, HALF);
@@ -69,11 +85,11 @@
 		print bdx, "[d]", op.rs1;
 	    is 'J' then		// I5 in Rs2
 		print bdx, "[d]", op.rs2;
-	    is 'K' then
+	    is 'K' then		// I4.1 in Rs1
 	    {   t8 = op.rs1;
 		print bdx, "[d].[d]", t8/2, (t8&1)*5;
 	    }
-	    is 'L' then
+	    is 'L' then		// I4.1 in Rs2
 	    {   t8 = op.rs2;
 		print bdx, "[d].[d]", t8/2, (t8&1)*5;
 	    }
@@ -102,16 +118,16 @@
 		PReg(op.rs3);
 	    is 'V' then		// unsigned I16 in hex
 		print bdx, "[!04x]", _uint16(inst);
-	    is 'A' then		// signed I16 in low half
-		print bdx, "[d]", _int16(Read(ip+4, WORD));
-	    is 'B' then		// signed I16 in high halt
-		print bdx, "[d]", _int16(Read(ip+4, WORD)>>16);
 	    is 'W' then		// signed I32 but second extension
 		print bdx, "[d]", _uint32(Read(ip+8, WORD));
 	    is 'X' then		// signed I16 in hex
 		print bdx, "[!x]", inst&0xFFFF;
 	    is 'Y' then		// signed I32
-		print bdx, "[d]", _int32(Read(ip+4, WORD));
+	    {	if hex then
+		    print bdx, "[!x]", _uint32(Read(ip+4, WORD));
+		else
+		    print bdx, "[d]", _int32(Read(ip+4, WORD));
+	    }
 	    is 'Z' then		// I64
 		print bdx, "[!x]", Read(ip+4, QUAD);
 	    else
@@ -243,6 +259,7 @@
 	    }
 	}
 	// address syntax follows
+	addr = 0;
 	print bdx, "[[";
 	if op.rb == 0 then PReg(32); else PReg(op.rb);
 	if op.ri != 0 then
@@ -262,112 +279,172 @@
 	    }
 	}
 	print bdx, "]";
-
+	if op.rb == 0 then PAddr(ip + addr);
     }
 
-    proc disOp2Int(inst: Inst, ip: Word)
+    proc Op2Sub(inst: Inst, ip: Word, name:@[]_byte)
     {   var op: OP2 = OP2(inst);
-	var minor: _uint;;
-	const OpName: [128]@[]_byte =
-	{ XXX,     XXX,     XXX,     XXX,	// 0000_0_zz
-	  XXX,     XXX,     XXX,     XXX,	// 0000_1_zz
-	  "add",   "addw",  XXX,     XXX,	// 0001_0_zz
-	  "adds",  "addws", XXX,     XXX,	// 0001_1_zz
-	  "mul",   "mulw",  XXX,     XXX,	// 0010_0_zz
-	  "muls",  "mulws", XXX,     XXX,	// 0010_1_zz
-	  "div",   "divw",  XXX,     XXX,	// 0011_0_zz
-	  "divs",  "divws", XXX,     XXX,	// 0011_1_zz
-	  "cmp",   "cmpw",  XXX,     XXX,	// 0100_0_zz
-	  "???",   XXX,     XXX,     XXX,	// 0100_1_zz
-	  "???",   XXX,     XXX,     XXX,	// 0101_0_zz
-	  "???",   XXX,     XXX,     XXX,	// 0101_1_zz
-	  "max",   "maxw",  XXX,     XXX,	// 0110_0_zz
-	  "maxs",  "maxws", XXX,     XXX,	// 0110_1_zz
-	  "min",   "minw",  XXX,     XXX,	// 0111_0_zz
-	  "mins",  "minws", XXX,     XXX,	// 0111_1_zz
-	  "or",    "orw",   XXX,     XXX,	// 1000_0_zz
-	  "???",   XXX,     XXX,     XXX,	// 1000_1_zz
-	  "xor",   "xorw",  XXX,     XXX,	// 1001_0_zz
-	  "???",   XXX,     XXX,     XXX,	// 1001_1_zz
-	  "and",   "andw",  XXX,     XXX,	// 1010_0_zz
-	  XXX,     XXX,     XXX,     XXX,   	// 1010_1_zz
-	  XXX,     XXX,     XXX,     XXX,	// 1011_0_zz
-	  XXX,     XXX,     XXX,     XXX,  	// 1011_1_zz
-	  XXX,     XXX,     XXX,     XXX,	// 1100_0_zz
-	  XXX,     XXX,     XXX,     XXX,  	// 1100_1_zz
-	  XXX,     XXX,     XXX,     XXX,	// 1101_0_zz
-	  XXX,     XXX,     XXX,     XXX,  	// 1101_1_zz
-	  "cvtfu", XXX,     XXX,     XXX,	// 1110_0_zz
-	  "cvtfs", XXX,     XXX,     XXX,	// 1110_1_zz
-	  "cvtdu", XXX,     XXX,     XXX,	// 1111_0_zz
-	  "cvtds", XXX,     XXX,     XXX,	// 1111_1_zz
-	};
-	const OpFmt: [16]@[]_byte =	// s1.s2.I.D
+	const OpFmtII: [16]@[]_byte =	// s1.s2.I.D
 	{   "R,S,T",  "R,S,#J", "R,S,#Y", "R,S,#Z",	// 00ID
 	    "R,S,-T", "R,#I,T", "R,#Y,T", "R,#Z,T",	// 01ID
 	    "R,-S,T", "R,S,#-J","R,-S,#Y","R,-S,#Z",	// 10ID
 	    "R,-S,-T","R,#I,-T","R,#Y,-T","R,#Z,-T"	// 11ID
 	};
-	minor = (inst >> 9) & 0b1111_1_11;
-//fde.str("disOp2Int minor="); fde.uint(minor);
-//fde.str(" nnId="); fde.hex8((inst >> 5)&0b1111);
-//fde.str(" name="); fde.str(OpName[minor]);
-//fde.str(" fmt="); fde.str(OpFmt[(inst >> 5)&0b1111]); fde.nl();
-	{   print bdx, "[s]\t", OpName[minor];
-	    PFmt(inst, ip, OpFmt[(inst >> 5)&0b1111]);
+	const SizeSfx: [4]_byte = { ' ', 'w', 'h', 'b' };
+
+	if name != 0 then
+	{   print bdx, "[s]", name;
+	    if op.size != 0 then print bdx, "[c]", SizeSfx[op.size];
+	    if op.S != 0 then print bdx, "s";
+	    print bdx, "\t";
+	    PFmt(inst, ip, OpFmtII[(inst >> 5)&0b1111]);
 	}
+	else
+	    print bdx, "*illegal*";
+    }
+
+    proc disShfR(inst: Inst, ip: Word)
+    {	var op: OPSHFR = OPSHFR(inst);
+	const ShfROpNames: [16]@[]_byte =
+	{   "???", "???", "???", "???",
+	    "???", "???", "rol", "ror",
+	    "srl", "sra", "sll", "sla",
+	    "bitr","???", "???", "???"
+	};
+	Op2Sub(inst, ip, ShfROpNames[op.minor]);
+    }
+
+    proc disOp2Int(inst: Inst, ip: Word)
+    {   var op: OP2 = OP2(inst);
+	const Op2IntName: [16]@[]_byte =
+	{   0,     "add", "mul", "div",
+	    "cmp", 0,     "max", "min",
+	    "or",  "xor", "and", 0,
+	    0,     0,     0,     0
+	};
+	Op2Sub(inst, ip, Op2IntName[op.minor]);
     }
 
     proc disOp2FP(inst: Inst, ip: Word)
     {   var op: OP2 = OP2(inst);
-	var minor: _uint;
-	const OpName: [128]@[]_byte =
-	{ XXX,     XXX,     XXX,     XXX,   	// 0000_0_zz
-	  XXX,     XXX,     XXX,     XXX,	// 0000_1_zz
-	  XXX,     XXX,     XXX,     XXX,	// 0001_0_zz
-	  "fadd",  "faddf", XXX,     XXX,	// 0001_1_zz
-	  XXX,     XXX,     XXX,     XXX,	// 0010_0_zz
-	  "fmul",  "fmulf", XXX,     XXX,	// 0010_1_zz
-	  XXX,     XXX,     XXX,     XXX,	// 0011_0_zz
-	  "fdiv",  "fdivf", XXX,     XXX,	// 0011_1_zz
-	  XXX,     XXX,     XXX,     XXX,	// 0100_0_zz
-	  "fcmp",  "fcmpf", XXX,     XXX,	// 0100_1_zz
-	  XXX,     XXX,     XXX,     XXX,	// 0101_0_zz
-	  XXX,     XXX,     XXX,     XXX,	// 0101_1_zz
-	  XXX,     XXX,     XXX,     XXX,	// 0110_0_zz
-	  "fmax",  "fmaxf", XXX,     XXX,	// 0110_1_zz
-	  XXX,     XXX,     XXX,     XXX,	// 0111_0_zz
-	  "fmin",  "fminf", XXX,     XXX,	// 0111_1_zz
-	  "rnd",   "cvtfd", XXX,     XXX,	// 1000_0_zz
-	  "csgn",  "csgnf", XXX,     XXX,	// 1000_1_zz
-	  "cvtdf", "rndf",  XXX,     XXX,	// 1001_0_zz
-	  "eadd",  "eaddf", XXX,     XXX,	// 1001_1_zz
-	  XXX,     XXX,     XXX,     XXX,	// 1010_0_zz
-	  XXX,     XXX,     XXX,     XXX,	// 1010_1_zz
-	  XXX,     XXX,     XXX,     XXX,	// 1011_0_zz
-	  XXX,     XXX,     XXX,     XXX,	// 1011_1_zz
-	  "cvtdu", "cvtfu", XXX,     XXX,	// 1100_0_zz
-	  XXX,     XXX,     XXX,     XXX,	// 1100_1_zz
-	  "cvtds", "cvtfs", XXX,     XXX,	// 1101_0_zz
-	  "hypot", "hypotf",XXX,     XXX,	// 1101_1_zz
-	  "cvtud", "cvtuf", XXX,     XXX,	// 1110_0_zz
-	  "pow",   "powf",  XXX,     XXX,	// 1110_1_zz
-	  "cvtsd", "cvtsf", XXX,     XXX,	// 1111_0_zz
-	  "atan2", "atan2f",XXX,     XXX,	// 1111_1_zz
+	const Op2FPName: [16]@[]_byte =
+	{   0,      "fadd", "fmul", "fdiv",
+	    "fcmp", 0,      "fmax", "fmin",
+	    "csgn", 0,      0,      0,
+	    0,      "hypot","atan2","pow"
 	};
-	const OpFmt: [16]@[]_byte =	// s1.s2.I.D
+	const OpFmtFF: [16]@[]_byte =	// s1.s2.I.D
 	{   "R,S,T",  "R,S,#L", "R,S,#Y", "R,S,#Z",	// 00ID
 	    "R,S,-T", "R,#K,T", "R,#Y,T", "R,#Z,T",	// 01ID
 	    "R,-S,T", "R,S,#-L","R,-S,#Y","R,-S,#Z",	// 10ID
 	    "R,-S,-T","R,#K,-T","R,#Y,-T","R,#Z,-T"	// 11ID
 	};
-	minor = (inst >> 9) & 0b1111_1_11;
-	var iscvt: boolean;
-	iscvt = (minor & 0b1000_1_00) == 0b1000_0_00;
-//print bde, "disOp2FP minor=[07b], iscvt=[t]\n", minor, iscvt;
-	{   print bdx, "[s]\t", OpName[minor];
-	    PFmt(inst, ip, OpFmt[(inst >> 5)&0b1111]);
+	const SizeSfx: [4]_byte = { ' ', 'f', 'h', '?' };
+	var name: @[]_byte;
+
+	name = Op2FPName[op.minor];
+	if name != 0 then
+	{   print bdx, "[s]", name;
+	    if op.size != 0 then print bdx, "[c]", SizeSfx[op.size];
+	    print bdx, "\t";
+	    PFmt(inst, ip, OpFmtFF[(inst >> 5)&0b1111]);
 	}
+	else
+	    print bdx, "*illegal*";
+    }
+
+    proc disOp2Cvt(inst: Inst, ip: Word)
+    {   var op: OP2 = OP2(inst);
+	type InstT:
+	( ILL,
+	  CVTUD, CVTUF, CVTSD, CVTSF, CVTDU, CVTFU, CVTDS, CVTFS,
+	  RND,   RNDF,  CVTDF, CVTFD,
+	  EADD,  EADDF, POWI,  POWIF,
+	);
+	const InstDecode: [128]InstT =
+	{ CVTUD, CVTUF, ILL,   ILL,   CVTSD, CVTSF, ILL,   ILL,	// 0000_s_zz
+	  CVTDU, CVTFU, ILL,   ILL,   CVTDS, CVTFS, ILL,   ILL,	// 0001_s_zz
+	  ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,	// 0010_s_zz
+	  ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,	// 0011_s_zz
+	  ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,	// 0100_s_zz
+	  ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,	// 0101_s_zz
+	  ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,	// 0110_s_zz
+	  ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,	// 0111_s_zz
+	  RND,   RNDF,  ILL,   ILL,   EADD,  EADDF, ILL,   ILL,	// 1000_s_zz
+	  ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,	// 1001_s_zz
+	  ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,	// 1010_s_zz
+	  ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,	// 1011_s_zz
+	  ILL,   CVTDF, ILL,   ILL,   ILL,   ILL,   ILL,   ILL,	// 1100_s_zz
+	  CVTFD, ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,	// 1101_s_zz
+	  ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,   ILL,	// 1110_s_zz
+	  ILL,   ILL,   ILL,   ILL,   POWI,  POWIF, ILL,   ILL,	// 1111_s_zz
+	};
+	const OpName: [InstT]@[]_byte =
+	{ "illegal instruction",
+	  "cvtud", "cvtuf", "cvtsd", "cvtsf",
+	  "cvtdu", "cvtfu", "cvtds", "cvtfs",
+	  "rnd",   "rndf",
+	  "cvtdf", "cvtfd",
+	  "eadd",  "eaddf", "fpowi",  "fpowif",
+	};
+	type FmtT: (XX,RI,RF,IF);
+	const InstFmt: [InstT]FmtT =
+	{ XX,
+	  RI, RI, RI, RI,
+	  RF, RF, RF, RF,
+	  RF, RF, RF, RF,
+	  IF, IF, IF, IF
+	};
+	const OpFmtII: [16]@[]_byte =	// s1.s2.I.D
+	{   "R,S,T",  "R,S,#I", "R,S,#Y", "R,S,#Z",	// 00ID
+	    "R,S,-T", "R,#I,T", "R,#Y,T", "R,#Z,T",	// 01ID
+	    "R,-S,T", "R,S,#-J","R,-S,#Y","R,-S,#Z",	// 10ID
+	    "R,-S,-T","R,#I,-T","R,#Y,-T","R,#Z,-T"	// 11ID
+	};
+	const OpFmtIF: [16]@[]_byte =	// s1.s2.I.D
+	{   "R,S,T",  "R,S,#L", "R,S,#Y", "R,S,#Z",	// 00ID
+	    "R,S,-T", "R,#I,T", "R,#Y,T", "R,#Z,T",	// 01ID
+	    "R,-S,T", "R,S,#-L","R,-S,#xY","R,-S,#Z",	// 10ID
+	    "R,-S,-T","R,#I,-T","R,#xY,-T","R,#Z,-T"	// 11ID
+	};
+	const OpFmtI: [16]@[]_byte =	// s1.s2.I.D
+	{   "R,T",  "R,#J",   "R,#Y",   "R,#Z",		// 00ID
+	    "R,-T", "R,#I,T", "R,#T",   "R,#T",		// 01ID
+	    "R,T",  "R,#-J",  "R,#Y",   "R,#Z",		// 10ID
+	    "R,-T", "R,-T",   "R,-T",   "R,-T"		// 11ID
+	};
+	const OpFmtF: [16]@[]_byte =	// s1.s2.I.D
+	{   "R,T",  "R,#L",   "R,#Y",   "R,#Z",		// 00ID
+	    "R,-T", "R,#I,T", "R,#Y,T", "R,#Z,T",	// 01ID
+	    "R,T",  "R,#-L",  "R,#xY",  "R,#Z",		// 10ID
+	    "R,-T", "R,-T",   "R,-T",   "R,-T"		// 11ID
+	};
+	var nnID: _uint;
+	var isdftrm: _boolean;
+	var opc: InstT;
+
+	opc = InstDecode[(inst >> 9) & 0b1111_1_11];
+	nnID = (inst >> 5)&0b1111;
+	isdftrm = isOp1Reg(nnID) && op.rs1 == 0;
+//print bde, "\nopc=[d] nnID=[04b] fmt=[d]\n",
+//_uint8(opc), nnID, _uint8(InstFmt[opc]);
+	print bdx, "[s]\t", OpName[opc];
+	if InstFmt[opc]
+	is RI then
+	{   if isdftrm then
+		PFmt(inst, ip, OpFmtI[nnID]);
+	    else
+		PFmt(inst, ip, OpFmtII[nnID]);
+	}
+	is RF then
+	{   if isdftrm then
+		PFmt(inst, ip, OpFmtF[nnID]);
+	    else
+		PFmt(inst, ip, OpFmtIF[nnID]);
+	}
+	is IF then
+	    PFmt(inst, ip, OpFmtIF[nnID]);
+//print bdx, "\t;[04b]", nnID;
     }
 
     proc disOp3(inst: Inst, ip: Word)
@@ -413,7 +490,7 @@
     proc disOp1(inst: Inst, ip: Word)
     {   var op: OP1 = OP1(inst);
 	const OpName: [64]@[]_byte =
-	{ "hr",  "vec", "???", "???", "???", "???", "expon", "fract",
+	{ "cr",  "tr",  "???", "vec", "???", "???", "expon", "fract",
 	  "pop", "ff1", "???", "???", "???", "???", "???", "???",
 	  "cvt", "cvt", "???", "???", "rnd", "???", "???", "???",
 	  "???", "???", "???", "???", "???", "???", "???", "???"
@@ -430,15 +507,15 @@
 	  "fsin",   "fcos",  "ftan",     "???",
 	  "fasin",  "facos", "fatan",    "???"
 	};
-	const HRFunc: [32]_byte =
+	const TRFunc: [32]_byte =
 	{ 'I', 'M', 'A', 'E', 'S', 'F', 'R', 'W',
 	  '?', '?', '?', '?', '?', '?', '?', '?',
 	  '?', '?', '?', '?', '?', '?', '?', '?',
 	  '?', '?', '?', '?', '?', '?', '?', '?'
 	};
 	if op.minor
-	is 0b0000 then				// HR
-	{   print bdx, "hr";
+	is 0b0000, 0b0001 then			// CR,TR
+	{   print bdx, "[s]", OpName[op.minor];
 	    if op.size&1 != 0 then
 	    {   if op.size&2 != 0 then
 		    print bdx, "x\t";
@@ -453,9 +530,9 @@
 		    print bdx, ",";
 		PReg(op.rs2);
 	    }
-	    print bdx, ",[c]", HRFunc[op.func];
+	    print bdx, ",[c]", TRFunc[op.func];
 	}
-	is 0b0001 then		// VEC
+	is 0b0100 then		// VEC
 	{	var reg: _uint;
 	    var mask: _uint32;
 	    mask = _uint32(Read(ip+4, WORD));
@@ -528,31 +605,13 @@
 	}
     }
 
-    proc disShfR(inst: Inst, ip: Word)
-    {	var op: OPSHFR = OPSHFR(inst);
-	const ShfROpNames: [16]@[]_byte =
-	{   "???", "???", "???", "???",
-	    "???", "???", "rol", "ror",
-	    "srl", "sra", "sll", "sla",
-	    "bitr","???", "???", "???"
-	};
-	const OpFmt: [16]@[]_byte =	// s1.s2.I.D
-	{   "R,S,T",  "R,S,#J", "R,S,#Y", "R,S,#Z",	// 00ID
-	    "R,S,-T", "R,#I,T", "R,#Y,T", "R,#Z,T",	// 01ID
-	    "R,-S,T", "R,S,#-J","R,-S,#Y","R,-S,#Z",	// 10ID
-	    "R,-S,-T","R,#I,-T","R,#Y,-T","R,#Z,-T"	// 11ID
-	};
-	print bdx, "[s]\t", ShfROpNames[op.minor];
-	PFmt(inst, ip, OpFmt[(inst >> 5)&0b1111]);
-    }
-
     proc disShfW(inst: Inst, ip: Word)
     {	var op: OPSHF = OPSHF(inst);
 	const ShfROpNames: [16]@[]_byte =
 	{   "???", "???", "???", "???",
-	    "???", "???", "rol", "ror",
-	    "srl", "sra", "sll", "sla",
 	    "bitr","???", "???", "???"
+	    "srl", "sra", "sll", "sla",
+	    "ror", "rol", "???", "???"
 	};
 	print bdx, "[s]\t", ShfROpNames[op.minor];
 	PFmt(inst, ip, "R,S,NM");
@@ -569,8 +628,13 @@
 	    PShadow(opb.else, opb.then);
 	    print bdx, "\t; bit [d]", opb.bit;
 	}
-	is 0b0001 then
+	is 0b0001 then	// pred on integer condition
 	{   print bdx, "p[s]\t", CondNames[opc.cond];
+	    PReg(opc.rs1); print bdx, ",";
+	    PShadow(opc.else, opc.then);
+	}
+	is 0b0010 then	// pred on FP condition
+	{   print bdx, "p[s]\t", FCondNames[opc.cond];
 	    PReg(opc.rs1); print bdx, ",";
 	    PShadow(opc.else, opc.then);
 	}
@@ -578,20 +642,20 @@
     }
 
     proc disPredShf(inst: Inst, ip: Word)
-    {	var op: OPSHF = OPSHF(inst);
+    {	var op: OPSHFR = OPSHFR(inst);
 	const ShfOpNames: [16]@[]_byte =
 	{   "???", "???", "???", "???",
 	    "bitr","???", "rol", "ror",
 	    "srl", "sra", "sll", "sla",
 	    "ror", "rol", "???", "???"
 	};
-
+	const SizeSfx: [4]_byte = { ' ', 'w', 'h', 'b' };
 	if op.minor
 	is 0b0000 then
 	    disPred(inst, ip);
 	else
 	{
-	    print bdx, "[s]\t", ShfOpNames[op.minor];
+	    print bdx, "[s][c]\t", ShfOpNames[op.minor], SizeSfx[op.size];
 	    PFmt(inst, ip, "R,S,N");
 	}
     }
@@ -655,7 +719,7 @@
 	if (op.major & 1) != 0 then print bdx, "call\t";
 			       else print bdx, "br\t";
 	adr = ip + Word(Sext(25, inst&0x03FF_FFFF) << 2);
-	print bdx, "[!x]\t;", _uint32(adr);
+	print bdx, "[!x]", _uint32(adr);
 	PAddr(adr);
     }
 
@@ -679,6 +743,7 @@
 	{   print bdx, "[[";
 	    if op.rb == 0 then PReg(32); else PReg(op.rb);
 	    print bdx, ",[d]]", _int16(op.imm);
+	    if op.rb == 0 then PAddr(ip + op.imm);
 	}
     }
 
@@ -758,11 +823,10 @@
 	var bits, tmp: _uint;
 	var reg: _uint;
 
-	print bdx, "vec\t";
+	print bdx, "vec\t#[d],{", op.width;
 	tmp = op.imm;
 	bits = ((tmp & 0x1F8000) << 10) |
 	       ((tmp & 0x007FFF) << 1);
-	PReg(op.rd); print bdx, ",{";
 	if bits != 0 then
 	{   loop
 	    {   reg = _ctz(bits);
@@ -786,7 +850,7 @@
 	    // FIXME - only 2 bits of major needed -01--- or -10---
 	    major = inst >> 26;
 	    if major
-	    is MOC_XOP0, MOC_INT2,	// XOP0 XOP1
+	    is MOC_XOP0, MOC_INT2, MOC_CVT2,	// XOP0 XOP1 XOP2
 	       MOC_FP2,  MOC_MEM,	// XOP3 XOP5
 	       MOC_OP1,			// XOP6
 	       MOC_MUX,  MOC_INS,	// MUX, INS
@@ -812,6 +876,7 @@
 	is MOC_XOM7           then disPredShf(inst, ip);
 	is MOC_XOP0	      then disShfR(inst, ip);
 	is MOC_INT2           then disOp2Int(inst, ip);
+	is MOC_CVT2	      then disOp2Cvt(inst, ip);
 	is MOC_FP2            then disOp2FP(inst, ip);
 	is MOC_MEM	      then disOpMem(inst, ip);
 	is MOC_OP1	      then disOp1(inst, ip);
